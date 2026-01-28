@@ -1,0 +1,37 @@
+{
+  "name": "jupyterlab-codex",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Codex sidebar for JupyterLab",
+  "license": "BSD-3-Clause",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "scripts": {
+    "build": "jlpm run build:labextension",
+    "build:labextension": "jupyter labextension build .",
+    "watch": "jlpm run watch:labextension",
+    "watch:labextension": "jupyter labextension watch . --development --source-map",
+    "clean": "rimraf lib tsconfig.tsbuildinfo"
+  },
+  "dependencies": {
+    "@jupyterlab/application": "^4.0.0",
+    "@jupyterlab/apputils": "^4.0.0",
+    "@jupyterlab/docregistry": "^4.0.0",
+    "@jupyterlab/notebook": "^4.0.0",
+    "@jupyterlab/services": "^7.0.0",
+    "@lumino/widgets": "^2.0.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "@jupyterlab/builder": "^4.0.0",
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "rimraf": "^5.0.0",
+    "typescript": "~5.2.0"
+  },
+  "jupyterlab": {
+    "extension": true,
+    "outputDir": "jupyterlab_codex/labextension"
+  }
+}

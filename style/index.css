@@ -1,0 +1,129 @@
+.jp-CodexPanel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: #f6f4f1;
+  color: #1f1a16;
+  font-family: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+}
+
+.jp-CodexChat {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.jp-CodexChat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid #d5cbbf;
+  background: linear-gradient(135deg, #f3e7d6, #f7f1ea);
+}
+
+.jp-CodexChat-status {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.jp-CodexChat-status-ready {
+  color: #1a7f4b;
+}
+
+.jp-CodexChat-status-running {
+  color: #b65b1a;
+}
+
+.jp-CodexChat-status-disconnected {
+  color: #9b2c2c;
+}
+
+.jp-CodexChat-toggle {
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.jp-CodexChat-messages {
+  flex: 1;
+  overflow: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.jp-CodexChat-message {
+  padding: 8px 10px;
+  border-radius: 10px;
+  max-width: 90%;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+}
+
+.jp-CodexChat-user {
+  align-self: flex-end;
+  background: #ffffff;
+  border: 1px solid #dfd6cb;
+}
+
+.jp-CodexChat-assistant {
+  align-self: flex-start;
+  background: #efe4d5;
+  border: 1px solid #d2c0ac;
+}
+
+.jp-CodexChat-system {
+  align-self: center;
+  background: #fdf7ef;
+  border: 1px dashed #c8b29a;
+  font-size: 12px;
+}
+
+.jp-CodexChat-role {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 4px;
+  color: #6e5a48;
+}
+
+.jp-CodexChat-text {
+  white-space: pre-wrap;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.jp-CodexChat-input {
+  padding: 10px 12px;
+  border-top: 1px solid #d5cbbf;
+  display: flex;
+  gap: 8px;
+  background: #f2e9dc;
+}
+
+.jp-CodexChat-input textarea {
+  flex: 1;
+  resize: vertical;
+  border: 1px solid #ccb9a5;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 13px;
+  background: #fffaf3;
+}
+
+.jp-CodexChat-input button {
+  border: none;
+  border-radius: 6px;
+  padding: 6px 12px;
+  background: #a3522f;
+  color: #ffffff;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.jp-CodexChat-input button:hover {
+  background: #8e4525;
+}

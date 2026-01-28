@@ -1,0 +1,7 @@
+node_modules/
+lib/
+labextension/
+.jupyterlab-codex/
+*.tsbuildinfo
+.DS_Store
+jupyterlab_codex/labextension/
