@@ -1,33 +1,15 @@
 # JupyterLab Codex Sidebar
 
-JupyterLab 4 extension that provides a chat-style sidebar UI backed by the Codex CLI
-(`codex exec --json`) and a Jupyter Server extension for streaming I/O.
+Codex CLI(`codex exec --json`)와 연동되는 채팅형 사이드바 UI를 제공하는 JupyterLab 4 확장입니다.
+서버 확장을 통해 Codex CLI와의 양방향 스트리밍 통신을 지원합니다.
 
-## Goals
-- Chat-style sidebar in the right panel
-- Bidirectional communication with Codex CLI
-- Jupytext paired notebooks workflow (edit the paired `.py` file)
-- File-change detection with user-confirmed reload
+## 목표
+- 오른쪽 사이드바에 채팅형 UI 제공
+- Codex CLI와의 양방향 통신
+- Jupytext paired 노트북 워크플로우(.ipynb ↔ .py)
+- 파일 변경 감지 시 사용자 확인 후 reload
 
-## Local development (scaffold)
-1) Frontend
-- `jlpm install`
-- `jlpm build` (builds a prebuilt labextension into `jupyterlab_codex/labextension`)
-
-2) Python package / server extension
-- `python -m pip install -e .`
-- Enable the server extension (once):
-  - `jupyter server extension enable jupyterlab_codex --sys-prefix`
-
-3) Run JupyterLab
-- `jupyter lab`
-
-Notes
-- The WebSocket endpoint is `/codex/ws`.
-- The server extension launches `codex exec --json --color never -` per request.
-- Session history is stored under `~/.jupyter/codex-sessions/`.
-
-## 설치 방법 (Korean)
+## 설치 방법
 1) 프론트엔드 빌드
 - `jlpm install`
 - `jlpm build`  
@@ -41,7 +23,7 @@ Notes
 3) JupyterLab 실행
 - `jupyter lab`
 
-참고
+## 참고
 - WebSocket 엔드포인트: `/codex/ws`
 - 서버 확장은 요청마다 `codex exec --json --color never -`를 실행합니다.
 - 세션 히스토리는 `~/.jupyter/codex-sessions/`에 저장됩니다.
