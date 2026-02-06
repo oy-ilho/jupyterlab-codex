@@ -1,3 +1,12 @@
-from .server_extension import _jupyter_server_extension_points
+from .server_extension import _jupyter_server_extension_points, load_jupyter_server_extension
 
-__all__ = ["_jupyter_server_extension_points"]
+
+def _jupyter_labextension_paths():
+    return [{"src": "labextension", "dest": "jupyterlab-codex"}]
+
+
+__all__ = [
+    "_jupyter_server_extension_points",
+    "load_jupyter_server_extension",
+    "_jupyter_labextension_paths",
+]

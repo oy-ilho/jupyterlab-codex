@@ -15,11 +15,33 @@
 
 .jp-CodexChat-header {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
   padding: 8px 12px;
   border-bottom: 1px solid #d5cbbf;
   background: linear-gradient(135deg, #f3e7d6, #f7f1ea);
+  gap: 6px;
+}
+
+.jp-CodexChat-header-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.jp-CodexChat-notebook {
+  font-size: 11px;
+  font-weight: 600;
+  color: #6e5a48;
+  background: #fff;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid #d5cbbf;
+  flex: 1;
+  min-width: 80px;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
 }
 
 .jp-CodexChat-status {
@@ -40,11 +62,57 @@
   color: #9b2c2c;
 }
 
+.jp-CodexChat-newthread {
+  border: 1px solid #a3522f;
+  border-radius: 4px;
+  padding: 4px 10px;
+  background: #ffffff;
+  color: #a3522f;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.jp-CodexChat-newthread:hover {
+  background: #a3522f;
+  color: #ffffff;
+}
+
 .jp-CodexChat-toggle {
   font-size: 12px;
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+.jp-CodexChat-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.jp-CodexChat-model {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.jp-CodexChat-model select,
+.jp-CodexChat-model-input {
+  border: 1px solid #ccb9a5;
+  border-radius: 4px;
+  background: #fffaf3;
+  color: #1f1a16;
+  font-size: 12px;
+  padding: 3px 6px;
+}
+
+.jp-CodexChat-model-input {
+  width: 140px;
 }
 
 .jp-CodexChat-messages {
@@ -126,4 +194,56 @@
 
 .jp-CodexChat-input button:hover {
   background: #8e4525;
+}
+
+.jp-CodexChat-input button:disabled {
+  background: #ccc;
+  color: #888;
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.jp-CodexChat-input textarea:disabled {
+  background: #f5f5f5;
+  color: #999;
+  cursor: not-allowed;
+}
+
+.jp-CodexChat-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.jp-CodexChat-loading-dots {
+  display: flex;
+  gap: 8px;
+}
+
+.jp-CodexChat-loading-dots span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #a3522f;
+  animation: loading-bounce 1.4s infinite ease-in-out both;
+}
+
+.jp-CodexChat-loading-dots span:nth-child(1) {
+  animation-delay: -0.32s;
+}
+
+.jp-CodexChat-loading-dots span:nth-child(2) {
+  animation-delay: -0.16s;
+}
+
+@keyframes loading-bounce {
+  0%, 80%, 100% {
+    transform: scale(0);
+    opacity: 0.5;
+  }
+  40% {
+    transform: scale(1);
+    opacity: 1;
+  }
 }
