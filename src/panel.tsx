@@ -72,20 +72,6 @@ function GearIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
   );
 }
 
-function PaperclipIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" {...props}>
-      <path
-        d="M21 11.5 12.8 19.7a6 6 0 0 1-8.5-8.5L12.9 2.6a4.5 4.5 0 1 1 6.4 6.4L10.7 17.6a3 3 0 0 1-4.2-4.2l8.3-8.3"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
 function ChipIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
   return (
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" {...props}>
@@ -308,6 +294,7 @@ const REASONING_STORAGE_KEY = 'jupyterlab-codex:reasoning-effort';
 const SHOW_THINKING_STORAGE_KEY = 'jupyterlab-codex:show-thinking';
 const SHOW_RAW_EVENTS_STORAGE_KEY = 'jupyterlab-codex:show-raw-events';
 const SETTINGS_OPEN_STORAGE_KEY = 'jupyterlab-codex:settings-open';
+const INCLUDE_ACTIVE_CELL_STORAGE_KEY = 'jupyterlab-codex:include-active-cell';
 
 const MAX_ACTIVITY_ITEMS = 400;
 
@@ -359,6 +346,10 @@ function readStoredAutoSave(): boolean {
   return (safeLocalStorageGet(AUTO_SAVE_STORAGE_KEY) ?? 'true') !== 'false';
 }
 
+function readStoredIncludeActiveCell(): boolean {
+  return (safeLocalStorageGet(INCLUDE_ACTIVE_CELL_STORAGE_KEY) ?? 'true') !== 'false';
+}
+
 function readStoredReasoningEffort(): ReasoningOptionValue {
   try {
     const stored = safeLocalStorageGet(REASONING_STORAGE_KEY) ?? '';
@@ -377,6 +368,10 @@ function persistModel(model: string, customModel: string): void {
 
 function persistAutoSave(enabled: boolean): void {
   safeLocalStorageSet(AUTO_SAVE_STORAGE_KEY, enabled ? 'true' : 'false');
+}
+
+function persistIncludeActiveCell(enabled: boolean): void {
+  safeLocalStorageSet(INCLUDE_ACTIVE_CELL_STORAGE_KEY, enabled ? 'true' : 'false');
 }
 
 function persistReasoningEffort(value: ReasoningOptionValue): void {
@@ -754,12 +749,12 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     readStoredReasoningEffort()
   );
   const [autoSaveBeforeSend, setAutoSaveBeforeSend] = useState<boolean>(() => readStoredAutoSave());
+  const [includeActiveCell, setIncludeActiveCell] = useState<boolean>(() => readStoredIncludeActiveCell());
   const [showThinking, setShowThinking] = useState<boolean>(() => readStoredShowThinking());
   const [showRawEvents, setShowRawEvents] = useState<boolean>(() => readStoredShowRawEvents());
   const [settingsOpen, setSettingsOpen] = useState<boolean>(() => readStoredSettingsOpen());
   const [input, setInput] = useState('');
   const [socketConnected, setSocketConnected] = useState(false);
-  const [attachCell, setAttachCell] = useState(true);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [reasoningMenuOpen, setReasoningMenuOpen] = useState(false);
@@ -790,6 +785,10 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   useEffect(() => {
     persistAutoSave(autoSaveBeforeSend);
   }, [autoSaveBeforeSend]);
+
+  useEffect(() => {
+    persistIncludeActiveCell(includeActiveCell);
+  }, [includeActiveCell]);
 
   useEffect(() => {
     persistReasoningEffort(reasoningEffort);
@@ -1290,7 +1289,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       }
     }
 
-    const selection = attachCell ? getActiveCellText(props.notebooks) : '';
+    const selection = includeActiveCell ? getActiveCellText(props.notebooks) : '';
     const session = ensureSession(notebookPath);
 
     socket.send(
@@ -1412,6 +1411,15 @@ function CodexChat(props: CodexChatProps): JSX.Element {
               <label className="jp-CodexChat-toggle">
                 <input
                   type="checkbox"
+                  checked={includeActiveCell}
+                  onChange={e => setIncludeActiveCell(e.currentTarget.checked)}
+                  disabled={status === 'running'}
+                />
+                Include active cell
+              </label>
+              <label className="jp-CodexChat-toggle">
+                <input
+                  type="checkbox"
                   checked={showThinking}
                   onChange={e => setShowThinking(e.currentTarget.checked)}
                 />
@@ -1507,18 +1515,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
           />
           <div className="jp-CodexComposer-toolbar">
             <div className="jp-CodexComposer-toolbarLeft">
-              <button
-                type="button"
-                className={`jp-CodexIconBtn ${attachCell ? 'is-active' : ''}`}
-                onClick={() => setAttachCell(v => !v)}
-                disabled={status === 'running'}
-                aria-label="Attach active cell"
-                aria-pressed={attachCell}
-                title={attachCell ? 'Attach active cell: on' : 'Attach active cell: off'}
-              >
-                <PaperclipIcon width={18} height={18} />
-              </button>
-
               <div className="jp-CodexMenuWrap jp-CodexModelWrap" ref={modelMenuWrapRef}>
                 <button
                   type="button"
