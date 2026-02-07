@@ -506,10 +506,63 @@
   gap: 10px;
 }
 
+.jp-CodexActivityToggle {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.jp-CodexActivityToggle:hover {
+  background: color-mix(in srgb, var(--cdx-surface) 55%, transparent);
+}
+
+.jp-CodexActivityToggle:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--cdx-accent) 22%, transparent);
+}
+
+.jp-CodexActivityCaret {
+  flex: 0 0 auto;
+  color: var(--cdx-muted);
+  transform: rotate(-90deg);
+  transition: transform 160ms ease;
+}
+
+.jp-CodexActivity.is-open .jp-CodexActivityCaret {
+  transform: rotate(0deg);
+}
+
 .jp-CodexActivityLabel {
   font-family: var(--cdx-mono);
   font-size: 12px;
   color: var(--cdx-text);
+  white-space: nowrap;
+}
+
+.jp-CodexActivityPreview {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--cdx-mono);
+  font-size: 12px;
+  color: var(--cdx-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.jp-CodexActivityActions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
 }
 
 .jp-CodexActivityPulse {
@@ -552,7 +605,6 @@
 }
 
 .jp-CodexActivityRaw {
-  grid-column: 1 / -1;
   margin: 6px 0 0;
   padding: 10px;
   border-radius: 10px;
@@ -560,6 +612,23 @@
   background: color-mix(in srgb, var(--cdx-surface) 65%, transparent);
   overflow: auto;
   white-space: pre;
+}
+
+.jp-CodexActivityDetails {
+  grid-column: 1 / -1;
+  margin-top: 6px;
+}
+
+.jp-CodexActivityDetailsSummary {
+  cursor: pointer;
+  user-select: none;
+  font-size: 11px;
+  color: var(--cdx-muted);
+  font-family: var(--cdx-mono);
+}
+
+.jp-CodexActivityDetailsSummary:hover {
+  color: var(--cdx-text);
 }
 
 .jp-CodexActivityRow-warn .jp-CodexActivitySummary {
@@ -1073,8 +1142,14 @@
 .jp-CodexChat-loading {
   display: flex;
   align-items: center;
-  justify-content: center;
-  padding: 14px;
+  gap: 10px;
+  padding: 10px 12px;
+  color: var(--cdx-muted);
+  align-self: flex-start;
+  border-radius: var(--cdx-radius);
+  border: 1px solid color-mix(in srgb, var(--cdx-border) 70%, transparent);
+  background: var(--cdx-surface);
+  max-width: 100%;
 }
 
 .jp-CodexChat-loading-dots {
@@ -1088,6 +1163,17 @@
   border-radius: 999px;
   background: var(--cdx-accent);
   animation: cdx-bounce 1.4s infinite ease-in-out both;
+}
+
+.jp-CodexChat-loadingText {
+  min-width: 0;
+  font-family: var(--cdx-mono);
+  font-size: 12px;
+  line-height: 1.2;
+  color: var(--cdx-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .jp-CodexChat-loading-dots span:nth-child(1) {

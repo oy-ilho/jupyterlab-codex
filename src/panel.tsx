@@ -379,7 +379,8 @@ function persistReasoningEffort(value: ReasoningOptionValue): void {
 }
 
 function readStoredShowThinking(): boolean {
-  return (safeLocalStorageGet(SHOW_THINKING_STORAGE_KEY) ?? 'true') !== 'false';
+  // Default off: most users expect a simple "Running" indicator, not an always-visible event log.
+  return (safeLocalStorageGet(SHOW_THINKING_STORAGE_KEY) ?? 'false') === 'true';
 }
 
 function readStoredShowRawEvents(): boolean {
@@ -508,22 +509,47 @@ function summarizeCodexEvent(payload: any): string {
 
   // Common Codex CLI shape: { type: "item.completed", item: { type: "...", ... } }
   if (type === 'item.completed' && payload.item && typeof payload.item === 'object') {
-    const itemType = typeof payload.item.type === 'string' ? payload.item.type : '';
+    const item: any = payload.item;
+    const itemType = typeof item.type === 'string' ? item.type : '';
     const toolName =
-      (typeof payload.item.tool_name === 'string' && payload.item.tool_name) ||
-      (typeof payload.item.tool === 'string' && payload.item.tool) ||
-      (typeof payload.item.name === 'string' && payload.item.name) ||
+      (typeof item.tool_name === 'string' && item.tool_name) ||
+      (typeof item.tool === 'string' && item.tool) ||
+      (typeof item.name === 'string' && item.name) ||
       '';
-    const path =
-      (typeof payload.item.path === 'string' && payload.item.path) ||
-      (typeof payload.item.filename === 'string' && payload.item.filename) ||
-      '';
+    const path = (typeof item.path === 'string' && item.path) || (typeof item.filename === 'string' && item.filename) || '';
 
-    if (itemType && toolName) {
-      return `${type}: ${itemType} (${toolName})${path ? ` ${truncateMiddle(path, 80)}` : ''}`;
+    const extraParts: string[] = [];
+    if (toolName) {
+      extraParts.push(`(${toolName})`);
     }
+    if (path) {
+      extraParts.push(truncateMiddle(path, 80));
+    }
+
+    // Commonly useful item types:
+    // - command_execution: show the command if we can find it.
+    if (itemType === 'command_execution') {
+      const commandField =
+        item.command ?? item.cmd ?? item.shell_command ?? item.argv ?? item.args ?? item.commandLine ?? item.command_line;
+      let commandHint = '';
+      if (typeof commandField === 'string') {
+        commandHint = commandField;
+      } else if (
+        Array.isArray(commandField) &&
+        commandField.length > 0 &&
+        commandField.every((token: any) => typeof token === 'string')
+      ) {
+        commandHint = commandField.join(' ');
+      } else {
+        commandHint = safePreview(commandField);
+      }
+      if (commandHint) {
+        extraParts.push(truncateMiddle(commandHint, 140));
+      }
+    }
+
     if (itemType) {
-      return `${type}: ${itemType}`;
+      return `${type}: ${itemType}${extraParts.length ? ` ${extraParts.join(' ')}` : ''}`;
     }
   }
 
@@ -548,6 +574,18 @@ function summarizeCodexEvent(payload: any): string {
   }
 
   return type;
+}
+
+function isNoiseCodexEvent(payload: any): boolean {
+  if (!payload || typeof payload !== 'object') {
+    return false;
+  }
+  const type =
+    (typeof payload.type === 'string' && payload.type) ||
+    (typeof payload.event === 'string' && payload.event) ||
+    '';
+  // These are useful for debugging but not meaningful for end users.
+  return type === 'thread.started' || type === 'turn.started' || type === 'turn.completed';
 }
 
 async function copyToClipboard(text: string): Promise<boolean> {
@@ -688,39 +726,72 @@ function MessageText(props: { text: string }): JSX.Element {
   );
 }
 
-function ActivityPanel(props: {
-  status: PanelStatus;
-  items: ActivityItem[];
-  showRaw: boolean;
-  onClear: () => void;
-}): JSX.Element {
+  function ActivityPanel(props: {
+    status: PanelStatus;
+    items: ActivityItem[];
+    showRaw: boolean;
+    onClear: () => void;
+  }): JSX.Element | null {
+  const hasItems = props.items.length > 0;
+  const [open, setOpen] = useState<boolean>(() => props.status === 'running');
+
+  useEffect(() => {
+    if (props.status === 'running') {
+      setOpen(true);
+    }
+  }, [props.status]);
+
+  if (props.status !== 'running' && !hasItems) {
+    return null;
+  }
+
+  const label = props.status === 'running' ? 'Thinking' : 'Activity';
+  const lastSummary = hasItems ? props.items[props.items.length - 1]?.summary ?? '' : '';
+
   return (
-    <div className="jp-CodexActivity">
+    <div className={`jp-CodexActivity${open ? ' is-open' : ''}`}>
       <div className="jp-CodexActivityHeader">
-        <div className="jp-CodexActivityTitle">
-          <span className="jp-CodexActivityLabel">Thinking</span>
+        <button
+          type="button"
+          className="jp-CodexActivityToggle"
+          onClick={() => setOpen(value => !value)}
+          aria-expanded={open}
+          title={open ? 'Collapse activity' : 'Expand activity'}
+        >
+          <ChevronDownIcon className="jp-CodexActivityCaret" width={16} height={16} />
+          <span className="jp-CodexActivityLabel">{label}</span>
           {props.status === 'running' && <span className="jp-CodexActivityPulse" aria-hidden="true" />}
-        </div>
-        <button className="jp-CodexBtn jp-CodexBtn-ghost jp-CodexBtn-xs" onClick={props.onClear}>
-          Clear
+          {!open && lastSummary && (
+            <span className="jp-CodexActivityPreview" title={lastSummary}>
+              {lastSummary}
+            </span>
+          )}
         </button>
+        <div className="jp-CodexActivityActions">
+          <button className="jp-CodexBtn jp-CodexBtn-ghost jp-CodexBtn-xs" onClick={props.onClear}>
+            Clear
+          </button>
+        </div>
       </div>
-      <div className="jp-CodexActivityBody" role="log" aria-live="polite">
-        {props.items.length === 0 && (
-          <div className="jp-CodexActivityEmpty">
-            {props.status === 'running' ? 'Waiting for events...' : 'No activity yet.'}
-          </div>
-        )}
-        {props.items.map(item => (
-          <div key={item.id} className={`jp-CodexActivityRow jp-CodexActivityRow-${item.level}`}>
-            <span className="jp-CodexActivityTime">{formatTime(item.ts)}</span>
-            <span className="jp-CodexActivitySummary">{item.summary}</span>
-            {props.showRaw && item.raw != null && (
-              <pre className="jp-CodexActivityRaw">{JSON.stringify(item.raw, null, 2)}</pre>
-            )}
-          </div>
-        ))}
-      </div>
+      {open && (
+        <div className="jp-CodexActivityBody" role="log" aria-live="polite">
+          {props.items.length === 0 && (
+            <div className="jp-CodexActivityEmpty">{props.status === 'running' ? 'Working…' : 'No activity.'}</div>
+          )}
+          {props.items.map(item => (
+            <div key={item.id} className={`jp-CodexActivityRow jp-CodexActivityRow-${item.level}`}>
+              <span className="jp-CodexActivityTime">{formatTime(item.ts)}</span>
+              <span className="jp-CodexActivitySummary">{item.summary}</span>
+              {props.showRaw && item.raw != null && (
+                <details className="jp-CodexActivityDetails">
+                  <summary className="jp-CodexActivityDetailsSummary">Raw</summary>
+                  <pre className="jp-CodexActivityRaw">{JSON.stringify(item.raw, null, 2)}</pre>
+                </details>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1142,10 +1213,9 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       if (msg.type === 'status') {
         if (msg.state === 'running' && targetPath) {
           setSessionRunState(targetPath, 'running', runId || null);
-          appendActivity(targetPath, `run: started${runId ? ` (${runId})` : ''}`, { raw: msg });
+          appendActivity(targetPath, 'run: started', { raw: msg });
         } else if (msg.state === 'ready' && targetPath) {
           setSessionRunState(targetPath, 'ready', null);
-          appendActivity(targetPath, `run: ready${runId ? ` (${runId})` : ''}`, { raw: msg });
           if (runId) {
             runToPathRef.current.delete(runId);
           }
@@ -1160,6 +1230,9 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 
       if (msg.type === 'event') {
         const payload = msg.payload;
+        if (isNoiseCodexEvent(payload)) {
+          return;
+        }
         appendActivity(targetPath, summarizeCodexEvent(payload), { raw: payload });
         return;
       }
@@ -1320,9 +1393,12 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     status === 'ready' &&
     currentNotebookPath.length > 0 &&
     (modelOption !== '__custom__' || selectedModel.length > 0);
+  const lastActivitySummary = activity.length ? activity[activity.length - 1].summary : '';
   const runningSummary =
     status === 'running'
-      ? (activity.length ? activity[activity.length - 1].summary : '') || 'Working...'
+      ? lastActivitySummary && !lastActivitySummary.startsWith('run: ')
+        ? lastActivitySummary
+        : 'Working...'
       : '';
   const selectedModelLabel =
     modelOption === '__custom__'
@@ -1423,7 +1499,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                   checked={showThinking}
                   onChange={e => setShowThinking(e.currentTarget.checked)}
                 />
-                Show thinking
+                Activity log
               </label>
               <label className="jp-CodexChat-toggle">
                 <input
@@ -1471,12 +1547,15 @@ function CodexChat(props: CodexChatProps): JSX.Element {
             />
           )}
 
-          {status === 'running' && !showThinking && (
+          {status === 'running' && (
             <div className="jp-CodexChat-loading" aria-label="Running">
               <div className="jp-CodexChat-loading-dots">
                 <span></span>
                 <span></span>
                 <span></span>
+              </div>
+              <div className="jp-CodexChat-loadingText" title={runningSummary || 'Working...'}>
+                {runningSummary || 'Working...'}
               </div>
             </div>
           )}
