@@ -18,6 +18,20 @@ function PlusIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
   );
 }
 
+function ChevronDownIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" {...props}>
+      <path
+        d="m6 9 6 6 6-6"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function ArrowUpIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
   return (
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" {...props}>
@@ -1313,9 +1327,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       : '';
   const selectedModelLabel =
     modelOption === '__custom__'
-      ? customModel.trim()
-        ? `Custom (${customModel.trim()})`
-        : 'Custom'
+      ? customModel.trim() || 'Custom'
       : MODEL_OPTIONS.find(option => option.value === modelOption)?.label ?? 'Model';
   const selectedReasoningLabel =
     REASONING_OPTIONS.find(option => option.value === reasoningEffort)?.label ?? 'Reasoning';
@@ -1507,10 +1519,10 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                 <PaperclipIcon width={18} height={18} />
               </button>
 
-              <div className="jp-CodexMenuWrap" ref={modelMenuWrapRef}>
+              <div className="jp-CodexMenuWrap jp-CodexModelWrap" ref={modelMenuWrapRef}>
                 <button
                   type="button"
-                  className={`jp-CodexIconBtn ${modelMenuOpen ? 'is-open' : ''}`}
+                  className={`jp-CodexModelBtn ${modelMenuOpen ? 'is-open' : ''}`}
                   onClick={() => {
                     setModelMenuOpen(open => !open);
                     setReasoningMenuOpen(false);
@@ -1521,7 +1533,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                   aria-expanded={modelMenuOpen}
                   title={`Model: ${selectedModelLabel}`}
                 >
-                  <ChipIcon width={18} height={18} />
+                  <span className="jp-CodexModelBtn-label">{selectedModelLabel}</span>
+                  <ChevronDownIcon className="jp-CodexModelBtn-caret" width={14} height={14} />
                 </button>
 
                 {modelMenuOpen && (
