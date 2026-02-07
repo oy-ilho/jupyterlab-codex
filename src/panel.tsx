@@ -4,6 +4,8 @@ import { INotebookTracker } from '@jupyterlab/notebook';
 import { ServerConnection } from '@jupyterlab/services';
 import { URLExt } from '@jupyterlab/coreutils';
 import type { DocumentRegistry } from '@jupyterlab/docregistry';
+import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 
 function PlusIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
   return (
@@ -232,15 +234,6 @@ type ChatMessage = {
   text: string;
 };
 
-type ActivityLevel = 'info' | 'warn' | 'error';
-type ActivityItem = {
-  id: string;
-  ts: number;
-  level: ActivityLevel;
-  summary: string;
-  raw?: any;
-};
-
 type RunState = 'ready' | 'running';
 type PanelStatus = 'disconnected' | RunState;
 
@@ -251,9 +244,9 @@ type CodexChatProps = {
 type NotebookSession = {
   threadId: string;
   messages: ChatMessage[];
-  activity: ActivityItem[];
   runState: RunState;
   activeRunId: string | null;
+  progress: string;
 };
 
 type ModelOptionValue =
@@ -291,12 +284,8 @@ const AUTO_SAVE_STORAGE_KEY = 'jupyterlab-codex:auto-save-before-send';
 const MODEL_STORAGE_KEY = 'jupyterlab-codex:model';
 const CUSTOM_MODEL_STORAGE_KEY = 'jupyterlab-codex:custom-model';
 const REASONING_STORAGE_KEY = 'jupyterlab-codex:reasoning-effort';
-const SHOW_THINKING_STORAGE_KEY = 'jupyterlab-codex:show-thinking';
-const SHOW_RAW_EVENTS_STORAGE_KEY = 'jupyterlab-codex:show-raw-events';
 const SETTINGS_OPEN_STORAGE_KEY = 'jupyterlab-codex:settings-open';
 const INCLUDE_ACTIVE_CELL_STORAGE_KEY = 'jupyterlab-codex:include-active-cell';
-
-const MAX_ACTIVITY_ITEMS = 400;
 
 function isKnownModelOption(value: string): value is ModelOptionValue {
   return MODEL_OPTIONS.some(option => option.value === value);
@@ -307,8 +296,8 @@ function createSession(path: string, intro: string): NotebookSession {
     threadId: crypto.randomUUID(),
     runState: 'ready',
     activeRunId: null,
+    progress: '',
     messages: [{ role: 'system', text: intro || `세션 시작: ${path || 'Untitled'}` }],
-    activity: []
   };
 }
 
@@ -378,25 +367,8 @@ function persistReasoningEffort(value: ReasoningOptionValue): void {
   safeLocalStorageSet(REASONING_STORAGE_KEY, value);
 }
 
-function readStoredShowThinking(): boolean {
-  // Default off: most users expect a simple "Running" indicator, not an always-visible event log.
-  return (safeLocalStorageGet(SHOW_THINKING_STORAGE_KEY) ?? 'false') === 'true';
-}
-
-function readStoredShowRawEvents(): boolean {
-  return (safeLocalStorageGet(SHOW_RAW_EVENTS_STORAGE_KEY) ?? 'false') === 'true';
-}
-
 function readStoredSettingsOpen(): boolean {
   return (safeLocalStorageGet(SETTINGS_OPEN_STORAGE_KEY) ?? 'false') === 'true';
-}
-
-function persistShowThinking(enabled: boolean): void {
-  safeLocalStorageSet(SHOW_THINKING_STORAGE_KEY, enabled ? 'true' : 'false');
-}
-
-function persistShowRawEvents(enabled: boolean): void {
-  safeLocalStorageSet(SHOW_RAW_EVENTS_STORAGE_KEY, enabled ? 'true' : 'false');
 }
 
 function persistSettingsOpen(enabled: boolean): void {
@@ -430,70 +402,6 @@ function safePreview(value: unknown, max = 220): string {
     return truncateMiddle(JSON.stringify(value), max);
   } catch {
     return '';
-  }
-}
-
-function redactEventPayload(value: any, depth = 0): any {
-  const MAX_DEPTH = 6;
-  const MAX_STRING = 2000;
-  const MAX_ARRAY = 50;
-  const MAX_KEYS = 120;
-  const REDACT_KEYS = new Set([
-    'analysis',
-    'reasoning',
-    'chain_of_thought',
-    'cot',
-    'system_prompt',
-    'prompt',
-    'instructions',
-    'input',
-    'raw_prompt'
-  ]);
-
-  if (value == null) {
-    return value;
-  }
-  if (depth > MAX_DEPTH) {
-    return '[omitted]';
-  }
-  if (typeof value === 'string') {
-    if (value.length > MAX_STRING) {
-      return `${value.slice(0, MAX_STRING)}... [truncated]`;
-    }
-    return value;
-  }
-  if (typeof value === 'number' || typeof value === 'boolean') {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    const trimmed = value.length > MAX_ARRAY ? value.slice(0, MAX_ARRAY) : value;
-    const mapped = trimmed.map(item => redactEventPayload(item, depth + 1));
-    if (value.length > MAX_ARRAY) {
-      mapped.push(`[omitted ${value.length - MAX_ARRAY} more]`);
-    }
-    return mapped;
-  }
-  if (typeof value === 'object') {
-    const out: Record<string, any> = {};
-    const entries = Object.entries(value as Record<string, any>);
-    const trimmed = entries.length > MAX_KEYS ? entries.slice(0, MAX_KEYS) : entries;
-    for (const [key, item] of trimmed) {
-      if (REDACT_KEYS.has(key)) {
-        out[key] = '[redacted]';
-        continue;
-      }
-      out[key] = redactEventPayload(item, depth + 1);
-    }
-    if (entries.length > MAX_KEYS) {
-      out.__omitted__ = `[omitted ${entries.length - MAX_KEYS} more keys]`;
-    }
-    return out;
-  }
-
-  try {
-    return safePreview(value);
-  } catch {
-    return '[unserializable]';
   }
 }
 
@@ -663,13 +571,33 @@ function splitFencedCodeBlocks(text: string): MessageBlock[] {
   return blocks.filter(block => (block.kind === 'text' ? block.text.length > 0 : true));
 }
 
-function formatTime(ts: number): string {
-  const d = new Date(ts);
-  if (Number.isNaN(d.getTime())) {
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function renderMarkdownToSafeHtml(markdown: string): string {
+  if (!markdown) {
     return '';
   }
-  const pad2 = (value: number) => String(value).padStart(2, '0');
-  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+  let html = '';
+  try {
+    html = marked.parse(markdown, {
+      gfm: true,
+      breaks: true
+    }) as string;
+  } catch {
+    return escapeHtml(markdown).replace(/\n/g, '<br />');
+  }
+  try {
+    return DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
+  } catch {
+    return html;
+  }
 }
 
 function StatusPill(props: { status: PanelStatus }): JSX.Element {
@@ -720,78 +648,9 @@ function MessageText(props: { text: string }): JSX.Element {
         if (block.kind === 'code') {
           return <CodeBlock key={idx} lang={block.lang} code={block.code} />;
         }
-        return <span key={idx}>{block.text}</span>;
+        const html = renderMarkdownToSafeHtml(block.text);
+        return <div key={idx} className="jp-CodexMarkdown" dangerouslySetInnerHTML={{ __html: html }} />;
       })}
-    </div>
-  );
-}
-
-  function ActivityPanel(props: {
-    status: PanelStatus;
-    items: ActivityItem[];
-    showRaw: boolean;
-    onClear: () => void;
-  }): JSX.Element | null {
-  const hasItems = props.items.length > 0;
-  const [open, setOpen] = useState<boolean>(() => props.status === 'running');
-
-  useEffect(() => {
-    if (props.status === 'running') {
-      setOpen(true);
-    }
-  }, [props.status]);
-
-  if (props.status !== 'running' && !hasItems) {
-    return null;
-  }
-
-  const label = props.status === 'running' ? 'Thinking' : 'Activity';
-  const lastSummary = hasItems ? props.items[props.items.length - 1]?.summary ?? '' : '';
-
-  return (
-    <div className={`jp-CodexActivity${open ? ' is-open' : ''}`}>
-      <div className="jp-CodexActivityHeader">
-        <button
-          type="button"
-          className="jp-CodexActivityToggle"
-          onClick={() => setOpen(value => !value)}
-          aria-expanded={open}
-          title={open ? 'Collapse activity' : 'Expand activity'}
-        >
-          <ChevronDownIcon className="jp-CodexActivityCaret" width={16} height={16} />
-          <span className="jp-CodexActivityLabel">{label}</span>
-          {props.status === 'running' && <span className="jp-CodexActivityPulse" aria-hidden="true" />}
-          {!open && lastSummary && (
-            <span className="jp-CodexActivityPreview" title={lastSummary}>
-              {lastSummary}
-            </span>
-          )}
-        </button>
-        <div className="jp-CodexActivityActions">
-          <button className="jp-CodexBtn jp-CodexBtn-ghost jp-CodexBtn-xs" onClick={props.onClear}>
-            Clear
-          </button>
-        </div>
-      </div>
-      {open && (
-        <div className="jp-CodexActivityBody" role="log" aria-live="polite">
-          {props.items.length === 0 && (
-            <div className="jp-CodexActivityEmpty">{props.status === 'running' ? 'Working…' : 'No activity.'}</div>
-          )}
-          {props.items.map(item => (
-            <div key={item.id} className={`jp-CodexActivityRow jp-CodexActivityRow-${item.level}`}>
-              <span className="jp-CodexActivityTime">{formatTime(item.ts)}</span>
-              <span className="jp-CodexActivitySummary">{item.summary}</span>
-              {props.showRaw && item.raw != null && (
-                <details className="jp-CodexActivityDetails">
-                  <summary className="jp-CodexActivityDetailsSummary">Raw</summary>
-                  <pre className="jp-CodexActivityRaw">{JSON.stringify(item.raw, null, 2)}</pre>
-                </details>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
@@ -821,8 +680,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   );
   const [autoSaveBeforeSend, setAutoSaveBeforeSend] = useState<boolean>(() => readStoredAutoSave());
   const [includeActiveCell, setIncludeActiveCell] = useState<boolean>(() => readStoredIncludeActiveCell());
-  const [showThinking, setShowThinking] = useState<boolean>(() => readStoredShowThinking());
-  const [showRawEvents, setShowRawEvents] = useState<boolean>(() => readStoredShowRawEvents());
   const [settingsOpen, setSettingsOpen] = useState<boolean>(() => readStoredSettingsOpen());
   const [input, setInput] = useState('');
   const [socketConnected, setSocketConnected] = useState(false);
@@ -864,14 +721,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   useEffect(() => {
     persistReasoningEffort(reasoningEffort);
   }, [reasoningEffort]);
-
-  useEffect(() => {
-    persistShowThinking(showThinking);
-  }, [showThinking]);
-
-  useEffect(() => {
-    persistShowRawEvents(showRawEvents);
-  }, [showRawEvents]);
 
   useEffect(() => {
     persistSettingsOpen(settingsOpen);
@@ -978,7 +827,27 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     updateSessions(prev => {
       const next = new Map(prev);
       const session = next.get(path) ?? createSession(path, `세션 시작: ${path || 'Untitled'}`);
-      next.set(path, { ...session, runState, activeRunId: runId });
+      const progress = session.runState === runState ? session.progress : '';
+      next.set(path, { ...session, runState, activeRunId: runId, progress });
+      return next;
+    });
+  }
+
+  function setSessionProgress(path: string, progress: string): void {
+    const targetPath = path || currentNotebookPathRef.current || '';
+    if (!targetPath) {
+      return;
+    }
+
+    const nextProgress = progress ? truncateMiddle(progress, 260) : '';
+    updateSessions(prev => {
+      const next = new Map(prev);
+      const session =
+        next.get(targetPath) ?? createSession(targetPath, `세션 시작: ${targetPath || 'Untitled'}`);
+      if (session.progress === nextProgress) {
+        return prev;
+      }
+      next.set(targetPath, { ...session, progress: nextProgress });
       return next;
     });
   }
@@ -1028,57 +897,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       }
 
       next.set(targetPath, { ...session, messages: updatedMessages });
-      return next;
-    });
-  }
-
-  function appendActivity(
-    path: string,
-    summary: string,
-    options?: { level?: ActivityLevel; raw?: any; ts?: number }
-  ): void {
-    if (!summary) {
-      return;
-    }
-    const targetPath = path || currentNotebookPathRef.current || '';
-    if (!targetPath) {
-      return;
-    }
-
-    const item: ActivityItem = {
-      id: crypto.randomUUID(),
-      ts: options?.ts ?? Date.now(),
-      level: options?.level ?? 'info',
-      summary,
-      raw: options?.raw != null ? redactEventPayload(options.raw) : undefined
-    };
-
-    updateSessions(prev => {
-      const next = new Map(prev);
-      const session =
-        next.get(targetPath) ?? createSession(targetPath, `세션 시작: ${targetPath || 'Untitled'}`);
-      const activity = [...(session.activity ?? []), item];
-      const trimmed =
-        activity.length > MAX_ACTIVITY_ITEMS
-          ? activity.slice(activity.length - MAX_ACTIVITY_ITEMS)
-          : activity;
-      next.set(targetPath, { ...session, activity: trimmed });
-      return next;
-    });
-  }
-
-  function clearActivity(path: string): void {
-    const targetPath = path || currentNotebookPathRef.current || '';
-    if (!targetPath) {
-      return;
-    }
-    updateSessions(prev => {
-      const next = new Map(prev);
-      const session = next.get(targetPath);
-      if (!session) {
-        return prev;
-      }
-      next.set(targetPath, { ...session, activity: [] });
       return next;
     });
   }
@@ -1200,10 +1018,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         msg = JSON.parse(event.data);
       } catch (err) {
         appendMessage(currentNotebookPathRef.current, 'system', `Invalid message: ${String(event.data)}`);
-        appendActivity(currentNotebookPathRef.current, 'ws: invalid message', {
-          level: 'error',
-          raw: event.data
-        });
         return;
       }
 
@@ -1213,9 +1027,10 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       if (msg.type === 'status') {
         if (msg.state === 'running' && targetPath) {
           setSessionRunState(targetPath, 'running', runId || null);
-          appendActivity(targetPath, 'run: started', { raw: msg });
+          setSessionProgress(targetPath, '');
         } else if (msg.state === 'ready' && targetPath) {
           setSessionRunState(targetPath, 'ready', null);
+          setSessionProgress(targetPath, '');
           if (runId) {
             runToPathRef.current.delete(runId);
           }
@@ -1233,15 +1048,15 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         if (isNoiseCodexEvent(payload)) {
           return;
         }
-        appendActivity(targetPath, summarizeCodexEvent(payload), { raw: payload });
+        setSessionProgress(targetPath, summarizeCodexEvent(payload));
         return;
       }
 
       if (msg.type === 'error') {
         appendMessage(targetPath, 'system', msg.message || 'Unknown error');
-        appendActivity(targetPath, `error: ${msg.message || 'Unknown error'}`, { level: 'error', raw: msg });
         if (targetPath) {
           setSessionRunState(targetPath, 'ready', null);
+          setSessionProgress(targetPath, '');
         }
         if (runId) {
           runToPathRef.current.delete(runId);
@@ -1251,22 +1066,12 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 
       if (msg.type === 'done') {
         const fileChanged = Boolean(msg.fileChanged);
-        const exitCode =
-          typeof msg.exitCode === 'number'
-            ? String(msg.exitCode)
-            : msg.exitCode == null
-              ? 'null'
-              : String(msg.exitCode);
-        appendActivity(
-          targetPath,
-          `done: exit=${exitCode}${fileChanged ? ', file changed' : ''}${msg.cancelled ? ', cancelled' : ''}`,
-          { raw: msg }
-        );
         if (fileChanged && targetPath) {
           void refreshNotebook(targetPath);
         }
         if (targetPath) {
           setSessionRunState(targetPath, 'ready', null);
+          setSessionProgress(targetPath, '');
         }
         if (runId) {
           runToPathRef.current.delete(runId);
@@ -1287,7 +1092,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     }
     const id = window.requestAnimationFrame(() => scrollToBottom());
     return () => window.cancelAnimationFrame(id);
-  }, [isAtBottom, sessions, currentNotebookPath, showThinking, showRawEvents, socketConnected]);
+  }, [isAtBottom, sessions, currentNotebookPath, socketConnected]);
 
   function startNewThread(): void {
     const path = currentNotebookPathRef.current || '';
@@ -1313,15 +1118,15 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     const runId = session?.activeRunId ?? null;
 
     if (!socket || socket.readyState !== WebSocket.OPEN) {
-      appendActivity(notebookPath, 'cancel: websocket not connected', { level: 'error' });
+      appendMessage(notebookPath, 'system', 'Cancel failed: WebSocket is not connected.');
       return;
     }
     if (!runId) {
-      appendActivity(notebookPath, 'cancel: run id not available yet', { level: 'warn' });
+      appendMessage(notebookPath, 'system', 'Cancel not available yet (waiting for run id).');
       return;
     }
 
-    appendActivity(notebookPath, `cancel: ${runId}`, { level: 'warn' });
+    setSessionProgress(notebookPath, 'Cancelling...');
     socket.send(JSON.stringify({ type: 'cancel', runId }));
   }
 
@@ -1379,12 +1184,13 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 
     appendMessage(notebookPath, 'user', trimmed);
     setSessionRunState(notebookPath, 'running', null);
+    setSessionProgress(notebookPath, '');
     setInput('');
   }
 
   const currentSession = currentNotebookPath ? sessions.get(currentNotebookPath) : null;
   const messages = currentSession?.messages ?? [];
-  const activity = currentSession?.activity ?? [];
+  const progress = currentSession?.progress ?? '';
   const status: PanelStatus = socketConnected ? currentSession?.runState ?? 'ready' : 'disconnected';
   const displayPath = currentNotebookPath
     ? currentNotebookPath.split('/').pop() || 'Untitled'
@@ -1393,13 +1199,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     status === 'ready' &&
     currentNotebookPath.length > 0 &&
     (modelOption !== '__custom__' || selectedModel.length > 0);
-  const lastActivitySummary = activity.length ? activity[activity.length - 1].summary : '';
-  const runningSummary =
-    status === 'running'
-      ? lastActivitySummary && !lastActivitySummary.startsWith('run: ')
-        ? lastActivitySummary
-        : 'Working...'
-      : '';
+  const runningSummary = status === 'running' ? progress || 'Working...' : '';
   const selectedModelLabel =
     modelOption === '__custom__'
       ? customModel.trim() || 'Custom'
@@ -1454,9 +1254,9 @@ function CodexChat(props: CodexChatProps): JSX.Element {
             </button>
           </div>
         </div>
-        {runningSummary && (
-          <div className="jp-CodexChat-subtitle" title={runningSummary}>
-            {runningSummary}
+        {status === 'running' && progress && (
+          <div className="jp-CodexChat-subtitle" title={progress}>
+            {progress}
           </div>
         )}
 
@@ -1493,23 +1293,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                 />
                 Include active cell
               </label>
-              <label className="jp-CodexChat-toggle">
-                <input
-                  type="checkbox"
-                  checked={showThinking}
-                  onChange={e => setShowThinking(e.currentTarget.checked)}
-                />
-                Activity log
-              </label>
-              <label className="jp-CodexChat-toggle">
-                <input
-                  type="checkbox"
-                  checked={showRawEvents}
-                  onChange={e => setShowRawEvents(e.currentTarget.checked)}
-                  disabled={!showThinking}
-                />
-                Raw events
-              </label>
             </div>
           </div>
         )}
@@ -1537,15 +1320,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
               <MessageText text={msg.text} />
             </div>
           ))}
-
-          {showThinking && (
-            <ActivityPanel
-              status={status}
-              items={activity}
-              showRaw={showRawEvents}
-              onClear={() => clearActivity(currentNotebookPath)}
-            />
-          )}
 
           {status === 'running' && (
             <div className="jp-CodexChat-loading" aria-label="Running">

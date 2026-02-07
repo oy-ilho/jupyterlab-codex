@@ -386,7 +386,9 @@
 
 .jp-CodexChat-message {
   position: relative;
-  padding: 10px 12px;
+  box-sizing: border-box;
+  min-width: 0;
+  padding: 10px 52px 10px 12px;
   border-radius: var(--cdx-radius);
   border: 1px solid color-mix(in srgb, var(--cdx-border) 70%, transparent);
   background: var(--cdx-surface);
@@ -436,10 +438,87 @@
 }
 
 .jp-CodexChat-text {
-  white-space: pre-wrap;
   font-size: 13px;
   line-height: 1.55;
-  color: var(--cdx-text);
+  color: inherit;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.jp-CodexMarkdown {
+  white-space: normal;
+}
+
+.jp-CodexMarkdown > :first-child {
+  margin-top: 0;
+}
+
+.jp-CodexMarkdown > :last-child {
+  margin-bottom: 0;
+}
+
+.jp-CodexMarkdown p {
+  margin: 0 0 10px;
+}
+
+.jp-CodexMarkdown ul,
+.jp-CodexMarkdown ol {
+  margin: 8px 0 8px 18px;
+  padding: 0;
+}
+
+.jp-CodexMarkdown li {
+  margin: 4px 0;
+}
+
+.jp-CodexMarkdown a {
+  color: var(--cdx-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.jp-CodexMarkdown code {
+  font-family: var(--cdx-mono);
+  font-size: 12px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--cdx-border) 70%, transparent);
+  background: color-mix(in srgb, var(--cdx-surface-2) 70%, transparent);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.jp-CodexMarkdown pre {
+  margin: 10px 0 0;
+  padding: 10px;
+  border-radius: var(--cdx-radius-sm);
+  border: 1px solid var(--cdx-border);
+  background: color-mix(in srgb, var(--cdx-surface-2) 88%, transparent);
+  overflow: auto;
+  font-family: var(--cdx-mono);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.jp-CodexMarkdown pre code {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  white-space: pre;
+}
+
+.jp-CodexMarkdown blockquote {
+  margin: 10px 0;
+  padding-left: 10px;
+  border-left: 3px solid var(--cdx-border);
+  color: var(--cdx-muted);
+}
+
+.jp-CodexMarkdown hr {
+  border: 0;
+  border-top: 1px solid var(--cdx-border);
+  margin: 12px 0;
 }
 
 .jp-CodexCodeBlockWrap {
@@ -480,163 +559,6 @@
   font-size: 12px;
   line-height: 1.5;
   color: var(--cdx-text);
-}
-
-.jp-CodexActivity {
-  margin-top: 12px;
-  border-radius: var(--cdx-radius);
-  border: 1px solid var(--cdx-border);
-  background: color-mix(in srgb, var(--cdx-surface-2) 75%, transparent);
-  overflow: hidden;
-}
-
-.jp-CodexActivityHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 10px 10px;
-  background: color-mix(in srgb, var(--cdx-surface) 70%, transparent);
-  border-bottom: 1px solid var(--cdx-border);
-}
-
-.jp-CodexActivityTitle {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.jp-CodexActivityToggle {
-  flex: 1;
-  min-width: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0;
-  border: 0;
-  border-radius: 10px;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-  text-align: left;
-}
-
-.jp-CodexActivityToggle:hover {
-  background: color-mix(in srgb, var(--cdx-surface) 55%, transparent);
-}
-
-.jp-CodexActivityToggle:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--cdx-accent) 22%, transparent);
-}
-
-.jp-CodexActivityCaret {
-  flex: 0 0 auto;
-  color: var(--cdx-muted);
-  transform: rotate(-90deg);
-  transition: transform 160ms ease;
-}
-
-.jp-CodexActivity.is-open .jp-CodexActivityCaret {
-  transform: rotate(0deg);
-}
-
-.jp-CodexActivityLabel {
-  font-family: var(--cdx-mono);
-  font-size: 12px;
-  color: var(--cdx-text);
-  white-space: nowrap;
-}
-
-.jp-CodexActivityPreview {
-  flex: 1;
-  min-width: 0;
-  font-family: var(--cdx-mono);
-  font-size: 12px;
-  color: var(--cdx-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.jp-CodexActivityActions {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-}
-
-.jp-CodexActivityPulse {
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  background: var(--cdx-accent);
-  box-shadow: 0 0 0 6px rgba(14, 165, 233, 0.15);
-  animation: cdx-pulse 1.2s ease-in-out infinite;
-}
-
-.jp-CodexActivityBody {
-  max-height: 220px;
-  overflow: auto;
-  font-family: var(--cdx-mono);
-  font-size: 12px;
-}
-
-.jp-CodexActivityEmpty {
-  padding: 10px;
-  color: var(--cdx-muted);
-}
-
-.jp-CodexActivityRow {
-  display: grid;
-  grid-template-columns: 72px 1fr;
-  gap: 8px;
-  padding: 9px 10px;
-  border-top: 1px solid var(--cdx-border);
-}
-
-.jp-CodexActivityTime {
-  color: var(--cdx-muted);
-}
-
-.jp-CodexActivitySummary {
-  color: var(--cdx-text);
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.jp-CodexActivityRaw {
-  margin: 6px 0 0;
-  padding: 10px;
-  border-radius: 10px;
-  border: 1px solid var(--cdx-border);
-  background: color-mix(in srgb, var(--cdx-surface) 65%, transparent);
-  overflow: auto;
-  white-space: pre;
-}
-
-.jp-CodexActivityDetails {
-  grid-column: 1 / -1;
-  margin-top: 6px;
-}
-
-.jp-CodexActivityDetailsSummary {
-  cursor: pointer;
-  user-select: none;
-  font-size: 11px;
-  color: var(--cdx-muted);
-  font-family: var(--cdx-mono);
-}
-
-.jp-CodexActivityDetailsSummary:hover {
-  color: var(--cdx-text);
-}
-
-.jp-CodexActivityRow-warn .jp-CodexActivitySummary {
-  color: color-mix(in srgb, var(--cdx-warn) 75%, var(--cdx-text));
-}
-
-.jp-CodexActivityRow-error .jp-CodexActivitySummary {
-  color: color-mix(in srgb, var(--cdx-bad) 75%, var(--cdx-text));
 }
 
 .jp-CodexChat-input {
