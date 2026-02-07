@@ -32,6 +32,60 @@ function ArrowUpIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
   );
 }
 
+function StopIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" {...props}>
+      <rect x="7" y="7" width="10" height="10" rx="2.2" stroke="currentColor" strokeWidth="2" />
+    </svg>
+  );
+}
+
+function GearIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" {...props}>
+      <path
+        d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z"
+        stroke="currentColor"
+        strokeWidth="2"
+      />
+      <path
+        d="M19.4 12a7.5 7.5 0 0 0-.1-1l2-1.6-1.9-3.2-2.4 1a8 8 0 0 0-1.8-1l-.4-2.5H9.2l-.4 2.5a8 8 0 0 0-1.8 1l-2.4-1-1.9 3.2 2 1.6a7.5 7.5 0 0 0 0 2l-2 1.6 1.9 3.2 2.4-1a8 8 0 0 0 1.8 1l.4 2.5h5.6l.4-2.5a8 8 0 0 0 1.8-1l2.4 1 1.9-3.2-2-1.6c.1-.3.1-.7.1-1Z"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function PaperclipIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" {...props}>
+      <path
+        d="M21 11.5 12.8 19.7a6 6 0 0 1-8.5-8.5L12.9 2.6a4.5 4.5 0 1 1 6.4 6.4L10.7 17.6a3 3 0 0 1-4.2-4.2l8.3-8.3"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function XIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" {...props}>
+      <path
+        d="M18 6 6 18M6 6l12 12"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 export class CodexPanel extends ReactWidget {
   private _notebooks: INotebookTracker;
   private _currentContext: DocumentRegistry.IContext<DocumentRegistry.IModel> | null = null;
@@ -1111,23 +1165,40 @@ function CodexChat(props: CodexChatProps): JSX.Element {
           </span>
           <div className="jp-CodexChat-header-actions">
             <button
+              type="button"
               onClick={startNewThread}
-              className="jp-CodexBtn jp-CodexBtn-ghost"
+              className="jp-CodexHeaderBtn"
               disabled={!currentNotebookPath || status === 'running'}
+              aria-label="New thread"
+              title="New thread"
             >
-              New
+              <PlusIcon width={16} height={16} />
+              <span className="jp-CodexHeaderBtn-label">New</span>
             </button>
             <button
+              type="button"
               onClick={cancelRun}
-              className="jp-CodexBtn jp-CodexBtn-danger"
+              className="jp-CodexHeaderBtn jp-CodexHeaderBtn-danger"
               disabled={status !== 'running' || !currentSession?.activeRunId}
               title={
                 currentSession?.activeRunId
                   ? `runId: ${currentSession.activeRunId}`
                   : 'Waiting for run id...'
               }
+              aria-label="Stop run"
             >
-              Stop
+              <StopIcon width={16} height={16} />
+              <span className="jp-CodexHeaderBtn-label">Stop</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setSettingsOpen(open => !open)}
+              className={`jp-CodexHeaderBtn jp-CodexHeaderBtn-icon${settingsOpen ? ' is-active' : ''}`}
+              aria-label="Settings"
+              aria-expanded={settingsOpen}
+              title="Settings"
+            >
+              <GearIcon width={16} height={16} />
             </button>
           </div>
         </div>
@@ -1137,50 +1208,50 @@ function CodexChat(props: CodexChatProps): JSX.Element {
           </div>
         )}
 
-        <details
-          className="jp-CodexChat-settings"
-          open={settingsOpen}
-          onToggle={e => setSettingsOpen((e.target as HTMLDetailsElement).open)}
-        >
-          <summary className="jp-CodexChat-settingsSummary">Settings</summary>
-          <div className="jp-CodexChat-controls">
-            <label className="jp-CodexChat-toggle">
-              <input
-                type="checkbox"
-                checked={attachCell}
-                onChange={e => setAttachCell(e.currentTarget.checked)}
-                disabled={status === 'running'}
-              />
-              Attach active cell
-            </label>
-            <label className="jp-CodexChat-toggle">
-              <input
-                type="checkbox"
-                checked={autoSaveBeforeSend}
-                onChange={e => setAutoSaveBeforeSend(e.currentTarget.checked)}
-                disabled={status === 'running'}
-              />
-              Auto-save before send
-            </label>
-            <label className="jp-CodexChat-toggle">
-              <input
-                type="checkbox"
-                checked={showThinking}
-                onChange={e => setShowThinking(e.currentTarget.checked)}
-              />
-              Show thinking
-            </label>
-            <label className="jp-CodexChat-toggle">
-              <input
-                type="checkbox"
-                checked={showRawEvents}
-                onChange={e => setShowRawEvents(e.currentTarget.checked)}
-                disabled={!showThinking}
-              />
-              Raw events
-            </label>
+        {settingsOpen && (
+          <div className="jp-CodexSettingsPanel">
+            <div className="jp-CodexSettingsPanel-top">
+              <div className="jp-CodexSettingsPanel-title">Settings</div>
+              <button
+                type="button"
+                className="jp-CodexHeaderBtn jp-CodexHeaderBtn-icon"
+                onClick={() => setSettingsOpen(false)}
+                aria-label="Close settings"
+                title="Close"
+              >
+                <XIcon width={16} height={16} />
+              </button>
+            </div>
+            <div className="jp-CodexChat-controls">
+              <label className="jp-CodexChat-toggle">
+                <input
+                  type="checkbox"
+                  checked={autoSaveBeforeSend}
+                  onChange={e => setAutoSaveBeforeSend(e.currentTarget.checked)}
+                  disabled={status === 'running'}
+                />
+                Auto-save before send
+              </label>
+              <label className="jp-CodexChat-toggle">
+                <input
+                  type="checkbox"
+                  checked={showThinking}
+                  onChange={e => setShowThinking(e.currentTarget.checked)}
+                />
+                Show thinking
+              </label>
+              <label className="jp-CodexChat-toggle">
+                <input
+                  type="checkbox"
+                  checked={showRawEvents}
+                  onChange={e => setShowRawEvents(e.currentTarget.checked)}
+                  disabled={!showThinking}
+                />
+                Raw events
+              </label>
+            </div>
           </div>
-        </details>
+        )}
       </div>
 
       <div className="jp-CodexChat-body">
@@ -1268,7 +1339,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                 aria-pressed={attachCell}
                 title={attachCell ? 'Attach active cell: on' : 'Attach active cell: off'}
               >
-                <PlusIcon width={18} height={18} />
+                <PaperclipIcon width={18} height={18} />
               </button>
 
               <div className="jp-CodexComposerSelectWrap">
