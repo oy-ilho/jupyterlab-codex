@@ -5,6 +5,33 @@ import { ServerConnection } from '@jupyterlab/services';
 import { URLExt } from '@jupyterlab/coreutils';
 import type { DocumentRegistry } from '@jupyterlab/docregistry';
 
+function PlusIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" {...props}>
+      <path
+        d="M12 5v14M5 12h14"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function ArrowUpIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" {...props}>
+      <path
+        d="M12 19V5m0 0l-7 7m7-7l7 7"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 export class CodexPanel extends ReactWidget {
   private _notebooks: INotebookTracker;
   private _currentContext: DocumentRegistry.IContext<DocumentRegistry.IModel> | null = null;
@@ -1117,48 +1144,12 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         >
           <summary className="jp-CodexChat-settingsSummary">Settings</summary>
           <div className="jp-CodexChat-controls">
-            <label className="jp-CodexChat-model">
-              <span>Model</span>
-              <select
-                value={modelOption}
-                onChange={e => setModelOption(e.currentTarget.value as ModelOptionValue)}
-                disabled={status === 'running'}
-              >
-                {MODEL_OPTIONS.map(option => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="jp-CodexChat-model">
-              <span>Reasoning</span>
-              <select
-                value={reasoningEffort}
-                onChange={e => setReasoningEffort(e.currentTarget.value as ReasoningOptionValue)}
-                disabled={status === 'running'}
-              >
-                {REASONING_OPTIONS.map(option => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {modelOption === '__custom__' && (
-              <input
-                className="jp-CodexChat-model-input"
-                value={customModel}
-                onChange={e => setCustomModel(e.currentTarget.value)}
-                placeholder={DEFAULT_MODEL || 'gpt-5.3-codex'}
-                disabled={status === 'running'}
-              />
-            )}
             <label className="jp-CodexChat-toggle">
               <input
                 type="checkbox"
                 checked={attachCell}
                 onChange={e => setAttachCell(e.currentTarget.checked)}
+                disabled={status === 'running'}
               />
               Attach active cell
             </label>
@@ -1247,37 +1238,103 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       </div>
 
       <div className="jp-CodexChat-input">
-        <textarea
-          value={input}
-          onChange={e => setInput(e.currentTarget.value)}
-          placeholder={currentNotebookPath ? 'Ask Codex...' : 'Select a notebook first'}
-          rows={3}
-          disabled={!canSend}
-          onKeyDown={e => {
-            // Avoid interfering with IME composition (Korean/Japanese/etc.)
-            const native = e.nativeEvent as unknown as { isComposing?: boolean; keyCode?: number };
-            if (native.isComposing || native.keyCode === 229) {
-              return;
-            }
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault();
-              void sendMessage();
-            }
-          }}
-        />
-        <div className="jp-CodexChat-inputActions">
-          <button
-            className="jp-CodexBtn jp-CodexBtn-primary"
-            onClick={() => void sendMessage()}
-            disabled={!canSend || !input.trim()}
-          >
-            {status === 'running'
-              ? 'Sending...'
-              : status === 'disconnected'
-                ? 'Connecting...'
-                : 'Send'}
-          </button>
-          <div className="jp-CodexChat-hint">Enter to send, Shift+Enter for newline</div>
+        <div className="jp-CodexComposer">
+          <textarea
+            value={input}
+            onChange={e => setInput(e.currentTarget.value)}
+            placeholder={currentNotebookPath ? 'Ask Codex...' : 'Select a notebook first'}
+            rows={3}
+            disabled={!canSend}
+            onKeyDown={e => {
+              // Avoid interfering with IME composition (Korean/Japanese/etc.)
+              const native = e.nativeEvent as unknown as { isComposing?: boolean; keyCode?: number };
+              if (native.isComposing || native.keyCode === 229) {
+                return;
+              }
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                void sendMessage();
+              }
+            }}
+          />
+          <div className="jp-CodexComposer-toolbar">
+            <div className="jp-CodexComposer-toolbarLeft">
+              <button
+                type="button"
+                className={`jp-CodexIconBtn ${attachCell ? 'is-active' : ''}`}
+                onClick={() => setAttachCell(v => !v)}
+                disabled={status === 'running'}
+                aria-label="Attach active cell"
+                aria-pressed={attachCell}
+                title={attachCell ? 'Attach active cell: on' : 'Attach active cell: off'}
+              >
+                <PlusIcon width={18} height={18} />
+              </button>
+
+              <div className="jp-CodexComposerSelectWrap">
+                <select
+                  className="jp-CodexComposerSelect"
+                  value={modelOption}
+                  onChange={e => setModelOption(e.currentTarget.value as ModelOptionValue)}
+                  disabled={status === 'running'}
+                  aria-label="Model"
+                >
+                  {MODEL_OPTIONS.map(option => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {modelOption === '__custom__' && (
+                <input
+                  className="jp-CodexComposerModelInput"
+                  value={customModel}
+                  onChange={e => setCustomModel(e.currentTarget.value)}
+                  placeholder={DEFAULT_MODEL || 'gpt-5.3-codex'}
+                  disabled={status === 'running'}
+                  aria-label="Custom model"
+                />
+              )}
+
+              <div className="jp-CodexComposerSelectWrap">
+                <select
+                  className="jp-CodexComposerSelect"
+                  value={reasoningEffort}
+                  onChange={e => setReasoningEffort(e.currentTarget.value as ReasoningOptionValue)}
+                  disabled={status === 'running'}
+                  aria-label="Reasoning"
+                >
+                  {REASONING_OPTIONS.map(option => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="jp-CodexComposer-toolbarRight">
+              <div className="jp-CodexComposer-hint">Enter to send, Shift+Enter for newline</div>
+              <button
+                type="button"
+                className="jp-CodexSendBtn"
+                onClick={() => void sendMessage()}
+                disabled={!canSend || !input.trim()}
+                aria-label="Send"
+                title={
+                  status === 'running'
+                    ? 'Sending...'
+                    : status === 'disconnected'
+                      ? 'Connecting...'
+                      : 'Send'
+                }
+              >
+                <ArrowUpIcon width={18} height={18} />
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
