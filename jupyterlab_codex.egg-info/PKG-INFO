@@ -24,6 +24,10 @@ Codex CLI(`codex exec --json`)와 연동되는 채팅형 사이드바 UI를 제�
 - 파일 변경 감지 시 사용자 확인 후 reload
 
 ## 설치 방법
+### 빠른 실행(권장)
+- `bash scripts/run_jupyterlab_codex.sh`
+
+### 수동 설치
 1) 프론트엔드 빌드
 - `jlpm install`
 - `jlpm build`  
@@ -32,6 +36,8 @@ Codex CLI(`codex exec --json`)와 연동되는 채팅형 사이드바 UI를 제�
 2) 파이썬 패키지 / 서버 확장 설치
 - `python -m pip install -e .`
 - 서버 확장 활성화(최초 1회):
+  - (Jupyter Server가 확장을 “발견”할 수 있도록) config 스니펫 설치:
+    - `cp jupyter-config/jupyter_server_config.d/jupyterlab_codex.json "$(python -c 'import sys; print(sys.prefix)')/etc/jupyter/jupyter_server_config.d/jupyterlab_codex.json"`
   - `jupyter server extension enable jupyterlab_codex --sys-prefix`
 
 3) JupyterLab 실행

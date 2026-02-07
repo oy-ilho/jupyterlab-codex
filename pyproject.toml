@@ -27,3 +27,6 @@ include-package-data = true
 
 [tool.setuptools.package-data]
 "jupyterlab_codex" = ["labextension/**"]
+
+[tool.setuptools.data-files]
+"etc/jupyter/jupyter_server_config.d" = ["jupyter-config/jupyter_server_config.d/jupyterlab_codex.json"]

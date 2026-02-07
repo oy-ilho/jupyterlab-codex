@@ -1,5 +1,6 @@
 README.md
 pyproject.toml
+jupyter-config/jupyter_server_config.d/jupyterlab_codex.json
 jupyterlab_codex/__init__.py
 jupyterlab_codex/handlers.py
 jupyterlab_codex/runner.py
@@ -11,8 +12,8 @@ jupyterlab_codex.egg-info/dependency_links.txt
 jupyterlab_codex.egg-info/entry_points.txt
 jupyterlab_codex.egg-info/top_level.txt
 jupyterlab_codex/labextension/package.json
-jupyterlab_codex/labextension/static/972.5e908dd1058c302f8e23.js
-jupyterlab_codex/labextension/static/972.5e908dd1058c302f8e23.js.LICENSE.txt
-jupyterlab_codex/labextension/static/remoteEntry.5da94322e6218611ae68.js
+jupyterlab_codex/labextension/static/972.298c05b949a40079fa25.js
+jupyterlab_codex/labextension/static/972.298c05b949a40079fa25.js.LICENSE.txt
+jupyterlab_codex/labextension/static/remoteEntry.4413b2d4a927c2527edc.js
 jupyterlab_codex/labextension/static/style.js
 jupyterlab_codex/labextension/static/third-party-licenses.json

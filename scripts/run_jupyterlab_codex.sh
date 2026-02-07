@@ -14,9 +14,17 @@ echo "[3/6] Installing Python package (editable)"
 python -m pip install -e "$ROOT_DIR"
 
 echo "[4/6] Enabling server extension"
-jupyter server extension enable jupyterlab_codex --sys-prefix
-
 PREFIX="${CONDA_PREFIX:-$(python -c 'import sys; print(sys.prefix)')}"
+
+# `jupyter server extension enable <name>` only toggles extensions that are already present in
+# `jpserver_extensions`. Install a config snippet so the extension is discoverable, then enable it.
+JUPYTER_CFG_DIR="$PREFIX/etc/jupyter/jupyter_server_config.d"
+mkdir -p "$JUPYTER_CFG_DIR"
+cp -f "$ROOT_DIR/jupyter-config/jupyter_server_config.d/jupyterlab_codex.json" "$JUPYTER_CFG_DIR/jupyterlab_codex.json"
+
+jupyter server extension enable jupyterlab_codex --sys-prefix || true
+jupyter server extension list | sed -n '1,120p' || true
+
 LABEXT_DIR="$PREFIX/share/jupyter/labextensions"
 mkdir -p "$LABEXT_DIR"
 

@@ -7,9 +7,11 @@
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
   "scripts": {
-    "build": "jlpm run build:labextension",
+    "build": "jlpm run build:lib && jlpm run build:labextension",
+    "build:lib": "tsc -p tsconfig.json",
     "build:labextension": "jupyter labextension build .",
-    "watch": "jlpm run watch:labextension",
+    "watch": "jlpm run watch:lib & jlpm run watch:labextension",
+    "watch:lib": "tsc -w -p tsconfig.json",
     "watch:labextension": "jupyter labextension watch . --development --source-map",
     "clean": "rimraf lib tsconfig.tsbuildinfo"
   },
