@@ -82,7 +82,7 @@
   }
 }
 
-@container (max-width: 340px) {
+@container (max-width: 380px) {
   .jp-CodexChat-header {
     padding: 8px 8px 8px;
   }
@@ -700,6 +700,134 @@
   color: color-mix(in srgb, var(--cdx-accent) 78%, var(--cdx-text));
 }
 
+.jp-CodexIconBtn.is-open {
+  background: var(--cdx-surface);
+  border-color: color-mix(in srgb, var(--cdx-accent) 35%, var(--cdx-border));
+  color: var(--cdx-text);
+}
+
+.jp-CodexMenuWrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  overflow: visible;
+}
+
+.jp-CodexMenuWrap-right {
+  justify-content: flex-end;
+}
+
+.jp-CodexMenu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 10px);
+  z-index: 20;
+  min-width: 240px;
+  max-width: min(320px, calc(100vw - 24px));
+  transform-origin: bottom left;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--cdx-border) 85%, transparent);
+  background: color-mix(in srgb, var(--cdx-surface) 92%, transparent);
+  box-shadow: 0 14px 36px rgba(2, 6, 23, 0.16);
+  padding: 6px;
+  backdrop-filter: blur(10px);
+  animation: cdx-menu-in 120ms ease-out both;
+}
+
+@supports (width: 1cqw) {
+  .jp-CodexMenu {
+    max-width: min(320px, calc(100cqw - 24px));
+  }
+}
+
+.jp-CodexMenu--right {
+  left: auto;
+  right: 0;
+  transform-origin: bottom right;
+}
+
+.jp-CodexMenuItem {
+  appearance: none;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--cdx-text);
+  cursor: pointer;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 650;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.jp-CodexMenuItem:hover {
+  background: var(--cdx-surface-2);
+  border-color: color-mix(in srgb, var(--cdx-border) 85%, transparent);
+}
+
+.jp-CodexMenuItem:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--cdx-accent) 45%, var(--cdx-border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--cdx-accent) 18%, transparent);
+}
+
+.jp-CodexMenuItem.is-active {
+  background: color-mix(in srgb, var(--cdx-accent) 10%, var(--cdx-surface));
+  border-color: color-mix(in srgb, var(--cdx-accent) 28%, var(--cdx-border));
+}
+
+.jp-CodexMenuItemLabel {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jp-CodexMenuCheck {
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--cdx-accent) 80%, var(--cdx-text));
+}
+
+.jp-CodexMenuDivider {
+  height: 1px;
+  margin: 6px;
+  background: color-mix(in srgb, var(--cdx-border) 85%, transparent);
+}
+
+.jp-CodexMenuCustom {
+  padding: 6px;
+  display: grid;
+  gap: 6px;
+}
+
+.jp-CodexMenuCustomLabel {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--cdx-muted);
+}
+
+.jp-CodexMenuInput {
+  width: 100%;
+  border: 1px solid var(--cdx-border);
+  border-radius: 12px;
+  background: var(--cdx-surface);
+  color: var(--cdx-text);
+  font-size: 12px;
+  padding: 9px 10px;
+  outline: none;
+}
+
+.jp-CodexMenuInput:focus {
+  border-color: color-mix(in srgb, var(--cdx-accent) 65%, var(--cdx-border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--cdx-accent) 18%, transparent);
+}
+
 .jp-CodexComposerSelectWrap {
   position: relative;
   display: inline-flex;
@@ -939,5 +1067,16 @@
   50% {
     transform: scale(1.08);
     opacity: 0.8;
+  }
+}
+
+@keyframes cdx-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
   }
 }

@@ -72,6 +72,100 @@ function PaperclipIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
   );
 }
 
+function ChipIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" {...props}>
+      <path
+        d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+      <rect
+        x="7"
+        y="7"
+        width="10"
+        height="10"
+        rx="2.5"
+        stroke="currentColor"
+        strokeWidth="2"
+      />
+    </svg>
+  );
+}
+
+function GaugeIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" {...props}>
+      <path
+        d="M5 16a7 7 0 1 1 14 0"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+      <path
+        d="M12 13l3.5-3.5"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+      <path
+        d="M5 16h14"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function ReasoningEffortIcon(
+  props: React.SVGProps<SVGSVGElement> & { effort: ReasoningOptionValue }
+): JSX.Element {
+  const { effort, ...svgProps } = props;
+  if (effort === '__config__') {
+    return <GaugeIcon {...svgProps} />;
+  }
+  const activeBars =
+    effort === 'low' ? 1 : effort === 'medium' ? 2 : effort === 'high' ? 3 : effort === 'xhigh' ? 4 : 0;
+
+  const bars = [
+    { x: 6, top: 14 },
+    { x: 10, top: 10 },
+    { x: 14, top: 6 },
+    { x: 18, top: 2 }
+  ];
+
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" {...svgProps}>
+      {bars.map((bar, idx) => (
+        <path
+          key={idx}
+          d={`M${bar.x} 20V${bar.top}`}
+          stroke="currentColor"
+          strokeWidth="2.6"
+          strokeLinecap="round"
+          opacity={idx < activeBars ? 1 : 0.25}
+        />
+      ))}
+    </svg>
+  );
+}
+
+function CheckIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" {...props}>
+      <path
+        d="M20 6 9 17l-5-5"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function XIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
   return (
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" {...props}>
@@ -629,7 +723,11 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const currentNotebookPathRef = useRef<string>('');
   const [modelOption, setModelOption] = useState<ModelOptionValue>(() => {
     const savedModel = readStoredModel();
-    return isKnownModelOption(savedModel) ? savedModel : '__config__';
+    if (isKnownModelOption(savedModel)) {
+      return savedModel;
+    }
+    // If we previously stored a custom model name, keep the UI in "Custom" mode.
+    return savedModel ? '__custom__' : '__config__';
   });
   const [customModel, setCustomModel] = useState<string>(() => {
     const savedModel = readStoredModel();
@@ -649,12 +747,22 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const [socketConnected, setSocketConnected] = useState(false);
   const [attachCell, setAttachCell] = useState(true);
   const [isAtBottom, setIsAtBottom] = useState(true);
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const [reasoningMenuOpen, setReasoningMenuOpen] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const runToPathRef = useRef<Map<string, string>>(new Map());
   const pendingRefreshPathsRef = useRef<Set<string>>(new Set());
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
-  const selectedModel = modelOption === '__custom__' ? customModel.trim() : modelOption;
+  const modelMenuWrapRef = useRef<HTMLDivElement | null>(null);
+  const reasoningMenuWrapRef = useRef<HTMLDivElement | null>(null);
+  const customModelInputRef = useRef<HTMLInputElement | null>(null);
+  const selectedModel =
+    modelOption === '__custom__'
+      ? customModel.trim()
+      : modelOption === '__config__'
+        ? ''
+        : modelOption;
   const selectedReasoningEffort = reasoningEffort === '__config__' ? '' : reasoningEffort;
 
   useEffect(() => {
@@ -684,6 +792,55 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   useEffect(() => {
     persistSettingsOpen(settingsOpen);
   }, [settingsOpen]);
+
+  useEffect(() => {
+    if (!modelMenuOpen) {
+      return;
+    }
+    if (modelOption !== '__custom__') {
+      return;
+    }
+    const id = window.setTimeout(() => customModelInputRef.current?.focus(), 0);
+    return () => window.clearTimeout(id);
+  }, [modelMenuOpen, modelOption]);
+
+  useEffect(() => {
+    if (!modelMenuOpen && !reasoningMenuOpen) {
+      return;
+    }
+
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (!target) {
+        return;
+      }
+
+      const inModel = modelMenuWrapRef.current?.contains(target) ?? false;
+      const inReasoning = reasoningMenuWrapRef.current?.contains(target) ?? false;
+      if (inModel || inReasoning) {
+        return;
+      }
+
+      setModelMenuOpen(false);
+      setReasoningMenuOpen(false);
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') {
+        return;
+      }
+      event.preventDefault();
+      setModelMenuOpen(false);
+      setReasoningMenuOpen(false);
+    };
+
+    window.addEventListener('pointerdown', onPointerDown, true);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown, true);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [modelMenuOpen, reasoningMenuOpen]);
 
   function replaceSessions(next: Map<string, NotebookSession>): void {
     sessionsRef.current = next;
@@ -1154,6 +1311,14 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     status === 'running'
       ? (activity.length ? activity[activity.length - 1].summary : '') || 'Working...'
       : '';
+  const selectedModelLabel =
+    modelOption === '__custom__'
+      ? customModel.trim()
+        ? `Custom (${customModel.trim()})`
+        : 'Custom'
+      : MODEL_OPTIONS.find(option => option.value === modelOption)?.label ?? 'Model';
+  const selectedReasoningLabel =
+    REASONING_OPTIONS.find(option => option.value === reasoningEffort)?.label ?? 'Reasoning';
 
   return (
     <div className="jp-CodexChat">
@@ -1342,47 +1507,108 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                 <PaperclipIcon width={18} height={18} />
               </button>
 
-              <div className="jp-CodexComposerSelectWrap">
-                <select
-                  className="jp-CodexComposerSelect"
-                  value={modelOption}
-                  onChange={e => setModelOption(e.currentTarget.value as ModelOptionValue)}
+              <div className="jp-CodexMenuWrap" ref={modelMenuWrapRef}>
+                <button
+                  type="button"
+                  className={`jp-CodexIconBtn ${modelMenuOpen ? 'is-open' : ''}`}
+                  onClick={() => {
+                    setModelMenuOpen(open => !open);
+                    setReasoningMenuOpen(false);
+                  }}
                   disabled={status === 'running'}
-                  aria-label="Model"
+                  aria-label={`Model: ${selectedModelLabel}`}
+                  aria-haspopup="menu"
+                  aria-expanded={modelMenuOpen}
+                  title={`Model: ${selectedModelLabel}`}
                 >
-                  {MODEL_OPTIONS.map(option => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
+                  <ChipIcon width={18} height={18} />
+                </button>
+
+                {modelMenuOpen && (
+                  <div className="jp-CodexMenu" role="menu" aria-label="Model">
+                    {MODEL_OPTIONS.map(option => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        className={`jp-CodexMenuItem ${modelOption === option.value ? 'is-active' : ''}`}
+                        onClick={() => {
+                          setModelOption(option.value);
+                          if (option.value !== '__custom__') {
+                            setModelMenuOpen(false);
+                          }
+                        }}
+                      >
+                        <span className="jp-CodexMenuItemLabel">{option.label}</span>
+                        {modelOption === option.value && (
+                          <CheckIcon className="jp-CodexMenuCheck" width={16} height={16} />
+                        )}
+                      </button>
+                    ))}
+
+                    {modelOption === '__custom__' && (
+                      <>
+                        <div className="jp-CodexMenuDivider" role="separator" />
+                        <div className="jp-CodexMenuCustom">
+                          <div className="jp-CodexMenuCustomLabel">Custom model</div>
+                          <input
+                            ref={customModelInputRef}
+                            className="jp-CodexMenuInput"
+                            value={customModel}
+                            onChange={e => setCustomModel(e.currentTarget.value)}
+                            placeholder={DEFAULT_MODEL || 'gpt-5.3-codex'}
+                            disabled={status === 'running'}
+                            aria-label="Custom model"
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                setModelMenuOpen(false);
+                              }
+                            }}
+                          />
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
 
-              {modelOption === '__custom__' && (
-                <input
-                  className="jp-CodexComposerModelInput"
-                  value={customModel}
-                  onChange={e => setCustomModel(e.currentTarget.value)}
-                  placeholder={DEFAULT_MODEL || 'gpt-5.3-codex'}
+              <div className="jp-CodexMenuWrap" ref={reasoningMenuWrapRef}>
+                <button
+                  type="button"
+                  className={`jp-CodexIconBtn ${reasoningMenuOpen ? 'is-open' : ''}`}
+                  onClick={() => {
+                    setReasoningMenuOpen(open => !open);
+                    setModelMenuOpen(false);
+                  }}
                   disabled={status === 'running'}
-                  aria-label="Custom model"
-                />
-              )}
-
-              <div className="jp-CodexComposerSelectWrap">
-                <select
-                  className="jp-CodexComposerSelect"
-                  value={reasoningEffort}
-                  onChange={e => setReasoningEffort(e.currentTarget.value as ReasoningOptionValue)}
-                  disabled={status === 'running'}
-                  aria-label="Reasoning"
+                  aria-label={`Reasoning: ${selectedReasoningLabel}`}
+                  aria-haspopup="menu"
+                  aria-expanded={reasoningMenuOpen}
+                  title={`Reasoning: ${selectedReasoningLabel}`}
                 >
-                  {REASONING_OPTIONS.map(option => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
+                  <ReasoningEffortIcon effort={reasoningEffort} width={18} height={18} />
+                </button>
+
+                {reasoningMenuOpen && (
+                  <div className="jp-CodexMenu" role="menu" aria-label="Reasoning">
+                    {REASONING_OPTIONS.map(option => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        className={`jp-CodexMenuItem ${reasoningEffort === option.value ? 'is-active' : ''}`}
+                        onClick={() => {
+                          setReasoningEffort(option.value as ReasoningOptionValue);
+                          setReasoningMenuOpen(false);
+                        }}
+                      >
+                        <span className="jp-CodexMenuItemLabel">{option.label}</span>
+                        {reasoningEffort === option.value && (
+                          <CheckIcon className="jp-CodexMenuCheck" width={16} height={16} />
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
 

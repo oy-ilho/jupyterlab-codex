@@ -12,8 +12,8 @@ jupyterlab_codex.egg-info/dependency_links.txt
 jupyterlab_codex.egg-info/entry_points.txt
 jupyterlab_codex.egg-info/top_level.txt
 jupyterlab_codex/labextension/package.json
-jupyterlab_codex/labextension/static/972.5ab83d3973c339fbf5df.js
-jupyterlab_codex/labextension/static/972.5ab83d3973c339fbf5df.js.LICENSE.txt
-jupyterlab_codex/labextension/static/remoteEntry.b026c1e8a07e1fc56a28.js
+jupyterlab_codex/labextension/static/972.4890edc10e77c2d281cb.js
+jupyterlab_codex/labextension/static/972.4890edc10e77c2d281cb.js.LICENSE.txt
+jupyterlab_codex/labextension/static/remoteEntry.8e3ca9cd5ac79a62f5f9.js
 jupyterlab_codex/labextension/static/style.js
 jupyterlab_codex/labextension/static/third-party-licenses.json
