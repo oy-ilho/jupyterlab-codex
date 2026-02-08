@@ -5,3 +5,44 @@ labextension/
 *.tsbuildinfo
 .DS_Store
 jupyterlab_codex/labextension/
+
+# ---- Python / packaging ----
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+
+# Virtual envs
+.venv/
+venv/
+ENV/
+
+# ---- Jupyter ----
+.ipynb_checkpoints/
+
+# Scratch / test artifacts (keep real tests under a tests/ folder)
+Untitled*.ipynb
+Untitled*.py
+
+# Root-level scratch notebooks/scripts (common during experiments)
+/*.ipynb
+/*.py
+
+# ---- Editor / OS ----
+.idea/
+.vscode/
+*.swp
+*~
+
+# ---- Env ----
+.env
+.env.*
+.direnv/

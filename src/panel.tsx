@@ -185,6 +185,19 @@ function BatteryIcon(
   );
 }
 
+function ShieldIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" {...props}>
+      <path
+        d="M12 2.8 19 5.9v6.2c0 5-3 9.2-7 9.9-4-.7-7-4.9-7-9.9V5.9l7-3.1Z"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function PortalMenu(props: {
   open: boolean;
   anchorRef: React.RefObject<HTMLElement>;
@@ -423,15 +436,25 @@ const REASONING_OPTIONS = [
   { label: 'Extra high', value: 'xhigh' }
 ] as const;
 type ReasoningOptionValue = (typeof REASONING_OPTIONS)[number]['value'];
+const SANDBOX_OPTIONS = [
+  { label: 'Default permission', value: 'workspace-write' },
+  { label: 'Full access', value: 'danger-full-access' }
+] as const;
+type SandboxMode = (typeof SANDBOX_OPTIONS)[number]['value'];
 const AUTO_SAVE_STORAGE_KEY = 'jupyterlab-codex:auto-save-before-send';
 const MODEL_STORAGE_KEY = 'jupyterlab-codex:model';
 const CUSTOM_MODEL_STORAGE_KEY = 'jupyterlab-codex:custom-model';
 const REASONING_STORAGE_KEY = 'jupyterlab-codex:reasoning-effort';
+const SANDBOX_MODE_STORAGE_KEY = 'jupyterlab-codex:sandbox-mode';
 const SETTINGS_OPEN_STORAGE_KEY = 'jupyterlab-codex:settings-open';
 const INCLUDE_ACTIVE_CELL_STORAGE_KEY = 'jupyterlab-codex:include-active-cell';
 
 function isKnownModelOption(value: string): value is ModelOptionValue {
   return MODEL_OPTIONS.some(option => option.value === value);
+}
+
+function isKnownSandboxMode(value: string): value is SandboxMode {
+  return SANDBOX_OPTIONS.some(option => option.value === value);
 }
 
 function createSession(path: string, intro: string): NotebookSession {
@@ -493,6 +516,11 @@ function readStoredReasoningEffort(): ReasoningOptionValue {
   }
 }
 
+function readStoredSandboxMode(): SandboxMode {
+  const stored = safeLocalStorageGet(SANDBOX_MODE_STORAGE_KEY) ?? '';
+  return isKnownSandboxMode(stored) ? stored : SANDBOX_OPTIONS[0].value;
+}
+
 function persistModel(model: string, customModel: string): void {
   safeLocalStorageSet(MODEL_STORAGE_KEY, model);
   safeLocalStorageSet(CUSTOM_MODEL_STORAGE_KEY, customModel);
@@ -508,6 +536,10 @@ function persistIncludeActiveCell(enabled: boolean): void {
 
 function persistReasoningEffort(value: ReasoningOptionValue): void {
   safeLocalStorageSet(REASONING_STORAGE_KEY, value);
+}
+
+function persistSandboxMode(value: SandboxMode): void {
+  safeLocalStorageSet(SANDBOX_MODE_STORAGE_KEY, value);
 }
 
 function readStoredSettingsOpen(): boolean {
@@ -901,6 +933,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningOptionValue>(() =>
     readStoredReasoningEffort()
   );
+  const [sandboxMode, setSandboxMode] = useState<SandboxMode>(() => readStoredSandboxMode());
   const [autoSaveBeforeSend, setAutoSaveBeforeSend] = useState<boolean>(() => readStoredAutoSave());
   const [includeActiveCell, setIncludeActiveCell] = useState<boolean>(() => readStoredIncludeActiveCell());
   const [settingsOpen, setSettingsOpen] = useState<boolean>(() => readStoredSettingsOpen());
@@ -910,6 +943,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [reasoningMenuOpen, setReasoningMenuOpen] = useState(false);
   const [usagePopoverOpen, setUsagePopoverOpen] = useState(false);
+  const [permissionMenuOpen, setPermissionMenuOpen] = useState(false);
   const [rateLimits, setRateLimits] = useState<CodexRateLimitsSnapshot | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const runToPathRef = useRef<Map<string, string>>(new Map());
@@ -921,12 +955,15 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const modelMenuWrapRef = useRef<HTMLDivElement | null>(null);
   const reasoningMenuWrapRef = useRef<HTMLDivElement | null>(null);
   const usageMenuWrapRef = useRef<HTMLDivElement | null>(null);
+  const permissionMenuWrapRef = useRef<HTMLDivElement | null>(null);
   const modelBtnRef = useRef<HTMLButtonElement>(null);
   const modelPopoverRef = useRef<HTMLDivElement>(null);
   const reasoningBtnRef = useRef<HTMLButtonElement>(null);
   const reasoningPopoverRef = useRef<HTMLDivElement>(null);
   const usageBtnRef = useRef<HTMLButtonElement>(null);
   const usagePopoverRef = useRef<HTMLDivElement>(null);
+  const permissionBtnRef = useRef<HTMLButtonElement>(null);
+  const permissionPopoverRef = useRef<HTMLDivElement>(null);
   const customModelInputRef = useRef<HTMLInputElement | null>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const selectedModel =
@@ -958,6 +995,10 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   }, [reasoningEffort]);
 
   useEffect(() => {
+    persistSandboxMode(sandboxMode);
+  }, [sandboxMode]);
+
+  useEffect(() => {
     persistSettingsOpen(settingsOpen);
   }, [settingsOpen]);
 
@@ -973,7 +1014,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   }, [modelMenuOpen, modelOption]);
 
   useEffect(() => {
-    if (!modelMenuOpen && !reasoningMenuOpen && !usagePopoverOpen) {
+    if (!modelMenuOpen && !reasoningMenuOpen && !usagePopoverOpen && !permissionMenuOpen) {
       return;
     }
 
@@ -986,16 +1027,28 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       const inModel = modelMenuWrapRef.current?.contains(target) ?? false;
       const inReasoning = reasoningMenuWrapRef.current?.contains(target) ?? false;
       const inUsage = usageMenuWrapRef.current?.contains(target) ?? false;
+      const inPermission = permissionMenuWrapRef.current?.contains(target) ?? false;
       const inModelPopover = modelPopoverRef.current?.contains(target) ?? false;
       const inReasoningPopover = reasoningPopoverRef.current?.contains(target) ?? false;
       const inUsagePopover = usagePopoverRef.current?.contains(target) ?? false;
-      if (inModel || inReasoning || inUsage || inModelPopover || inReasoningPopover || inUsagePopover) {
+      const inPermissionPopover = permissionPopoverRef.current?.contains(target) ?? false;
+      if (
+        inModel ||
+        inReasoning ||
+        inUsage ||
+        inPermission ||
+        inModelPopover ||
+        inReasoningPopover ||
+        inUsagePopover ||
+        inPermissionPopover
+      ) {
         return;
       }
 
       setModelMenuOpen(false);
       setReasoningMenuOpen(false);
       setUsagePopoverOpen(false);
+      setPermissionMenuOpen(false);
     };
 
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1006,6 +1059,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       setModelMenuOpen(false);
       setReasoningMenuOpen(false);
       setUsagePopoverOpen(false);
+      setPermissionMenuOpen(false);
     };
 
     window.addEventListener('pointerdown', onPointerDown, true);
@@ -1014,7 +1068,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       window.removeEventListener('pointerdown', onPointerDown, true);
       window.removeEventListener('keydown', onKeyDown);
     };
-  }, [modelMenuOpen, reasoningMenuOpen, usagePopoverOpen]);
+  }, [modelMenuOpen, reasoningMenuOpen, usagePopoverOpen, permissionMenuOpen]);
 
   function replaceSessions(next: Map<string, NotebookSession>): void {
     sessionsRef.current = next;
@@ -1078,6 +1132,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     setUsagePopoverOpen(true);
     setModelMenuOpen(false);
     setReasoningMenuOpen(false);
+    setPermissionMenuOpen(false);
     requestRateLimitsRefresh();
   }
 
@@ -1086,6 +1141,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     setUsagePopoverOpen(open => !open);
     setModelMenuOpen(false);
     setReasoningMenuOpen(false);
+    setPermissionMenuOpen(false);
     requestRateLimitsRefresh();
   }
 
@@ -1538,7 +1594,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         selection,
         notebookPath,
         model: selectedModel || undefined,
-        reasoningEffort: selectedReasoningEffort || undefined
+        reasoningEffort: selectedReasoningEffort || undefined,
+        sandbox: sandboxMode
       })
     );
 
@@ -1566,6 +1623,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       : MODEL_OPTIONS.find(option => option.value === modelOption)?.label ?? 'Model';
   const selectedReasoningLabel =
     REASONING_OPTIONS.find(option => option.value === reasoningEffort)?.label ?? 'Reasoning';
+  const selectedSandboxLabel = SANDBOX_OPTIONS.find(option => option.value === sandboxMode)?.label ?? 'Permission';
   const canStop = status === 'running' && Boolean(currentSession?.activeRunId);
   const nowMs = Date.now();
   const rateUpdatedAtMs = safeParseDateMs(rateLimits?.updatedAt ?? null);
@@ -1620,11 +1678,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
             </button>
           </div>
         </div>
-        {status === 'running' && progress && (
-          <div className="jp-CodexChat-subtitle" title={progress}>
-            {progress}
-          </div>
-        )}
 
         {settingsOpen && (
           <div className="jp-CodexSettingsPanel">
@@ -1694,7 +1747,9 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 
           <div ref={endRef} />
         </div>
+      </div>
 
+      <div className="jp-CodexChat-input">
         {!isAtBottom && (
           <div className="jp-CodexJumpBar">
             <button className="jp-CodexBtn jp-CodexBtn-primary jp-CodexBtn-xs" onClick={scrollToBottom}>
@@ -1702,9 +1757,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
             </button>
           </div>
         )}
-      </div>
-
-      <div className="jp-CodexChat-input">
         <div className="jp-CodexComposer">
           <textarea
             ref={composerTextareaRef}
@@ -1739,6 +1791,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                     setModelMenuOpen(open => !open);
                     setReasoningMenuOpen(false);
                     setUsagePopoverOpen(false);
+                    setPermissionMenuOpen(false);
                   }}
                   disabled={status === 'running'}
                   aria-label={`Model: ${selectedModelLabel}`}
@@ -1811,6 +1864,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                     setReasoningMenuOpen(open => !open);
                     setModelMenuOpen(false);
                     setUsagePopoverOpen(false);
+                    setPermissionMenuOpen(false);
                   }}
                   disabled={status === 'running'}
                   aria-label={`Reasoning: ${selectedReasoningLabel}`}
@@ -1947,6 +2001,50 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                 </div>
 
                 <div className="jp-CodexUsageFooter">Last updated: {usageUpdatedAgo}</div>
+              </PortalMenu>
+
+              <div className="jp-CodexMenuWrap" ref={permissionMenuWrapRef}>
+                <button
+                  type="button"
+                  className={`jp-CodexIconBtn jp-CodexPermissionBtn${permissionMenuOpen ? ' is-open' : ''}${sandboxMode === 'danger-full-access' ? ' is-danger' : ''}`}
+                  ref={permissionBtnRef}
+                  onClick={() => {
+                    setPermissionMenuOpen(open => !open);
+                    setModelMenuOpen(false);
+                    setReasoningMenuOpen(false);
+                    setUsagePopoverOpen(false);
+                  }}
+                  disabled={status === 'running'}
+                  aria-label={`Permission: ${selectedSandboxLabel}`}
+                  aria-haspopup="menu"
+                  aria-expanded={permissionMenuOpen}
+                  title={`Permission: ${selectedSandboxLabel}`}
+                >
+                  <ShieldIcon width={18} height={18} />
+                </button>
+              </div>
+              <PortalMenu
+                open={permissionMenuOpen}
+                anchorRef={permissionBtnRef}
+                popoverRef={permissionPopoverRef}
+                role="menu"
+                ariaLabel="Permissions"
+                align="right"
+              >
+                {SANDBOX_OPTIONS.map(option => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className={`jp-CodexMenuItem ${sandboxMode === option.value ? 'is-active' : ''}`}
+                    onClick={() => {
+                      setSandboxMode(option.value);
+                      setPermissionMenuOpen(false);
+                    }}
+                  >
+                    <span className="jp-CodexMenuItemLabel">{option.label}</span>
+                    {sandboxMode === option.value && <CheckIcon className="jp-CodexMenuCheck" width={16} height={16} />}
+                  </button>
+                ))}
               </PortalMenu>
             </div>
 

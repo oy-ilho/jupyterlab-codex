@@ -88,6 +88,8 @@ class CodexWSHandler(WebSocketHandler):
         requested_model = _sanitize_model_name(requested_model_raw)
         requested_reasoning_raw = payload.get("reasoningEffort")
         requested_reasoning = _sanitize_reasoning_effort(requested_reasoning_raw)
+        requested_sandbox_raw = payload.get("sandbox")
+        requested_sandbox = _sanitize_sandbox_mode(requested_sandbox_raw)
         notebook_os_path = self._resolve_notebook_os_path(notebook_path)
         run_id = str(uuid.uuid4())
 
@@ -99,6 +101,9 @@ class CodexWSHandler(WebSocketHandler):
             return
         if requested_reasoning_raw and not requested_reasoning:
             self.write_message(json.dumps({"type": "error", "message": "Invalid reasoning level"}))
+            return
+        if requested_sandbox_raw and not requested_sandbox:
+            self.write_message(json.dumps({"type": "error", "message": "Invalid sandbox mode"}))
             return
 
         self._store.ensure_session(session_id, notebook_path, notebook_os_path)
@@ -166,6 +171,7 @@ class CodexWSHandler(WebSocketHandler):
                     cwd=cwd,
                     model=requested_model,
                     reasoning_effort=requested_reasoning,
+                    sandbox=requested_sandbox,
                 )
                 if assistant_buffer:
                     self._store.append_message(session_id, "assistant", "".join(assistant_buffer))
@@ -563,6 +569,19 @@ def _sanitize_reasoning_effort(value: Any) -> str | None:
         return None
 
     return effort
+
+
+def _sanitize_sandbox_mode(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+
+    mode = value.strip().lower()
+    if not mode:
+        return None
+    if mode not in {"read-only", "workspace-write", "danger-full-access"}:
+        return None
+
+    return mode
 
 
 def _refresh_watch_paths(notebook_os_path: str) -> list[str]:

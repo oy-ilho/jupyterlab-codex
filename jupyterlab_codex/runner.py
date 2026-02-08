@@ -11,18 +11,18 @@ class CodexRunner:
             self._raw_args = list(args)
             self._common_args: List[str] = []
             self._default_model = ""
+            self._default_sandbox = ""
             return
 
         self._raw_args = None
         self._default_model = os.environ.get("JUPYTERLAB_CODEX_MODEL", "").strip()
+        self._default_sandbox = os.environ.get("JUPYTERLAB_CODEX_SANDBOX", "workspace-write").strip() or "workspace-write"
         self._common_args = [
             "exec",
             "--json",
             "--color",
             "never",
             "--skip-git-repo-check",
-            "--sandbox",
-            "workspace-write",
         ]
 
     async def run(
@@ -32,8 +32,9 @@ class CodexRunner:
         cwd: str | None = None,
         model: str | None = None,
         reasoning_effort: str | None = None,
+        sandbox: str | None = None,
     ) -> int:
-        args = self._args_for_options(model=model, reasoning_effort=reasoning_effort)
+        args = self._args_for_options(model=model, reasoning_effort=reasoning_effort, sandbox=sandbox)
 
         proc = await asyncio.create_subprocess_exec(
             self._command,
@@ -89,9 +90,10 @@ class CodexRunner:
         proc.kill()
         await proc.wait()
 
-    def _args_for_options(self, model: str | None, reasoning_effort: str | None) -> List[str]:
+    def _args_for_options(self, model: str | None, reasoning_effort: str | None, sandbox: str | None) -> List[str]:
         requested_model = (model or "").strip()
         requested_reasoning_effort = (reasoning_effort or "").strip()
+        requested_sandbox = (sandbox or "").strip()
 
         if self._raw_args is not None:
             args = list(self._raw_args)
@@ -104,6 +106,9 @@ class CodexRunner:
                 if token in ("-m", "--model"):
                     idx += 2
                     continue
+                if requested_sandbox and token in ("-s", "--sandbox"):
+                    idx += 2
+                    continue
                 if token in ("-c", "--config") and isinstance(next_token, str):
                     if next_token.startswith("model_reasoning_effort="):
                         idx += 2
@@ -114,6 +119,8 @@ class CodexRunner:
 
             insertion_index = cleaned.index("-") if "-" in cleaned else len(cleaned)
             to_insert: List[str] = []
+            if requested_sandbox:
+                to_insert.extend(["-s", requested_sandbox])
             if requested_model:
                 to_insert.extend(["-m", requested_model])
             if requested_reasoning_effort:
@@ -123,7 +130,10 @@ class CodexRunner:
             return cleaned
 
         effective_model = requested_model or self._default_model
+        effective_sandbox = requested_sandbox or self._default_sandbox
         args = list(self._common_args)
+        if effective_sandbox:
+            args.extend(["--sandbox", effective_sandbox])
         if effective_model:
             args.extend(["-m", effective_model])
         if requested_reasoning_effort:

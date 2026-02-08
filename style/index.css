@@ -13,7 +13,7 @@
   --cdx-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
     "Courier New", monospace;
 
-  --cdx-accent: var(--jupyterlab-codex-accent, #10a37f);
+  --cdx-accent: var(--jupyterlab-codex-accent, #6E80FF);
   --cdx-good: var(--jp-success-color1, #22c55e);
   --cdx-warn: var(--jp-warn-color1, #f97316);
   --cdx-bad: var(--jp-error-color1, #ef4444);
@@ -313,6 +313,7 @@
 }
 
 .jp-CodexStatusPill-dot {
+  position: relative;
   width: 8px;
   height: 8px;
   border-radius: 999px;
@@ -335,8 +336,19 @@
 
 .jp-CodexStatusPill-running .jp-CodexStatusPill-dot {
   background: var(--cdx-warn);
-  box-shadow: none;
-  animation: cdx-pulse 1.2s ease-in-out infinite;
+  animation: cdx-status-dot 900ms ease-in-out infinite;
+}
+
+.jp-CodexStatusPill-running .jp-CodexStatusPill-dot::after {
+  content: '';
+  position: absolute;
+  inset: -6px;
+  border-radius: 999px;
+  border: 2px solid color-mix(in srgb, var(--cdx-warn) 70%, transparent);
+  opacity: 0;
+  transform: scale(0.6);
+  animation: cdx-status-ring 900ms ease-out infinite;
+  pointer-events: none;
 }
 
 .jp-CodexStatusPill-disconnected {
@@ -371,7 +383,7 @@
   position: relative;
   box-sizing: border-box;
   min-width: 0;
-  padding: 10px 52px 10px 12px;
+  padding: 10px 12px;
   border-radius: var(--cdx-radius);
   border: 1px solid color-mix(in srgb, var(--cdx-border) 70%, transparent);
   background: var(--cdx-surface);
@@ -545,9 +557,26 @@
 }
 
 .jp-CodexChat-input {
-  border-top: 1px solid var(--cdx-border);
+  position: relative;
+  z-index: 1;
+  border-top: none;
   padding: 10px;
   background: var(--cdx-bg);
+}
+
+.jp-CodexChat-input::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -28px;
+  height: 28px;
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--cdx-bg) 0%, transparent),
+    var(--cdx-bg)
+  );
+  pointer-events: none;
 }
 
 .jp-CodexComposer {
@@ -885,7 +914,7 @@
   --cdx-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
     "Courier New", monospace;
 
-  --cdx-accent: var(--jupyterlab-codex-accent, #10a37f);
+  --cdx-accent: var(--jupyterlab-codex-accent, #6E80FF);
   --cdx-good: var(--jp-success-color1, #22c55e);
   --cdx-warn: var(--jp-warn-color1, #f97316);
   --cdx-bad: var(--jp-error-color1, #ef4444);
@@ -908,6 +937,19 @@
 
 .jp-CodexUsageBtn {
   position: relative;
+}
+
+.jp-CodexPermissionBtn.is-danger:not(:disabled) {
+  border-color: color-mix(in srgb, var(--cdx-bad) 35%, var(--cdx-border));
+  background: color-mix(in srgb, var(--cdx-bad) 6%, var(--cdx-surface-2));
+  color: color-mix(in srgb, var(--cdx-bad) 70%, var(--cdx-text));
+}
+
+.jp-CodexPermissionBtn.is-danger:hover:not(:disabled),
+.jp-CodexPermissionBtn.is-danger.is-open:not(:disabled) {
+  border-color: color-mix(in srgb, var(--cdx-bad) 55%, var(--cdx-border));
+  background: color-mix(in srgb, var(--cdx-bad) 10%, var(--cdx-surface));
+  color: color-mix(in srgb, var(--cdx-bad) 85%, var(--cdx-text));
 }
 
 .jp-CodexUsageBtn.is-stale:not(:disabled),
@@ -1218,14 +1260,22 @@
 }
 
 .jp-CodexJumpBar {
-  padding: 10px 12px;
-  border-top: 1px solid var(--cdx-border);
-  background: var(--cdx-bg);
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -52px;
   display: flex;
   justify-content: center;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.jp-CodexJumpBar > * {
+  pointer-events: auto;
 }
 
 .jp-CodexChat-loading {
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -1303,6 +1353,39 @@
   50% {
     transform: scale(1.08);
     opacity: 0.8;
+  }
+}
+
+@keyframes cdx-status-dot {
+  0%,
+  100% {
+    transform: scale(1);
+    filter: brightness(1);
+  }
+  50% {
+    transform: scale(1.22);
+    filter: brightness(1.15);
+  }
+}
+
+@keyframes cdx-status-ring {
+  0% {
+    opacity: 0;
+    transform: scale(0.55);
+  }
+  20% {
+    opacity: 0.75;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.15);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .jp-CodexStatusPill-running .jp-CodexStatusPill-dot,
+  .jp-CodexStatusPill-running .jp-CodexStatusPill-dot::after {
+    animation: none;
   }
 }
 

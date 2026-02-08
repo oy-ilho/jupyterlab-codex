@@ -1,2 +1,0 @@
-[jupyter_server.extension]
-jupyterlab_codex = jupyterlab_codex.server_extension
