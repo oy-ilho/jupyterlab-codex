@@ -2605,19 +2605,19 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       </div>
 
       <div className="jp-CodexChat-input">
-        {!isAtBottom && (
-          <div className="jp-CodexJumpBar">
-            <button
-              type="button"
-              className="jp-CodexJumpToLatestBtn"
-              onClick={scrollToBottom}
-              aria-label="Jump to latest"
-              title="Jump to latest"
-            >
-              <ArrowDownIcon width={20} height={20} />
-            </button>
-          </div>
-        )}
+        <div className={`jp-CodexJumpBar${isAtBottom ? '' : ' is-visible'}`}>
+          <button
+            type="button"
+            className="jp-CodexJumpToLatestBtn"
+            onClick={scrollToBottom}
+            aria-label="Jump to latest"
+            aria-hidden={isAtBottom}
+            tabIndex={isAtBottom ? -1 : 0}
+            title="Jump to latest"
+          >
+            <ArrowDownIcon width={20} height={20} />
+          </button>
+        </div>
 	        <div className="jp-CodexComposer">
 	          <textarea
 	            ref={composerTextareaRef}
