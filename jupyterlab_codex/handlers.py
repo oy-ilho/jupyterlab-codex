@@ -68,6 +68,9 @@ class CodexWSHandler(WebSocketHandler):
         if notebook_path:
             self._store.update_notebook_path(session_id, notebook_path, notebook_os_path)
 
+        paired_ok, paired_path, paired_os_path, paired_message = _compute_pairing_status(
+            notebook_path, notebook_os_path
+        )
         self.write_message(
             json.dumps(
                 {
@@ -75,6 +78,10 @@ class CodexWSHandler(WebSocketHandler):
                     "state": "ready",
                     "sessionId": session_id,
                     "notebookPath": notebook_path,
+                    "pairedOk": paired_ok,
+                    "pairedPath": paired_path,
+                    "pairedOsPath": paired_os_path,
+                    "pairedMessage": paired_message,
                 }
             )
         )
@@ -106,6 +113,44 @@ class CodexWSHandler(WebSocketHandler):
             self.write_message(json.dumps({"type": "error", "message": "Invalid sandbox mode"}))
             return
 
+        paired_ok, paired_path, paired_os_path, paired_message = _compute_pairing_status(
+            notebook_path, notebook_os_path
+        )
+        if not paired_ok:
+            # Enforce paired workflow on the server as well (front-end can be bypassed).
+            self.write_message(
+                json.dumps(
+                    {
+                        "type": "error",
+                        "runId": run_id,
+                        "sessionId": session_id,
+                        "notebookPath": notebook_path,
+                        "message": paired_message
+                        or "Jupytext paired file is required for this extension.",
+                        "pairedOk": paired_ok,
+                        "pairedPath": paired_path,
+                        "pairedOsPath": paired_os_path,
+                        "pairedMessage": paired_message,
+                    }
+                )
+            )
+            self.write_message(
+                json.dumps(
+                    {
+                        "type": "status",
+                        "state": "ready",
+                        "runId": run_id,
+                        "sessionId": session_id,
+                        "notebookPath": notebook_path,
+                        "pairedOk": paired_ok,
+                        "pairedPath": paired_path,
+                        "pairedOsPath": paired_os_path,
+                        "pairedMessage": paired_message,
+                    }
+                )
+            )
+            return
+
         self._store.ensure_session(session_id, notebook_path, notebook_os_path)
         if notebook_path:
             self._store.update_notebook_path(session_id, notebook_path, notebook_os_path)
@@ -130,6 +175,10 @@ class CodexWSHandler(WebSocketHandler):
                         "runId": run_id,
                         "sessionId": session_id,
                         "notebookPath": notebook_path,
+                        "pairedOk": paired_ok,
+                        "pairedPath": paired_path,
+                        "pairedOsPath": paired_os_path,
+                        "pairedMessage": paired_message,
                     }
                 )
             )
@@ -185,6 +234,10 @@ class CodexWSHandler(WebSocketHandler):
                             "notebookPath": notebook_path,
                             "exitCode": exit_code,
                             "fileChanged": file_changed,
+                            "pairedOk": paired_ok,
+                            "pairedPath": paired_path,
+                            "pairedOsPath": paired_os_path,
+                            "pairedMessage": paired_message,
                         }
                     )
                 )
@@ -196,6 +249,10 @@ class CodexWSHandler(WebSocketHandler):
                             "runId": run_id,
                             "sessionId": session_id,
                             "notebookPath": notebook_path,
+                            "pairedOk": paired_ok,
+                            "pairedPath": paired_path,
+                            "pairedOsPath": paired_os_path,
+                            "pairedMessage": paired_message,
                         }
                     )
                 )
@@ -211,6 +268,10 @@ class CodexWSHandler(WebSocketHandler):
                             "exitCode": None,
                             "cancelled": True,
                             "fileChanged": file_changed,
+                            "pairedOk": paired_ok,
+                            "pairedPath": paired_path,
+                            "pairedOsPath": paired_os_path,
+                            "pairedMessage": paired_message,
                         }
                     )
                 )
@@ -222,6 +283,10 @@ class CodexWSHandler(WebSocketHandler):
                             "runId": run_id,
                             "sessionId": session_id,
                             "notebookPath": notebook_path,
+                            "pairedOk": paired_ok,
+                            "pairedPath": paired_path,
+                            "pairedOsPath": paired_os_path,
+                            "pairedMessage": paired_message,
                         }
                     )
                 )
@@ -246,6 +311,10 @@ class CodexWSHandler(WebSocketHandler):
                             "runId": run_id,
                             "sessionId": session_id,
                             "notebookPath": notebook_path,
+                            "pairedOk": paired_ok,
+                            "pairedPath": paired_path,
+                            "pairedOsPath": paired_os_path,
+                            "pairedMessage": paired_message,
                         }
                     )
                 )
@@ -596,6 +665,51 @@ def _refresh_watch_paths(notebook_os_path: str) -> list[str]:
     elif ext == ".py":
         paths.append(f"{root}.ipynb")
     return paths
+
+
+def _compute_pairing_status(notebook_path: str, notebook_os_path: str) -> tuple[bool, str, str, str]:
+    """
+    This extension assumes a Jupytext paired workflow: <notebook>.ipynb <-> <notebook>.py.
+
+    We treat the session as "paired" only when the derived paired file exists on disk.
+    """
+    nb_path = (notebook_path or "").strip()
+    nb_os_path = (notebook_os_path or "").strip()
+
+    paired_path = ""
+    if nb_path.endswith(".ipynb"):
+        paired_path = nb_path[:-6] + ".py"
+
+    paired_os_path = ""
+    if nb_os_path.endswith(".ipynb"):
+        paired_os_path = nb_os_path[:-6] + ".py"
+
+    # If we cannot resolve OS paths (e.g. non-local content manager), be conservative and block.
+    if nb_path.endswith(".ipynb") and not paired_os_path:
+        return (
+            False,
+            paired_path,
+            "",
+            "Jupytext paired file is required, but the server could not resolve a local path for this notebook.",
+        )
+
+    if nb_path.endswith(".ipynb"):
+        exists = bool(paired_os_path) and os.path.isfile(paired_os_path)
+        if exists:
+            return True, paired_path, paired_os_path, ""
+        message = (
+            "Jupytext paired file not found. This extension requires a paired .py file.\n"
+            f"Expected: {paired_os_path or paired_path or '<notebook>.py'}"
+        )
+        return False, paired_path, paired_os_path, message
+
+    # Unknown/unsupported path types: block to avoid telling Codex to edit the wrong thing.
+    return (
+        False,
+        paired_path,
+        paired_os_path,
+        "Jupytext paired workflow is required, but this file type is not supported.",
+    )
 
 
 def _capture_mtimes(paths: list[str]) -> Dict[str, float | None]:

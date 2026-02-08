@@ -363,7 +363,7 @@ export class CodexPanel extends ReactWidget {
 
     const result = await showDialog({
       title: 'File changed on disk',
-      body: 'The paired Jupytext file was modified. Reload this notebook?\n(Unsaved changes will be lost.)',
+      body: 'This notebook file was modified on disk. Reload this notebook?\n(Unsaved changes will be lost.)',
       buttons: [Dialog.cancelButton(), Dialog.okButton({ label: 'Reload' })]
     });
 
@@ -403,6 +403,10 @@ type NotebookSession = {
   runState: RunState;
   activeRunId: string | null;
   progress: string;
+  pairedOk: boolean | null;
+  pairedPath: string;
+  pairedOsPath: string;
+  pairedMessage: string;
 };
 
 type ModelOptionValue =
@@ -464,6 +468,10 @@ function createSession(path: string, intro: string): NotebookSession {
     activeRunId: null,
     progress: '',
     messages: [{ role: 'system', text: intro || `세션 시작: ${path || 'Untitled'}` }],
+    pairedOk: null,
+    pairedPath: '',
+    pairedOsPath: '',
+    pairedMessage: '',
   };
 }
 
@@ -1207,6 +1215,29 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     });
   }
 
+  function setSessionPairing(
+    path: string,
+    pairing: {
+      pairedOk: boolean | null;
+      pairedPath: string;
+      pairedOsPath: string;
+      pairedMessage: string;
+    }
+  ): void {
+    const targetPath = path || currentNotebookPathRef.current || '';
+    if (!targetPath) {
+      return;
+    }
+
+    updateSessions(prev => {
+      const next = new Map(prev);
+      const session =
+        next.get(targetPath) ?? createSession(targetPath, `세션 시작: ${targetPath || 'Untitled'}`);
+      next.set(targetPath, { ...session, ...pairing });
+      return next;
+    });
+  }
+
   function resolveMessagePath(msg: any): string {
     const messagePath = typeof msg.notebookPath === 'string' ? msg.notebookPath : '';
     const runId = typeof msg.runId === 'string' ? msg.runId : '';
@@ -1385,6 +1416,15 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       }
 
       if (msg.type === 'status') {
+        if (targetPath) {
+          const pairedOk = typeof msg.pairedOk === 'boolean' ? msg.pairedOk : null;
+          const pairedPath = typeof msg.pairedPath === 'string' ? msg.pairedPath : '';
+          const pairedOsPath = typeof msg.pairedOsPath === 'string' ? msg.pairedOsPath : '';
+          const pairedMessage = typeof msg.pairedMessage === 'string' ? msg.pairedMessage : '';
+          if (pairedOk !== null || pairedPath || pairedOsPath || pairedMessage) {
+            setSessionPairing(targetPath, { pairedOk, pairedPath, pairedOsPath, pairedMessage });
+          }
+        }
         if (msg.state === 'running' && targetPath) {
           setSessionRunState(targetPath, 'running', runId || null);
           setSessionProgress(targetPath, '');
@@ -1415,6 +1455,15 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       if (msg.type === 'error') {
         appendMessage(targetPath, 'system', msg.message || 'Unknown error');
         if (targetPath) {
+          const pairedOk = typeof msg.pairedOk === 'boolean' ? msg.pairedOk : null;
+          const pairedPath = typeof msg.pairedPath === 'string' ? msg.pairedPath : '';
+          const pairedOsPath = typeof msg.pairedOsPath === 'string' ? msg.pairedOsPath : '';
+          const pairedMessage = typeof msg.pairedMessage === 'string' ? msg.pairedMessage : '';
+          if (pairedOk !== null || pairedPath || pairedOsPath || pairedMessage) {
+            setSessionPairing(targetPath, { pairedOk, pairedPath, pairedOsPath, pairedMessage });
+          }
+        }
+        if (targetPath) {
           setSessionRunState(targetPath, 'ready', null);
           setSessionProgress(targetPath, '');
         }
@@ -1425,6 +1474,15 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       }
 
       if (msg.type === 'done') {
+        if (targetPath) {
+          const pairedOk = typeof msg.pairedOk === 'boolean' ? msg.pairedOk : null;
+          const pairedPath = typeof msg.pairedPath === 'string' ? msg.pairedPath : '';
+          const pairedOsPath = typeof msg.pairedOsPath === 'string' ? msg.pairedOsPath : '';
+          const pairedMessage = typeof msg.pairedMessage === 'string' ? msg.pairedMessage : '';
+          if (pairedOk !== null || pairedPath || pairedOsPath || pairedMessage) {
+            setSessionPairing(targetPath, { pairedOk, pairedPath, pairedOsPath, pairedMessage });
+          }
+        }
         const fileChanged = Boolean(msg.fileChanged);
         if (fileChanged && targetPath) {
           void refreshNotebook(targetPath);
@@ -1573,6 +1631,17 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       return;
     }
 
+    const existing = sessionsRef.current.get(notebookPath);
+    if (existing?.pairedOk === false) {
+      appendMessage(
+        notebookPath,
+        'system',
+        existing.pairedMessage ||
+          `Jupytext paired file not found. Expected: ${existing.pairedOsPath || existing.pairedPath || '<notebook>.py'}`
+      );
+      return;
+    }
+
     const trimmed = input.trim();
     if (!trimmed) {
       return;
@@ -1630,7 +1699,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const canSend =
     status === 'ready' &&
     currentNotebookPath.length > 0 &&
-    (modelOption !== '__custom__' || selectedModel.length > 0);
+    (modelOption !== '__custom__' || selectedModel.length > 0) &&
+    currentSession?.pairedOk !== false;
   const runningSummary = status === 'running' ? progress || 'Working...' : '';
   const selectedModelLabel =
     modelOption === '__custom__'
@@ -1693,6 +1763,16 @@ function CodexChat(props: CodexChatProps): JSX.Element {
             </button>
           </div>
         </div>
+
+        {currentSession?.pairedOk === false && (
+          <div className="jp-CodexPairingNotice" role="status" aria-live="polite">
+            <div className="jp-CodexPairingNotice-title">Jupytext paired 파일이 필요합니다</div>
+            <div className="jp-CodexPairingNotice-body">
+              {currentSession.pairedMessage ||
+                '이 노트북은 .ipynb ↔ .py 페어링(Jupytext)이 설정되어야 실행할 수 있어요.'}
+            </div>
+          </div>
+        )}
 
         {settingsOpen && (
           <div className="jp-CodexSettingsPanel">
@@ -1784,7 +1864,13 @@ function CodexChat(props: CodexChatProps): JSX.Element {
               // Resize using the current target so typing feels immediate.
               window.requestAnimationFrame(() => autosizeComposerTextarea(e.currentTarget));
             }}
-            placeholder={currentNotebookPath ? 'Ask Codex...' : 'Select a notebook first'}
+            placeholder={
+              currentSession?.pairedOk === false
+                ? 'Jupytext paired 파일(.py)이 없어서 실행이 비활성화되었습니다'
+                : currentNotebookPath
+                  ? 'Ask Codex...'
+                  : 'Select a notebook first'
+            }
             rows={1}
             onKeyDown={e => {
               // Avoid interfering with IME composition (Korean/Japanese/etc.)

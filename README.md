@@ -12,7 +12,7 @@ JupyterLab 4 우측 사이드바에서 Codex CLI(`codex exec --json`)를 채팅 
 - 노트북 경로 기준으로 스레드(세션) 분리
 - 모델 / Reasoning Effort / 샌드박스 권한을 UI에서 선택
 - 활성 셀 텍스트를 프롬프트에 포함할지 선택
-- `.ipynb` ↔ `.py`(Jupytext paired) 워크플로우를 가정하고, 파일 변경 시 노트북 리로드/리프레시 안내
+- `.ipynb` ↔ `.py`(Jupytext paired) 워크플로우를 전제로 동작(페어링된 `.py`가 없으면 실행이 비활성화됨)
 - 세션 로그 저장: `~/.jupyter/codex-sessions/`
 - (가능한 경우) Codex 사용량 스냅샷 표시: `~/.codex/sessions/` 를 best-effort로 스캔
 
