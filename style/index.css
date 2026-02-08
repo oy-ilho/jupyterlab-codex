@@ -1303,6 +1303,21 @@
   max-width: 100%;
 }
 
+.jp-CodexChat-loading.is-reasoning {
+  background: color-mix(in srgb, var(--cdx-accent) 6%, var(--cdx-surface-2));
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--cdx-accent) 24%, var(--cdx-border));
+  color: color-mix(in srgb, var(--cdx-accent) 30%, var(--cdx-muted));
+}
+
+.jp-CodexChat-loading.is-reasoning .jp-CodexChat-loading-dots span {
+  background: color-mix(in srgb, var(--cdx-accent) 55%, var(--cdx-muted));
+}
+
+.jp-CodexChat-loading.is-reasoning .jp-CodexChat-loadingText {
+  color: color-mix(in srgb, var(--cdx-accent) 35%, var(--cdx-muted));
+}
+
 .jp-CodexChat-loading-dots {
   display: flex;
   gap: 8px;

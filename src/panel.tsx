@@ -729,6 +729,20 @@ function summarizeCodexEvent(payload: any): string {
   return type;
 }
 
+function inferProgressKind(progress: string): '' | 'reasoning' {
+  const value = (progress || '').trim();
+  if (!value) {
+    return '';
+  }
+
+  // `summarizeCodexEvent()` formats these as `item.completed: <itemType> ...`.
+  if (value.startsWith('item.completed: reasoning') || value.startsWith('item.started: reasoning')) {
+    return 'reasoning';
+  }
+
+  return '';
+}
+
 function isNoiseCodexEvent(payload: any): boolean {
   if (!payload || typeof payload !== 'object') {
     return false;
@@ -1608,6 +1622,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const currentSession = currentNotebookPath ? sessions.get(currentNotebookPath) : null;
   const messages = currentSession?.messages ?? [];
   const progress = currentSession?.progress ?? '';
+  const progressKind = inferProgressKind(progress);
   const status: PanelStatus = socketConnected ? currentSession?.runState ?? 'ready' : 'disconnected';
   const displayPath = currentNotebookPath
     ? currentNotebookPath.split('/').pop() || 'Untitled'
@@ -1732,13 +1747,16 @@ function CodexChat(props: CodexChatProps): JSX.Element {
             </div>
           ))}
 
-          {status === 'running' && (
-            <div className="jp-CodexChat-loading" aria-label="Running">
-              <div className="jp-CodexChat-loading-dots">
-                <span></span>
-                <span></span>
-                <span></span>
-              </div>
+	          {status === 'running' && (
+	            <div
+	              className={`jp-CodexChat-loading${progressKind === 'reasoning' ? ' is-reasoning' : ''}`}
+	              aria-label={progressKind === 'reasoning' ? 'Reasoning' : 'Running'}
+	            >
+	              <div className="jp-CodexChat-loading-dots">
+	                <span></span>
+	                <span></span>
+	                <span></span>
+	              </div>
               <div className="jp-CodexChat-loadingText" title={runningSummary || 'Working...'}>
                 {runningSummary || 'Working...'}
               </div>
