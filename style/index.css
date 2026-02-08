@@ -461,7 +461,11 @@
 
 .jp-CodexActivityLineIcon {
   flex: 0 0 auto;
-  padding-top: 1px;
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   color: color-mix(in srgb, var(--cdx-muted) 80%, var(--cdx-text));
 }
 
@@ -471,6 +475,10 @@
   height: 8px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--cdx-accent) 70%, var(--cdx-border));
+}
+
+.jp-CodexActivityLineIcon svg {
+  display: block;
 }
 
 .jp-CodexActivityDot.is-idle {
