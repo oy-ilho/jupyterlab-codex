@@ -1778,9 +1778,12 @@ function CodexChat(props: CodexChatProps): JSX.Element {
           setSessionRunState(targetPath, 'running', runId || null);
           setSessionProgress(targetPath, '', '');
         } else if (msg.state === 'ready' && targetPath) {
-          setSessionRunState(targetPath, 'ready', null);
-          setSessionProgress(targetPath, '', '');
+          // The server emits "ready" in a few contexts that are *not* run lifecycle events
+          // (e.g. socket open, start_session responses). Those payloads don't include a
+          // runId and must not clobber an in-progress run state when users switch tabs.
           if (runId) {
+            setSessionRunState(targetPath, 'ready', null);
+            setSessionProgress(targetPath, '', '');
             runToPathRef.current.delete(runId);
           }
         }

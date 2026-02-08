@@ -110,6 +110,7 @@ class SessionStore:
                 "System: 1. For code changes, modify the paired file directly using file editing tools.",
                 "System: 2. Keep edits minimal and aligned with the user request.",
                 "System: 3. The 'Current Cell Content' shows what the user is currently viewing/editing.",
+                "System: 4. If you cannot proceed due to sandbox/permission restrictions, say so explicitly and ask the user to switch Permission (shield icon) to 'Full access' and retry. If authentication is required, tell them to run `codex login` in a terminal first.",
                 "",
             ]
         )
