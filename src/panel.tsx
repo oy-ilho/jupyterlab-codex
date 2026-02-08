@@ -373,10 +373,19 @@ export class CodexPanel extends ReactWidget {
   }
 }
 
-type ChatMessage = {
-  role: 'user' | 'assistant' | 'system';
-  text: string;
-};
+type TextRole = 'user' | 'assistant' | 'system';
+type ChatEntry =
+  | {
+      kind: 'text';
+      id: string;
+      role: TextRole;
+      text: string;
+    }
+  | {
+      kind: 'activity';
+      id: string;
+      item: ActivityItem;
+    };
 
 type RunState = 'ready' | 'running';
 type PanelStatus = 'disconnected' | RunState;
@@ -416,12 +425,11 @@ type CliDefaultsSnapshot = {
 
 type NotebookSession = {
   threadId: string;
-  messages: ChatMessage[];
+  messages: ChatEntry[];
   runState: RunState;
   activeRunId: string | null;
   progress: string;
   progressKind: ProgressKind;
-  activity: ActivityItem[];
   pairedOk: boolean | null;
   pairedPath: string;
   pairedOsPath: string;
@@ -481,14 +489,22 @@ function isKnownSandboxMode(value: string): value is SandboxMode {
 }
 
 function createSession(path: string, intro: string): NotebookSession {
+  const defaultIntro = 'Session started';
+  const systemText = normalizeSystemText('system', intro || defaultIntro);
   return {
     threadId: crypto.randomUUID(),
     runState: 'ready',
     activeRunId: null,
     progress: '',
     progressKind: '',
-    activity: [],
-    messages: [{ role: 'system', text: intro || `세션 시작: ${path || 'Untitled'}` }],
+    messages: [
+      {
+        kind: 'text',
+        id: crypto.randomUUID(),
+        role: 'system',
+        text: systemText
+      }
+    ],
     pairedOk: null,
     pairedPath: '',
     pairedOsPath: '',
@@ -509,6 +525,72 @@ function safeLocalStorageGet(key: string): string | null {
 
 function hasStoredValue(key: string): boolean {
   return safeLocalStorageGet(key) !== null;
+}
+
+function extractTrailingParenValue(text: string): { rest: string; value: string | null } {
+  const trimmed = text.trim();
+  if (!trimmed.endsWith(')')) {
+    return { rest: trimmed, value: null };
+  }
+  const start = trimmed.lastIndexOf('(');
+  if (start < 0) {
+    return { rest: trimmed, value: null };
+  }
+  const inner = trimmed.slice(start + 1, -1).trim();
+  if (!inner) {
+    return { rest: trimmed, value: null };
+  }
+  return { rest: trimmed.slice(0, start).trimEnd(), value: inner };
+}
+
+function formatSessionStartedNotice(label: string, time: string | null): string {
+  return `${label}${time ? ` (${time})` : ''}`;
+}
+
+function normalizeSessionStartedNotice(text: string): string | null {
+  const raw = text.trim();
+
+  // Korean
+  if (raw.startsWith('세션 시작')) {
+    const { rest, value } = extractTrailingParenValue(raw);
+    if (rest.startsWith('세션 시작')) {
+      return formatSessionStartedNotice('세션 시작', value);
+    }
+  }
+
+  // English (case-insensitive)
+  const lower = raw.toLowerCase();
+  if (lower.startsWith('session started')) {
+    const { rest, value } = extractTrailingParenValue(raw);
+    if (rest.toLowerCase().startsWith('session started')) {
+      return formatSessionStartedNotice('Session started', value);
+    }
+  }
+
+  return null;
+}
+
+function normalizeSystemText(role: TextRole, text: string): string {
+  if (role !== 'system') {
+    return text;
+  }
+  return normalizeSessionStartedNotice(text) ?? text;
+}
+
+function isSessionStartNotice(text: string): boolean {
+  if (normalizeSessionStartedNotice(text) !== null) {
+    return true;
+  }
+  const trimmed = text.trimStart();
+  if (trimmed.startsWith('새 스레드 시작:')) {
+    return true;
+  }
+  const lower = trimmed.toLowerCase();
+  return (
+    lower.startsWith('session start:') ||
+    lower.startsWith('new thread started:') ||
+    lower.startsWith('new thread started')
+  );
 }
 
 function safeLocalStorageSet(key: string, value: string): void {
@@ -797,7 +879,7 @@ function summarizeCodexEvent(payload: any): {
         commandHint = safePreview(commandField);
       }
       const exitCode = typeof item.exit_code === 'number' ? item.exit_code : typeof item.exitCode === 'number' ? item.exitCode : null;
-      title = phase === 'started' ? 'Run command' : phase === 'completed' ? 'Command finished' : 'Command';
+      title = phase === 'started' ? 'Running command' : phase === 'completed' ? 'Command finished' : 'Command';
       detail = commandHint || '';
       if (exitCode != null) {
         detail = detail ? `${detail}\n(exit ${exitCode})` : `(exit ${exitCode})`;
@@ -1106,9 +1188,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const [input, setInput] = useState('');
   const [socketConnected, setSocketConnected] = useState(false);
   const [isAtBottom, setIsAtBottom] = useState(true);
-  const [activityOpen, setActivityOpen] = useState(false);
-  const [activityShowRaw, setActivityShowRaw] = useState(false);
-  const [activityCopied, setActivityCopied] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [reasoningMenuOpen, setReasoningMenuOpen] = useState(false);
   const [usagePopoverOpen, setUsagePopoverOpen] = useState(false);
@@ -1274,7 +1353,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       return existing;
     }
 
-    const created = createSession(normalizedPath, `세션 시작: ${normalizedPath || 'Untitled'}`);
+    const created = createSession(normalizedPath, `Session started`);
     const next = new Map(sessionsRef.current);
     next.set(normalizedPath, created);
     replaceSessions(next);
@@ -1349,7 +1428,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 
     updateSessions(prev => {
       const next = new Map(prev);
-      const session = next.get(path) ?? createSession(path, `세션 시작: ${path || 'Untitled'}`);
+      const session = next.get(path) ?? createSession(path, `Session started`);
       const progress = session.runState === runState ? session.progress : '';
       const progressKind = session.runState === runState ? session.progressKind : '';
       next.set(path, { ...session, runState, activeRunId: runId, progress, progressKind });
@@ -1367,8 +1446,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     const nextKind: ProgressKind = nextProgress ? kind : '';
     updateSessions(prev => {
       const next = new Map(prev);
-      const session =
-        next.get(targetPath) ?? createSession(targetPath, `세션 시작: ${targetPath || 'Untitled'}`);
+      const session = next.get(targetPath) ?? createSession(targetPath, `Session started`);
       if (session.progress === nextProgress && session.progressKind === nextKind) {
         return prev;
       }
@@ -1377,40 +1455,63 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     });
   }
 
-  function clearSessionActivity(path: string): void {
+  function appendActivityItem(path: string, item: Omit<ActivityItem, 'id' | 'ts'>): void {
     const targetPath = path || currentNotebookPathRef.current || '';
     if (!targetPath) {
       return;
     }
-    updateSessions(prev => {
-      const next = new Map(prev);
-      const session =
-        next.get(targetPath) ?? createSession(targetPath, `세션 시작: ${targetPath || 'Untitled'}`);
-      if (session.activity.length === 0) {
-        return prev;
-      }
-      next.set(targetPath, { ...session, activity: [] });
-      return next;
-    });
-  }
 
-  function appendSessionActivity(path: string, item: Omit<ActivityItem, 'id' | 'ts'>): void {
-    const targetPath = path || currentNotebookPathRef.current || '';
-    if (!targetPath) {
-      return;
-    }
-    const entry: ActivityItem = {
-      id: crypto.randomUUID(),
-      ts: Date.now(),
-      ...item
-    };
-    const maxItems = 120;
     updateSessions(prev => {
       const next = new Map(prev);
-      const session =
-        next.get(targetPath) ?? createSession(targetPath, `세션 시작: ${targetPath || 'Untitled'}`);
-      const updated = [...session.activity, entry];
-      next.set(targetPath, { ...session, activity: updated.slice(Math.max(0, updated.length - maxItems)) });
+      const session = next.get(targetPath) ?? createSession(targetPath, `Session started`);
+      const entry: ActivityItem = { id: crypto.randomUUID(), ts: Date.now(), ...item };
+      const extractCommandKey = (detail: string): string => {
+        const raw = (detail || '').trim();
+        if (!raw) {
+          return '';
+        }
+        // Completed entries may include extra lines (e.g. exit code).
+        return raw.split('\n')[0].trim();
+      };
+
+      const messages = session.messages;
+
+      // If we have a corresponding "started" command, update it in place instead of appending.
+      if (entry.category === 'command' && entry.phase === 'completed') {
+        const key = extractCommandKey(entry.detail);
+        if (key) {
+          for (let idx = messages.length - 1; idx >= 0; idx -= 1) {
+            const msg = messages[idx];
+            if (msg.kind !== 'activity') {
+              continue;
+            }
+            const existing = msg.item;
+            if (existing.category !== 'command' || existing.phase !== 'started') {
+              continue;
+            }
+            if (extractCommandKey(existing.detail) !== key) {
+              continue;
+            }
+            const updated: ActivityItem = {
+              ...existing,
+              phase: 'completed',
+              title: entry.title,
+              detail: entry.detail,
+              raw: entry.raw,
+            };
+            const updatedMessages: ChatEntry[] = [
+              ...messages.slice(0, idx),
+              { ...msg, item: updated },
+              ...messages.slice(idx + 1),
+            ];
+            next.set(targetPath, { ...session, messages: updatedMessages });
+            return next;
+          }
+        }
+      }
+
+      const updatedMessages: ChatEntry[] = [...messages, { kind: 'activity', id: entry.id, item: entry }];
+      next.set(targetPath, { ...session, messages: updatedMessages });
       return next;
     });
   }
@@ -1431,8 +1532,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 
     updateSessions(prev => {
       const next = new Map(prev);
-      const session =
-        next.get(targetPath) ?? createSession(targetPath, `세션 시작: ${targetPath || 'Untitled'}`);
+      const session = next.get(targetPath) ?? createSession(targetPath, `Session started`);
       next.set(targetPath, { ...session, ...pairing });
       return next;
     });
@@ -1459,7 +1559,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     return currentNotebookPathRef.current || '';
   }
 
-  function appendMessage(path: string, role: ChatMessage['role'], text: string): void {
+  function appendMessage(path: string, role: TextRole, text: string): void {
     if (!text) {
       return;
     }
@@ -1467,19 +1567,19 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     if (!targetPath) {
       return;
     }
+    const nextText = normalizeSystemText(role, text);
 
     updateSessions(prev => {
       const next = new Map(prev);
-      const session =
-        next.get(targetPath) ?? createSession(targetPath, `세션 시작: ${targetPath || 'Untitled'}`);
+      const session = next.get(targetPath) ?? createSession(targetPath, `Session started`);
       const messages = session.messages;
       const last = messages[messages.length - 1];
-
-      let updatedMessages: ChatMessage[];
-      if (role === 'assistant' && last && last.role === 'assistant') {
-        updatedMessages = [...messages.slice(0, -1), { ...last, text: last.text + text }];
+      let updatedMessages: ChatEntry[];
+      // Coalesce streaming assistant output into a single bubble until a non-assistant message arrives.
+      if (role === 'assistant' && last && last.kind === 'text' && last.role === 'assistant') {
+        updatedMessages = [...messages.slice(0, -1), { ...last, text: last.text + nextText }];
       } else {
-        updatedMessages = [...messages, { role, text }];
+        updatedMessages = [...messages, { kind: 'text', id: crypto.randomUUID(), role, text: nextText }];
       }
 
       next.set(targetPath, { ...session, messages: updatedMessages });
@@ -1639,7 +1739,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         if (msg.state === 'running' && targetPath) {
           setSessionRunState(targetPath, 'running', runId || null);
           setSessionProgress(targetPath, '', '');
-          clearSessionActivity(targetPath);
         } else if (msg.state === 'ready' && targetPath) {
           setSessionRunState(targetPath, 'ready', null);
           setSessionProgress(targetPath, '', '');
@@ -1661,7 +1760,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
           return;
         }
         const summary = summarizeCodexEvent(payload);
-        appendSessionActivity(targetPath, summary.activity);
+        appendActivityItem(targetPath, summary.activity);
         setSessionProgress(targetPath, summary.progress, summary.progressKind);
         return;
       }
@@ -1789,20 +1888,23 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 
     const existing = sessionsRef.current.get(path);
     const hasConversation =
-      existing?.messages.some(msg => msg.role === 'user' || msg.role === 'assistant') ?? false;
+      existing?.messages.some(
+        msg => msg.kind === 'text' && (msg.role === 'user' || msg.role === 'assistant')
+      ) ?? false;
     if (hasConversation) {
       const result = await showDialog({
-        title: '새 스레드를 만들까요?',
+        title: 'Start a new thread?',
         body:
-          '새 스레드를 만들면 현재 대화가 초기화되며, 이 패널에서는 기존 대화를 다시 볼 수 없습니다.\n계속할까요?',
-        buttons: [Dialog.cancelButton(), Dialog.okButton({ label: '새 스레드' })]
+          'Starting a new thread will reset the current conversation, and you will not be able to view the previous conversation in this panel.\nContinue?',
+        buttons: [Dialog.cancelButton(), Dialog.okButton({ label: 'New thread' })]
       });
       if (!result.button.accept) {
         return;
       }
     }
 
-    const newSession = createSession(path, `새 스레드 시작: ${new Date().toLocaleTimeString()}`);
+    const time = new Date().toLocaleTimeString();
+    const newSession = createSession(path, `Session started (${time})`);
     updateSessions(prev => {
       const next = new Map(prev);
       next.set(path, newSession);
@@ -1899,10 +2001,24 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       })
     );
 
-    appendMessage(notebookPath, 'user', trimmed);
-    setSessionRunState(notebookPath, 'running', null);
-    setSessionProgress(notebookPath, '', '');
-    clearSessionActivity(notebookPath);
+    updateSessions(prev => {
+      const next = new Map(prev);
+      const existing =
+        next.get(notebookPath) ?? createSession(notebookPath, `Session started`);
+      const updatedMessages: ChatEntry[] = [
+        ...existing.messages,
+        { kind: 'text', id: crypto.randomUUID(), role: 'user', text: trimmed }
+      ];
+      next.set(notebookPath, {
+        ...existing,
+        messages: updatedMessages,
+        runState: 'running',
+        activeRunId: null,
+        progress: '',
+        progressKind: '',
+      });
+      return next;
+    });
     setInput('');
   }
 
@@ -1910,7 +2026,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const messages = currentSession?.messages ?? [];
   const progress = currentSession?.progress ?? '';
   const progressKind = currentSession?.progressKind ?? '';
-  const activity = currentSession?.activity ?? [];
   const status: PanelStatus = socketConnected ? currentSession?.runState ?? 'ready' : 'disconnected';
   const displayPath = currentNotebookPath
     ? currentNotebookPath.split('/').pop() || 'Untitled'
@@ -1939,10 +2054,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       : REASONING_MENU_OPTIONS.find(option => option.value === reasoningEffort)?.label ?? 'Reasoning';
   const selectedSandboxLabel = SANDBOX_OPTIONS.find(option => option.value === sandboxMode)?.label ?? 'Permission';
   const canStop = status === 'running' && Boolean(currentSession?.activeRunId);
-  const lastActivity = activity.length > 0 ? activity[activity.length - 1] : null;
-  const activitySummary = lastActivity
-    ? `${lastActivity.title}${lastActivity.detail ? `: ${truncateMiddle(lastActivity.detail.replace(/\\s+/g, ' ').trim(), 180)}` : ''}`
-    : '';
   const nowMs = Date.now();
   const rateUpdatedAtMs = safeParseDateMs(rateLimits?.updatedAt ?? null);
   const rateAgeMs = rateUpdatedAtMs == null ? null : nowMs - rateUpdatedAtMs;
@@ -1999,10 +2110,10 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 
         {currentSession?.pairedOk === false && (
           <div className="jp-CodexPairingNotice" role="status" aria-live="polite">
-            <div className="jp-CodexPairingNotice-title">Jupytext paired 파일이 필요합니다</div>
+            <div className="jp-CodexPairingNotice-title">Jupytext pairing required</div>
             <div className="jp-CodexPairingNotice-body">
               {currentSession.pairedMessage ||
-                '이 노트북은 .ipynb ↔ .py 페어링(Jupytext)이 설정되어야 실행할 수 있어요.'}
+                'This notebook must be paired (.ipynb ↔ .py) via Jupytext to enable running.'}
             </div>
           </div>
         )}
@@ -2055,151 +2166,71 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       </div>
 
       <div className="jp-CodexChat-body">
-        {(status === 'running' || activity.length > 0) && (
-          <div className={`jp-CodexActivity${activityOpen ? ' is-open' : ''}`}>
-            <div className="jp-CodexActivityBar">
-              <button
-                type="button"
-                className="jp-CodexActivityToggle"
-                onClick={() => setActivityOpen(open => !open)}
-                aria-expanded={activityOpen}
-                aria-label="Toggle activity"
-                title="Toggle activity"
-              >
-                <ChevronDownIcon width={16} height={16} className={`jp-CodexActivityCaret${activityOpen ? ' is-open' : ''}`} />
-                <span className="jp-CodexActivityLabel">Activity</span>
-                <span className="jp-CodexActivityCount" aria-label="Event count" title="Event count">
-                  {activity.length}
-                </span>
-              </button>
-
-              <div className="jp-CodexActivitySummary" title={activitySummary || (status === 'running' ? runningSummary : '')}>
-                {activitySummary || (status === 'running' ? runningSummary || 'Working...' : 'No recent activity')}
-              </div>
-
-              <div className="jp-CodexActivityActions">
-                <label className="jp-CodexActivityRawToggle" title="Show raw JSON">
-                  <input
-                    type="checkbox"
-                    checked={activityShowRaw}
-                    onChange={e => setActivityShowRaw(e.currentTarget.checked)}
-                  />
-                  Raw
-                </label>
-                <button
-                  type="button"
-                  className="jp-CodexBtn jp-CodexBtn-ghost jp-CodexBtn-xs"
-                  disabled={activity.length === 0}
-                  onClick={() => {
-                    const lines = activity.map(item => {
-                      const t = new Date(item.ts).toLocaleTimeString();
-                      const phase = item.phase ? ` [${item.phase}]` : '';
-                      const header = `${t}${phase} ${item.title}`;
-                      return item.detail ? `${header}\n${item.detail}` : header;
-                    });
-                    const text = lines.join('\n\n');
-                    void (async () => {
-                      const ok = await copyToClipboard(text);
-                      if (!ok) {
-                        return;
-                      }
-                      setActivityCopied(true);
-                      window.setTimeout(() => setActivityCopied(false), 900);
-                    })();
-                  }}
-                  title="Copy activity"
-                >
-                  {activityCopied ? 'Copied' : 'Copy'}
-                </button>
-                <button
-                  type="button"
-                  className="jp-CodexBtn jp-CodexBtn-ghost jp-CodexBtn-xs"
-                  disabled={status === 'running' || activity.length === 0}
-                  onClick={() => clearSessionActivity(currentNotebookPath)}
-                  title={status === 'running' ? 'Cannot clear while running' : 'Clear activity'}
-                >
-                  Clear
-                </button>
-              </div>
-            </div>
-
-            {activityOpen && (
-              <div className="jp-CodexActivityPanel" role="region" aria-label="Activity log">
-                <div className="jp-CodexActivityList">
-                  {activity.length === 0 && (
-                    <div className="jp-CodexActivityEmpty">
-                      {status === 'running' ? 'Waiting for tool events...' : 'No activity events.'}
-                    </div>
-                  )}
-                  {activity.map(item => (
-                    <div
-                      key={item.id}
-                      className={`jp-CodexActivityItem is-${item.category}${item.phase ? ` is-${item.phase}` : ''}`}
-                    >
-                      <div className="jp-CodexActivityItemTop">
-                        <div className="jp-CodexActivityItemTitle" title={item.title}>
-                          {item.title}
-                        </div>
-                        <div className="jp-CodexActivityItemMeta">
-                          {item.phase === 'completed' && <CheckIcon width={14} height={14} />}
-                          {item.phase === 'started' && <span className="jp-CodexActivityItemDot" aria-hidden="true" />}
-                        </div>
-                      </div>
-                      {item.detail && (
-                        <div className="jp-CodexActivityItemDetail" title={item.detail}>
-                          {item.detail}
-                        </div>
-                      )}
-                      {activityShowRaw && item.raw && (
-                        <pre className="jp-CodexActivityItemRaw">
-                          <code>{item.raw}</code>
-                        </pre>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
         <div className="jp-CodexChat-messages" ref={scrollRef} onScroll={onScrollMessages}>
           {messages.length === 0 && (
             <div className="jp-CodexChat-message jp-CodexChat-system">
               <div className="jp-CodexChat-role">system</div>
-              <div className="jp-CodexChat-text">노트북을 선택한 뒤 대화를 시작하세요.</div>
+              <div className="jp-CodexChat-text">Select a notebook, then start a conversation.</div>
             </div>
           )}
-          {messages.map((msg, idx) => (
-            <div key={idx} className={`jp-CodexChat-message jp-CodexChat-${msg.role}`}>
-              <div className="jp-CodexChat-role">{msg.role}</div>
-              <MessageText text={msg.text} canCopyCode={msg.role === 'assistant'} />
-            </div>
-          ))}
+          {messages.map(entry => {
+            if (entry.kind === 'text') {
+              const systemVariant =
+                entry.role === 'system'
+                  ? isSessionStartNotice(entry.text)
+                    ? ' is-success'
+                    : ' is-warning'
+                  : '';
+              return (
+                <div
+                  key={entry.id}
+                  className={`jp-CodexChat-message jp-CodexChat-${entry.role}${systemVariant}`}
+                >
+                  <div className="jp-CodexChat-role">{entry.role}</div>
+                  <MessageText text={entry.text} canCopyCode={entry.role === 'assistant'} />
+                </div>
+              );
+            }
+
+            const item = entry.item;
+            return (
+              <div
+                key={entry.id}
+                className={`jp-CodexChat-message jp-CodexChat-activity is-${item.category}${
+                  item.phase ? ` is-${item.phase}` : ''
+                }`}
+                role="status"
+                aria-live="polite"
+              >
+                <div className="jp-CodexActivityLine">
+                  <span className="jp-CodexActivityLineIcon" aria-hidden="true">
+                    {item.phase === 'completed' ? (
+                      <CheckIcon width={14} height={14} />
+                    ) : item.phase === 'started' ? (
+                      <span className="jp-CodexActivityDot" />
+                    ) : (
+                      <span className="jp-CodexActivityDot is-idle" />
+                    )}
+                  </span>
+                  <span className="jp-CodexActivityLineText">
+                    <span className="jp-CodexActivityLineTitle">{item.title}</span>
+                    {item.detail && <span className="jp-CodexActivityLineDetail">: {item.detail}</span>}
+                  </span>
+                </div>
+              </div>
+            );
+          })}
 
 	          {status === 'running' && (
 	            <div
 	              className={`jp-CodexChat-loading${progressKind === 'reasoning' ? ' is-reasoning' : ''}`}
 	              aria-label={progressKind === 'reasoning' ? 'Reasoning' : 'Running'}
-                role="button"
-                tabIndex={0}
-                onClick={() => setActivityOpen(true)}
-                onKeyDown={e => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    setActivityOpen(true);
-                  }
-                }}
-                title="Click to open activity"
 	            >
 	              <div className="jp-CodexChat-loading-dots">
 	                <span></span>
 	                <span></span>
 	                <span></span>
 	              </div>
-              <div className="jp-CodexChat-loadingText" title={runningSummary || 'Working...'}>
-                {runningSummary || 'Working...'}
-              </div>
             </div>
           )}
 
@@ -2226,7 +2257,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
             }}
             placeholder={
               currentSession?.pairedOk === false
-                ? 'Jupytext paired 파일(.py)이 없어서 실행이 비활성화되었습니다'
+                ? 'Disabled: missing Jupytext paired file (.py)'
                 : currentNotebookPath
                   ? 'Ask Codex...'
                   : 'Select a notebook first'

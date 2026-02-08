@@ -256,9 +256,9 @@
 }
 
 .jp-CodexSettingsPanel .jp-CodexChat-toggle:hover {
-  background: var(--cdx-surface-2);
-  border-color: var(--cdx-border);
-  color: var(--cdx-text);
+  background: transparent;
+  border-color: transparent;
+  color: inherit;
 }
 
 .jp-CodexChat-settings {
@@ -403,217 +403,65 @@
   flex-direction: column;
 }
 
-.jp-CodexActivity {
-  padding: 8px 12px 0;
-}
-
-.jp-CodexActivityBar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+.jp-CodexChat-activity {
+  align-self: stretch;
+  background: color-mix(in srgb, var(--cdx-surface-2) 68%, transparent);
+  border-color: color-mix(in srgb, var(--cdx-border) 80%, transparent);
   padding: 8px 10px;
-  border-radius: 14px;
-  border: 1px solid color-mix(in srgb, var(--cdx-border) 80%, transparent);
-  background: color-mix(in srgb, var(--cdx-surface-2) 70%, transparent);
 }
 
-.jp-CodexActivityToggle {
-  appearance: none;
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--cdx-text);
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
-  border-radius: 12px;
-  cursor: pointer;
-  font-size: 12px;
-  font-weight: 750;
-  white-space: nowrap;
-}
-
-.jp-CodexActivityToggle:hover {
-  background: color-mix(in srgb, var(--cdx-surface) 85%, transparent);
-  border-color: color-mix(in srgb, var(--cdx-border) 85%, transparent);
-}
-
-.jp-CodexActivityToggle:focus-visible {
-  outline: none;
-  border-color: color-mix(in srgb, var(--cdx-accent) 45%, var(--cdx-border));
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--cdx-accent) 18%, transparent);
-}
-
-.jp-CodexActivityCaret {
-  transition: transform 140ms ease;
-  opacity: 0.8;
-}
-
-.jp-CodexActivityCaret.is-open {
-  transform: rotate(180deg);
-}
-
-.jp-CodexActivityLabel {
-  letter-spacing: 0.01em;
-}
-
-.jp-CodexActivityCount {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 20px;
-  height: 20px;
-  padding: 0 6px;
-  border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--cdx-border) 85%, transparent);
-  background: color-mix(in srgb, var(--cdx-surface) 88%, transparent);
-  color: var(--cdx-muted);
-  font-size: 11px;
-  font-weight: 800;
-}
-
-.jp-CodexActivitySummary {
-  flex: 1;
-  min-width: 0;
-  font-size: 12px;
-  color: var(--cdx-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.jp-CodexActivityActions {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
-}
-
-.jp-CodexActivityRawToggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  color: var(--cdx-muted);
-  font-weight: 700;
-  padding: 4px 6px;
-  border-radius: 10px;
-  border: 1px solid transparent;
-  cursor: pointer;
-}
-
-.jp-CodexActivityRawToggle:hover {
-  background: color-mix(in srgb, var(--cdx-surface) 70%, transparent);
-  border-color: color-mix(in srgb, var(--cdx-border) 85%, transparent);
-}
-
-.jp-CodexActivityRawToggle input[type='checkbox'] {
-  width: 14px;
-  height: 14px;
-}
-
-.jp-CodexActivityPanel {
-  margin-top: 8px;
-  padding: 10px;
-  border-radius: 14px;
-  border: 1px solid color-mix(in srgb, var(--cdx-border) 75%, transparent);
-  background: var(--cdx-surface);
-}
-
-.jp-CodexActivityList {
-  display: grid;
-  gap: 8px;
-  max-height: 220px;
-  overflow: auto;
-  overscroll-behavior: contain;
-}
-
-.jp-CodexActivityEmpty {
-  padding: 10px;
-  border-radius: 12px;
-  border: 1px dashed color-mix(in srgb, var(--cdx-border) 70%, transparent);
-  background: color-mix(in srgb, var(--cdx-surface-2) 70%, transparent);
-  color: var(--cdx-muted);
-  font-size: 12px;
-}
-
-.jp-CodexActivityItem {
-  padding: 9px 10px;
-  border-radius: 12px;
-  border: 1px solid color-mix(in srgb, var(--cdx-border) 75%, transparent);
-  background: color-mix(in srgb, var(--cdx-surface) 92%, transparent);
-}
-
-.jp-CodexActivityItem.is-reasoning {
-  border-style: dashed;
-  border-color: color-mix(in srgb, var(--cdx-accent) 28%, var(--cdx-border));
-  background: color-mix(in srgb, var(--cdx-accent) 5%, var(--cdx-surface));
-}
-
-.jp-CodexActivityItem.is-command {
-  border-color: color-mix(in srgb, var(--cdx-good) 22%, var(--cdx-border));
-}
-
-.jp-CodexActivityItem.is-file {
-  border-color: color-mix(in srgb, var(--cdx-accent) 22%, var(--cdx-border));
-}
-
-.jp-CodexActivityItemTop {
+.jp-CodexActivityLine {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.jp-CodexActivityItemTitle {
-  font-size: 12px;
-  font-weight: 800;
-  color: var(--cdx-text);
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.jp-CodexActivityItemMeta {
-  flex: 0 0 auto;
-  color: color-mix(in srgb, var(--cdx-good) 70%, var(--cdx-text));
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.jp-CodexActivityItemDot {
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--cdx-muted) 65%, var(--cdx-border));
-}
-
-.jp-CodexActivityItemDetail {
-  margin-top: 6px;
+  gap: 8px;
+  align-items: flex-start;
   font-family: var(--cdx-mono);
   font-size: 12px;
   line-height: 1.3;
-  color: var(--cdx-muted);
-  white-space: pre-wrap;
+  color: var(--cdx-text);
+}
+
+.jp-CodexChat-activity.is-reasoning .jp-CodexActivityLineTitle {
+  color: color-mix(in srgb, var(--cdx-accent) 70%, var(--cdx-text));
+}
+
+.jp-CodexChat-activity.is-command .jp-CodexActivityLineTitle {
+  color: color-mix(in srgb, var(--cdx-good) 70%, var(--cdx-text));
+}
+
+.jp-CodexChat-activity.is-file .jp-CodexActivityLineTitle {
+  color: color-mix(in srgb, var(--cdx-accent) 70%, var(--cdx-text));
+}
+
+.jp-CodexActivityLineIcon {
+  flex: 0 0 auto;
+  padding-top: 1px;
+  color: color-mix(in srgb, var(--cdx-muted) 80%, var(--cdx-text));
+}
+
+.jp-CodexActivityDot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--cdx-accent) 70%, var(--cdx-border));
+}
+
+.jp-CodexActivityDot.is-idle {
+  background: color-mix(in srgb, var(--cdx-muted) 55%, var(--cdx-border));
+}
+
+.jp-CodexActivityLineText {
+  min-width: 0;
   word-break: break-word;
 }
 
-.jp-CodexActivityItemRaw {
-  margin-top: 8px;
-  padding: 8px;
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--cdx-surface-2) 80%, transparent);
-  border: 1px solid color-mix(in srgb, var(--cdx-border) 70%, transparent);
-  overflow: auto;
-  max-height: 200px;
+.jp-CodexActivityLineTitle {
+  font-weight: 800;
 }
 
-.jp-CodexActivityItemRaw code {
-  font-family: var(--cdx-mono);
-  font-size: 11px;
-  color: var(--cdx-text);
+.jp-CodexActivityLineDetail {
+  color: var(--cdx-muted);
+  white-space: pre-wrap;
 }
 
 .jp-CodexChat-messages {
@@ -645,6 +493,8 @@
   align-self: flex-end;
   background: color-mix(in srgb, var(--cdx-accent) 8%, var(--cdx-surface));
   border-color: color-mix(in srgb, var(--cdx-accent) 28%, var(--cdx-border));
+  /* Indent user bubbles from the left so they remain visually distinct even when wide. */
+  margin-left: clamp(24px, 8vw, 96px);
 }
 
 .jp-CodexChat-assistant {
@@ -654,10 +504,44 @@
 .jp-CodexChat-system {
   align-self: center;
   box-shadow: none;
+  border: 0;
   border-color: transparent;
-  background: var(--cdx-surface-2);
+  background: transparent;
   color: var(--cdx-muted);
   text-align: center;
+  padding: 2px 0;
+  border-radius: 0;
+}
+
+.jp-CodexChat-system .jp-CodexChat-text {
+  /* System notices should read like status text, not a "message bubble". */
+  font-size: 12px;
+  line-height: 1.4;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.jp-CodexChat-system .jp-CodexChat-text::before {
+  content: '';
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  background-repeat: no-repeat;
+  background-size: 14px 14px;
+  /* Inline SVG (data URI) so we don't depend on theme icon packs. */
+  background-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20viewBox%3D%270%200%2024%2024%27%3E%3Cpath%20fill%3D%27%23f5b301%27%20d%3D%27M1%2021h22L12%202%201%2021z%27/%3E%3Cpath%20fill%3D%27%235a4b00%27%20d%3D%27M13%2016h-2v-6h2v6zm0%204h-2v-2h2v2z%27/%3E%3C/svg%3E");
+}
+
+.jp-CodexChat-system.is-success .jp-CodexChat-text::before {
+  content: none;
+  display: none;
+  background-image: none;
+}
+
+.jp-CodexChat-system.is-success .jp-CodexChat-text {
+  gap: 0;
 }
 
 .jp-CodexChat-role {
@@ -1564,17 +1448,6 @@
   border-radius: 999px;
   background: var(--cdx-accent);
   animation: cdx-bounce 1.4s infinite ease-in-out both;
-}
-
-.jp-CodexChat-loadingText {
-  min-width: 0;
-  font-family: var(--cdx-mono);
-  font-size: 12px;
-  line-height: 1.2;
-  color: var(--cdx-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .jp-CodexChat-loading-dots span:nth-child(1) {

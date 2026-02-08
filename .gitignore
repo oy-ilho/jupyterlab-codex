@@ -28,6 +28,9 @@ ENV/
 # ---- Jupyter ----
 .ipynb_checkpoints/
 
+# Local notebook playground
+notebook_test/
+
 # Scratch / test artifacts (keep real tests under a tests/ folder)
 Untitled*.ipynb
 Untitled*.py
