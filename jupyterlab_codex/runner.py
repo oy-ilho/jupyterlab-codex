@@ -18,6 +18,10 @@ class CodexRunner:
         self._default_model = os.environ.get("JUPYTERLAB_CODEX_MODEL", "").strip()
         self._default_sandbox = os.environ.get("JUPYTERLAB_CODEX_SANDBOX", "workspace-write").strip() or "workspace-write"
         self._common_args = [
+            # This extension has no UI for interactive approvals.
+            # Force Codex to return failures instead of waiting for input.
+            "--ask-for-approval",
+            "never",
             "exec",
             "--json",
             "--color",
@@ -68,8 +72,11 @@ class CodexRunner:
                 await on_event(event)
 
         async def _read_stderr() -> None:
-            data = await proc.stderr.read()
-            if data:
+            # Stream stderr so users can see prompts/errors even if Codex blocks.
+            while True:
+                data = await proc.stderr.read(4096)
+                if not data:
+                    break
                 await on_event({"type": "stderr", "text": data.decode("utf-8", errors="replace")})
 
         try:

@@ -1223,7 +1223,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const wsRef = useRef<WebSocket | null>(null);
   const runToPathRef = useRef<Map<string, string>>(new Map());
   const lastRateLimitsRefreshRef = useRef<number>(0);
-  const usageHoverCloseTimerRef = useRef<number | null>(null);
   const pendingRefreshPathsRef = useRef<Set<string>>(new Set());
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
@@ -1415,35 +1414,17 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     socket.send(JSON.stringify({ type: 'refresh_rate_limits' }));
   }
 
-  function cancelUsageHoverClose(): void {
-    const timer = usageHoverCloseTimerRef.current;
-    if (timer != null) {
-      window.clearTimeout(timer);
-      usageHoverCloseTimerRef.current = null;
-    }
-  }
-
-  function scheduleUsageHoverClose(): void {
-    cancelUsageHoverClose();
-    usageHoverCloseTimerRef.current = window.setTimeout(() => setUsagePopoverOpen(false), 160);
-  }
-
-  function openUsagePopover(): void {
-    cancelUsageHoverClose();
-    setUsagePopoverOpen(true);
-    setModelMenuOpen(false);
-    setReasoningMenuOpen(false);
-    setPermissionMenuOpen(false);
-    requestRateLimitsRefresh();
-  }
-
   function toggleUsagePopover(): void {
-    cancelUsageHoverClose();
-    setUsagePopoverOpen(open => !open);
+    setUsagePopoverOpen(open => {
+      const next = !open;
+      if (next) {
+        requestRateLimitsRefresh();
+      }
+      return next;
+    });
     setModelMenuOpen(false);
     setReasoningMenuOpen(false);
     setPermissionMenuOpen(false);
-    requestRateLimitsRefresh();
   }
 
   function sendStartSession(session: NotebookSession, notebookPath: string): void {
@@ -1856,9 +1837,18 @@ function CodexChat(props: CodexChatProps): JSX.Element {
             setSessionPairing(targetPath, { pairedOk, pairedPath, pairedOsPath, pairedMessage });
           }
         }
+        const exitCode = typeof msg.exitCode === 'number' ? msg.exitCode : null;
+        const cancelled = Boolean(msg.cancelled);
         const fileChanged = Boolean(msg.fileChanged);
         if (fileChanged && targetPath) {
           void refreshNotebook(targetPath);
+        }
+        if (!cancelled && exitCode !== null && exitCode !== 0) {
+          appendMessage(
+            targetPath,
+            'system',
+            `Codex 실행 실패 (exit ${exitCode}). Permission(방패) -> Full access로 바꾼 뒤 다시 실행해 보세요. (로그인이 필요하면 터미널에서 codex login을 먼저 실행)`
+          );
         }
         if (targetPath) {
           setSessionRunState(targetPath, 'ready', null);
@@ -2280,8 +2270,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 	            <div
 	              className="jp-CodexMenuWrap"
 	              ref={usageMenuWrapRef}
-	              onMouseEnter={() => openUsagePopover()}
-	              onMouseLeave={() => scheduleUsageHoverClose()}
 	            >
 	              <button
 	                type="button"
@@ -2296,10 +2284,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 	                    ? 'Codex usage: unknown'
 	                    : `Codex usage: ${sessionLeftPercent}% left (resets in ${sessionResetsIn})`
 	                }
-	                onFocus={() => {
-	                  openUsagePopover();
-	                }}
-	                onBlur={() => scheduleUsageHoverClose()}
 	              >
 	                <BatteryIcon level={batteryLevel} width={16} height={16} />
 	              </button>
@@ -2312,8 +2296,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 	              ariaLabel="Codex usage"
 	              role="dialog"
 	              align="right"
-	              onMouseEnter={() => cancelUsageHoverClose()}
-	              onMouseLeave={() => scheduleUsageHoverClose()}
 	            >
 	              {(usageIsOverdue || usageIsStale) && (
 	                <div
