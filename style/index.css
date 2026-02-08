@@ -1548,6 +1548,49 @@
   pointer-events: auto;
 }
 
+.jp-CodexJumpBar .jp-CodexJumpToLatestBtn {
+  appearance: none;
+  -webkit-appearance: none;
+  box-sizing: border-box;
+  width: 32px !important;
+  height: 32px !important;
+  min-width: 32px !important;
+  min-height: 32px !important;
+  max-width: 32px !important;
+  max-height: 32px !important;
+  border-radius: 50% !important;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--cdx-border) 55%, transparent) !important;
+  background: var(--cdx-surface) !important;
+  color: color-mix(in srgb, var(--cdx-fg) 92%, var(--cdx-muted));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 !important;
+  cursor: pointer;
+  line-height: 0;
+  transition: transform 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+
+.jp-CodexJumpBar .jp-CodexJumpToLatestBtn svg {
+  display: block;
+}
+
+.jp-CodexJumpBar .jp-CodexJumpToLatestBtn:hover {
+  background: color-mix(in srgb, var(--cdx-surface) 88%, #ffffff);
+  border-color: color-mix(in srgb, var(--cdx-border) 75%, transparent);
+  transform: translateY(-1px);
+}
+
+.jp-CodexJumpBar .jp-CodexJumpToLatestBtn:active {
+  transform: translateY(0);
+}
+
+.jp-CodexJumpBar .jp-CodexJumpToLatestBtn:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--cdx-accent) 55%, transparent);
+  outline-offset: 3px;
+}
+
 .jp-CodexChat-loading {
   box-sizing: border-box;
   display: flex;

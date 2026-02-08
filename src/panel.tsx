@@ -35,6 +35,20 @@ function ArrowUpIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
   );
 }
 
+function ArrowDownIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" {...props}>
+      <path
+        d="M12 5v14m0 0l-7-7m7 7l7-7"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function StopIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
   return (
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" {...props}>
@@ -1494,6 +1508,18 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         // Completed entries may include extra lines (e.g. exit code).
         return raw.split('\n')[0].trim();
       };
+      const normalizePhaseBaseTitle = (title: string): string => {
+        const raw = (title || '').trim();
+        if (!raw) {
+          return '';
+        }
+        return raw.replace(/\s+(started|completed)\s*$/i, '').trim();
+      };
+      const extractGenericKey = (title: string, detail: string): string => {
+        const base = normalizePhaseBaseTitle(title);
+        const firstLine = (detail || '').trim().split('\n')[0].trim();
+        return `${base}::${firstLine}`;
+      };
 
       const messages = session.messages;
 
@@ -1527,6 +1553,41 @@ function CodexChat(props: CodexChatProps): JSX.Element {
               continue;
             }
             if (extractCommandKey(existing.detail) !== key) {
+              continue;
+            }
+            const updated: ActivityItem = {
+              ...existing,
+              phase: 'completed',
+              title: entry.title,
+              detail: entry.detail,
+              raw: entry.raw,
+            };
+            const updatedMessages: ChatEntry[] = [
+              ...messages.slice(0, idx),
+              { ...msg, item: updated },
+              ...messages.slice(idx + 1),
+            ];
+            next.set(targetPath, { ...session, messages: updatedMessages });
+            return next;
+          }
+        }
+      }
+
+      // Generic: If we have a corresponding "started" tool/event line, update it in place.
+      // This keeps pairs like "Web Search started" -> "Web Search completed" on a single line.
+      if (entry.phase === 'completed') {
+        const key = extractGenericKey(entry.title, entry.detail);
+        if (key) {
+          for (let idx = messages.length - 1; idx >= 0; idx -= 1) {
+            const msg = messages[idx];
+            if (msg.kind !== 'activity') {
+              continue;
+            }
+            const existing = msg.item;
+            if (existing.phase !== 'started') {
+              continue;
+            }
+            if (extractGenericKey(existing.title, existing.detail) !== key) {
               continue;
             }
             const updated: ActivityItem = {
@@ -2546,8 +2607,14 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       <div className="jp-CodexChat-input">
         {!isAtBottom && (
           <div className="jp-CodexJumpBar">
-            <button className="jp-CodexBtn jp-CodexBtn-primary jp-CodexBtn-xs" onClick={scrollToBottom}>
-              Jump to latest
+            <button
+              type="button"
+              className="jp-CodexJumpToLatestBtn"
+              onClick={scrollToBottom}
+              aria-label="Jump to latest"
+              title="Jump to latest"
+            >
+              <ArrowDownIcon width={20} height={20} />
             </button>
           </div>
         )}
