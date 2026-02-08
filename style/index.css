@@ -558,7 +558,7 @@
 .jp-CodexChat-user {
   align-self: flex-end;
   background: color-mix(in srgb, var(--cdx-accent) 8%, var(--cdx-surface));
-  border-color: color-mix(in srgb, var(--cdx-accent) 28%, var(--cdx-border));
+  border: 0;
   /* Indent user bubbles from the left so they remain visually distinct even when wide. */
   margin-left: clamp(24px, 8vw, 96px);
 }

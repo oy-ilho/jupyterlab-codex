@@ -2265,30 +2265,127 @@ function CodexChat(props: CodexChatProps): JSX.Element {
               {displayPath}
             </span>
           </div>
-          <div className="jp-CodexChat-header-actions">
-            <button
-              type="button"
-              onClick={() => void startNewThread()}
-              className="jp-CodexHeaderBtn"
-              disabled={!currentNotebookPath || status === 'running'}
-              aria-label="New thread"
-              title="New thread"
-            >
-              <PlusIcon width={16} height={16} />
-              <span className="jp-CodexHeaderBtn-label">New</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setSettingsOpen(open => !open)}
-              className={`jp-CodexHeaderBtn jp-CodexHeaderBtn-icon${settingsOpen ? ' is-active' : ''}`}
-              aria-label="Settings"
+	          <div className="jp-CodexChat-header-actions">
+	            <button
+	              type="button"
+	              onClick={() => void startNewThread()}
+	              className="jp-CodexHeaderBtn"
+	              disabled={!currentNotebookPath || status === 'running'}
+	              aria-label="New thread"
+	              title="New thread"
+	            >
+	              <PlusIcon width={16} height={16} />
+	              <span className="jp-CodexHeaderBtn-label">New</span>
+	            </button>
+	            <div
+	              className="jp-CodexMenuWrap"
+	              ref={usageMenuWrapRef}
+	              onMouseEnter={() => openUsagePopover()}
+	              onMouseLeave={() => scheduleUsageHoverClose()}
+	            >
+	              <button
+	                type="button"
+	                className={`jp-CodexHeaderBtn jp-CodexHeaderBtn-icon jp-CodexUsageBtn${usagePopoverOpen ? ' is-active is-open' : ''}${usageIsStale ? ' is-stale' : ''}${usageIsOverdue ? ' is-overdue' : ''}`}
+	                ref={usageBtnRef}
+	                onClick={() => toggleUsagePopover()}
+	                aria-label={sessionLeftPercent == null ? 'Codex usage' : `Codex usage: ${sessionLeftPercent}% left`}
+	                aria-haspopup="dialog"
+	                aria-expanded={usagePopoverOpen}
+	                title={
+	                  sessionLeftPercent == null
+	                    ? 'Codex usage: unknown'
+	                    : `Codex usage: ${sessionLeftPercent}% left (resets in ${sessionResetsIn})`
+	                }
+	                onFocus={() => {
+	                  openUsagePopover();
+	                }}
+	                onBlur={() => scheduleUsageHoverClose()}
+	              >
+	                <BatteryIcon level={batteryLevel} width={16} height={16} />
+	              </button>
+	            </div>
+	            <PortalMenu
+	              open={usagePopoverOpen}
+	              anchorRef={usageBtnRef}
+	              popoverRef={usagePopoverRef}
+	              className="jp-CodexUsagePopover"
+	              ariaLabel="Codex usage"
+	              role="dialog"
+	              align="right"
+	              onMouseEnter={() => cancelUsageHoverClose()}
+	              onMouseLeave={() => scheduleUsageHoverClose()}
+	            >
+	              {(usageIsOverdue || usageIsStale) && (
+	                <div
+	                  className={`jp-CodexUsageNotice${usageIsOverdue ? ' is-overdue' : usageIsStale ? ' is-stale' : ''}`}
+	                >
+	                  <div className="jp-CodexUsageNoticeTitle">
+	                    {usageIsUnknown
+	                      ? 'Usage unavailable'
+	                      : usageIsOverdue
+	                        ? 'Overdue usage snapshot'
+	                        : 'Stale usage snapshot'}
+	                  </div>
+	                  <div className="jp-CodexUsageNoticeBody">
+	                    {usageIsUnknown ? 'Run Codex once to fetch usage limits.' : 'Run Codex again to refresh these numbers.'}
+	                  </div>
+	                </div>
+	              )}
+
+	              <div className="jp-CodexUsageSection">
+	                <div className="jp-CodexUsageSectionTop">
+	                  <div className="jp-CodexUsageSectionTitle">Session</div>
+	                  <div className="jp-CodexUsageSectionReset">Resets in {sessionResetsIn}</div>
+	                </div>
+	                <div className="jp-CodexUsageBar">
+	                  <div
+	                    className={`jp-CodexUsageBarFill${usageIsStale ? ' is-stale' : ''}`}
+	                    style={{ width: `${sessionLeftPercent ?? 0}%` }}
+	                  />
+	                </div>
+	                <div className="jp-CodexUsageMeta">
+	                  <div className="jp-CodexUsageMetaLeft">
+	                    {sessionLeftPercent == null ? '--% left' : `${sessionLeftPercent}% left`}
+	                  </div>
+	                  <div className="jp-CodexUsageMetaRight">{sessionWindowLabel}</div>
+	                </div>
+	              </div>
+
+	              <div className="jp-CodexMenuDivider" role="separator" />
+
+	              <div className="jp-CodexUsageSection">
+	                <div className="jp-CodexUsageSectionTop">
+	                  <div className="jp-CodexUsageSectionTitle">Weekly</div>
+	                  <div className="jp-CodexUsageSectionReset">Resets in {weeklyResetsIn}</div>
+	                </div>
+	                <div className="jp-CodexUsageBar">
+	                  <div
+	                    className={`jp-CodexUsageBarFill${usageIsStale ? ' is-stale' : ''}`}
+	                    style={{ width: `${weeklyLeftPercent ?? 0}%` }}
+	                  />
+	                </div>
+	                <div className="jp-CodexUsageMeta">
+	                  <div className="jp-CodexUsageMetaLeft">
+	                    {weeklyLeftPercent == null ? '--% left' : `${weeklyLeftPercent}% left`}
+	                  </div>
+	                  <div className="jp-CodexUsageMetaRight">{weeklyWindowLabel}</div>
+	                </div>
+	              </div>
+
+	              <div className="jp-CodexUsageFooter">Last updated: {usageUpdatedAgo}</div>
+	            </PortalMenu>
+	            <button
+	              type="button"
+	              onClick={() => setSettingsOpen(open => !open)}
+	              className={`jp-CodexHeaderBtn jp-CodexHeaderBtn-icon${settingsOpen ? ' is-active' : ''}`}
+	              aria-label="Settings"
               aria-expanded={settingsOpen}
               title="Settings"
             >
-              <GearIcon width={16} height={16} />
-            </button>
-          </div>
-        </div>
+	              <GearIcon width={16} height={16} />
+	            </button>
+	          </div>
+	        </div>
 
         {currentSession?.pairedOk === false && (
           <div className="jp-CodexPairingNotice" role="status" aria-live="polite">
@@ -2655,115 +2752,13 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                     </button>
                   );
                 })}
-              </PortalMenu>
-
-              <div
-                className="jp-CodexMenuWrap"
-                ref={usageMenuWrapRef}
-                onMouseEnter={() => openUsagePopover()}
-                onMouseLeave={() => scheduleUsageHoverClose()}
-              >
-                <button
-                  type="button"
-                  className={`jp-CodexIconBtn jp-CodexUsageBtn${usagePopoverOpen ? ' is-open' : ''}${usageIsStale ? ' is-stale' : ''}${usageIsOverdue ? ' is-overdue' : ''}`}
-                  ref={usageBtnRef}
-                  onClick={() => toggleUsagePopover()}
-                  aria-label={
-                    sessionLeftPercent == null ? 'Codex usage' : `Codex usage: ${sessionLeftPercent}% left`
-                  }
-                  aria-haspopup="dialog"
-                  aria-expanded={usagePopoverOpen}
-                  title={
-                    sessionLeftPercent == null
-                      ? 'Codex usage: unknown'
-                      : `Codex usage: ${sessionLeftPercent}% left (resets in ${sessionResetsIn})`
-                  }
-                  onFocus={() => {
-                    openUsagePopover();
-                  }}
-                  onBlur={() => scheduleUsageHoverClose()}
-                >
-                  <BatteryIcon level={batteryLevel} width={18} height={18} />
-                </button>
-              </div>
-              <PortalMenu
-                open={usagePopoverOpen}
-                anchorRef={usageBtnRef}
-                popoverRef={usagePopoverRef}
-                className="jp-CodexUsagePopover"
-                ariaLabel="Codex usage"
-                role="dialog"
-                align="right"
-                onMouseEnter={() => cancelUsageHoverClose()}
-                onMouseLeave={() => scheduleUsageHoverClose()}
-              >
-                {(usageIsOverdue || usageIsStale) && (
-                  <div
-                    className={`jp-CodexUsageNotice${usageIsOverdue ? ' is-overdue' : usageIsStale ? ' is-stale' : ''}`}
-                  >
-                    <div className="jp-CodexUsageNoticeTitle">
-                      {usageIsUnknown
-                        ? 'Usage unavailable'
-                        : usageIsOverdue
-                          ? 'Overdue usage snapshot'
-                          : 'Stale usage snapshot'}
-                    </div>
-                    <div className="jp-CodexUsageNoticeBody">
-                      {usageIsUnknown
-                        ? 'Run Codex once to fetch usage limits.'
-                        : 'Run Codex again to refresh these numbers.'}
-                    </div>
-                  </div>
-                )}
-
-                <div className="jp-CodexUsageSection">
-                  <div className="jp-CodexUsageSectionTop">
-                    <div className="jp-CodexUsageSectionTitle">Session</div>
-                    <div className="jp-CodexUsageSectionReset">Resets in {sessionResetsIn}</div>
-                  </div>
-                  <div className="jp-CodexUsageBar">
-                    <div
-                      className={`jp-CodexUsageBarFill${usageIsStale ? ' is-stale' : ''}`}
-                      style={{ width: `${sessionLeftPercent ?? 0}%` }}
-                    />
-                  </div>
-                  <div className="jp-CodexUsageMeta">
-                    <div className="jp-CodexUsageMetaLeft">
-                      {sessionLeftPercent == null ? '--% left' : `${sessionLeftPercent}% left`}
-                    </div>
-                    <div className="jp-CodexUsageMetaRight">{sessionWindowLabel}</div>
-                  </div>
-                </div>
-
-                <div className="jp-CodexMenuDivider" role="separator" />
-
-                <div className="jp-CodexUsageSection">
-                  <div className="jp-CodexUsageSectionTop">
-                    <div className="jp-CodexUsageSectionTitle">Weekly</div>
-                    <div className="jp-CodexUsageSectionReset">Resets in {weeklyResetsIn}</div>
-                  </div>
-                  <div className="jp-CodexUsageBar">
-                    <div
-                      className={`jp-CodexUsageBarFill${usageIsStale ? ' is-stale' : ''}`}
-                      style={{ width: `${weeklyLeftPercent ?? 0}%` }}
-                    />
-                  </div>
-                  <div className="jp-CodexUsageMeta">
-                    <div className="jp-CodexUsageMetaLeft">
-                      {weeklyLeftPercent == null ? '--% left' : `${weeklyLeftPercent}% left`}
-                    </div>
-                    <div className="jp-CodexUsageMetaRight">{weeklyWindowLabel}</div>
-                  </div>
-                </div>
-
-                <div className="jp-CodexUsageFooter">Last updated: {usageUpdatedAgo}</div>
-              </PortalMenu>
-
-              <div className="jp-CodexMenuWrap" ref={permissionMenuWrapRef}>
-                <button
-                  type="button"
-                  className={`jp-CodexIconBtn jp-CodexPermissionBtn${permissionMenuOpen ? ' is-open' : ''}${sandboxMode === 'danger-full-access' ? ' is-danger' : ''}`}
-                  ref={permissionBtnRef}
+	              </PortalMenu>
+	
+	              <div className="jp-CodexMenuWrap" ref={permissionMenuWrapRef}>
+	                <button
+	                  type="button"
+	                  className={`jp-CodexIconBtn jp-CodexPermissionBtn${permissionMenuOpen ? ' is-open' : ''}${sandboxMode === 'danger-full-access' ? ' is-danger' : ''}`}
+	                  ref={permissionBtnRef}
                   onClick={() => {
                     setPermissionMenuOpen(open => !open);
                     setModelMenuOpen(false);
@@ -2805,7 +2800,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
             </div>
 
             <div className="jp-CodexComposer-toolbarRight">
-              <div className="jp-CodexComposer-hint">Enter to send, Shift+Enter for newline, paste image to attach</div>
               <button
                 type="button"
                 className={`jp-CodexSendBtn${status === 'running' ? ' is-stop' : ''}`}
