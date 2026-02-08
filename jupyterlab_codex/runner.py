@@ -33,8 +33,11 @@ class CodexRunner:
         model: str | None = None,
         reasoning_effort: str | None = None,
         sandbox: str | None = None,
+        images: List[str] | None = None,
     ) -> int:
-        args = self._args_for_options(model=model, reasoning_effort=reasoning_effort, sandbox=sandbox)
+        args = self._args_for_options(
+            model=model, reasoning_effort=reasoning_effort, sandbox=sandbox, images=images
+        )
 
         proc = await asyncio.create_subprocess_exec(
             self._command,
@@ -90,10 +93,17 @@ class CodexRunner:
         proc.kill()
         await proc.wait()
 
-    def _args_for_options(self, model: str | None, reasoning_effort: str | None, sandbox: str | None) -> List[str]:
+    def _args_for_options(
+        self,
+        model: str | None,
+        reasoning_effort: str | None,
+        sandbox: str | None,
+        images: List[str] | None,
+    ) -> List[str]:
         requested_model = (model or "").strip()
         requested_reasoning_effort = (reasoning_effort or "").strip()
         requested_sandbox = (sandbox or "").strip()
+        requested_images = [p for p in (images or []) if isinstance(p, str) and p.strip()]
 
         if self._raw_args is not None:
             args = list(self._raw_args)
@@ -119,6 +129,8 @@ class CodexRunner:
 
             insertion_index = cleaned.index("-") if "-" in cleaned else len(cleaned)
             to_insert: List[str] = []
+            if requested_images:
+                to_insert.extend(["--image", *requested_images])
             if requested_sandbox:
                 to_insert.extend(["-s", requested_sandbox])
             if requested_model:
@@ -138,5 +150,7 @@ class CodexRunner:
             args.extend(["-m", effective_model])
         if requested_reasoning_effort:
             args.extend(["-c", f'model_reasoning_effort="{requested_reasoning_effort}"'])
+        if requested_images:
+            args.extend(["--image", *requested_images])
         args.append("-")
         return args

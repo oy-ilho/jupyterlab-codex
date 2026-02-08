@@ -21,20 +21,6 @@ function PlusIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
   );
 }
 
-function ChevronDownIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" {...props}>
-      <path
-        d="m6 9 6 6 6-6"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
 function ArrowUpIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
   return (
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" {...props}>
@@ -53,6 +39,22 @@ function StopIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
   return (
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" {...props}>
       <rect x="7" y="7" width="10" height="10" rx="2.2" stroke="currentColor" strokeWidth="2" />
+    </svg>
+  );
+}
+
+function ImageIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" {...props}>
+      <rect x="3" y="5" width="18" height="14" rx="2.2" stroke="currentColor" strokeWidth="2" />
+      <circle cx="8.5" cy="10" r="1.5" fill="currentColor" />
+      <path
+        d="M21 16l-5.2-5.2a1 1 0 0 0-1.4 0L8.2 17 6 14.8a1 1 0 0 0-1.4 0L3 16.4"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
@@ -374,18 +376,28 @@ export class CodexPanel extends ReactWidget {
 }
 
 type TextRole = 'user' | 'assistant' | 'system';
+type ChatAttachments = {
+  images?: number;
+};
 type ChatEntry =
   | {
       kind: 'text';
       id: string;
       role: TextRole;
       text: string;
+      attachments?: ChatAttachments;
     }
   | {
       kind: 'activity';
       id: string;
       item: ActivityItem;
     };
+
+type PendingImageAttachment = {
+  id: string;
+  file: File;
+  previewUrl: string;
+};
 
 type RunState = 'ready' | 'running';
 type PanelStatus = 'disconnected' | RunState;
@@ -479,6 +491,10 @@ const SANDBOX_MODE_STORAGE_KEY = 'jupyterlab-codex:sandbox-mode';
 const SETTINGS_OPEN_STORAGE_KEY = 'jupyterlab-codex:settings-open';
 const INCLUDE_ACTIVE_CELL_STORAGE_KEY = 'jupyterlab-codex:include-active-cell';
 const INCLUDE_ACTIVE_CELL_OUTPUT_STORAGE_KEY = 'jupyterlab-codex:include-active-cell-output';
+
+const MAX_IMAGE_ATTACHMENTS = 4;
+const MAX_IMAGE_ATTACHMENT_BYTES = 4 * 1024 * 1024; // Avoid huge WebSocket payloads.
+const MAX_IMAGE_ATTACHMENT_TOTAL_BYTES = 6 * 1024 * 1024;
 
 function isKnownModelOption(value: string): value is ModelOptionValue {
   return MODEL_OPTIONS.some(option => option.value === value);
@@ -1012,6 +1028,15 @@ async function copyToClipboard(text: string): Promise<boolean> {
   }
 }
 
+async function blobToDataUrl(blob: Blob): Promise<string> {
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('Failed to read blob'));
+    reader.readAsDataURL(blob);
+  });
+}
+
 type MessageBlock =
   | { kind: 'text'; text: string }
   | { kind: 'code'; lang: string; code: string };
@@ -1186,6 +1211,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   );
   const [settingsOpen, setSettingsOpen] = useState<boolean>(() => readStoredSettingsOpen());
   const [input, setInput] = useState('');
+  const [pendingImages, setPendingImages] = useState<PendingImageAttachment[]>([]);
+  const pendingImagesRef = useRef<PendingImageAttachment[]>([]);
   const [socketConnected, setSocketConnected] = useState(false);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
@@ -1227,6 +1254,19 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   useEffect(() => {
     sessionsRef.current = sessions;
   }, [sessions]);
+
+  useEffect(() => {
+    pendingImagesRef.current = pendingImages;
+  }, [pendingImages]);
+
+  useEffect(() => {
+    return () => {
+      // Avoid leaking blob URLs if the panel unmounts.
+      for (const image of pendingImagesRef.current) {
+        URL.revokeObjectURL(image.previewUrl);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     persistModel(selectedModel, customModel.trim());
@@ -1670,6 +1710,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       currentNotebookPathRef.current = path;
       setCurrentNotebookPath(path);
       setInput('');
+      clearPendingImages();
       setIsAtBottom(true);
 
       if (!path) {
@@ -1931,6 +1972,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     });
     clearRunMappingForPath(path);
     setInput('');
+    clearPendingImages();
     sendStartSession(newSession, path);
   }
 
@@ -1951,6 +1993,102 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 
     setSessionProgress(notebookPath, 'Cancelling...');
     socket.send(JSON.stringify({ type: 'cancel', runId }));
+  }
+
+  function clearPendingImages(): void {
+    for (const image of pendingImagesRef.current) {
+      URL.revokeObjectURL(image.previewUrl);
+    }
+    pendingImagesRef.current = [];
+    setPendingImages([]);
+  }
+
+  function removePendingImage(id: string): void {
+    setPendingImages(prev => {
+      const removed = prev.find(image => image.id === id);
+      if (removed) {
+        URL.revokeObjectURL(removed.previewUrl);
+      }
+      const next = prev.filter(image => image.id !== id);
+      pendingImagesRef.current = next;
+      return next;
+    });
+  }
+
+  function onComposerPaste(event: React.ClipboardEvent<HTMLTextAreaElement>): void {
+    const items = event.clipboardData?.items;
+    if (!items || items.length === 0) {
+      return;
+    }
+
+    const found: File[] = [];
+    for (let idx = 0; idx < items.length; idx += 1) {
+      const item = items[idx];
+      if (!item || item.kind !== 'file' || !item.type.startsWith('image/')) {
+        continue;
+      }
+      const file = item.getAsFile();
+      if (file) {
+        found.push(file);
+      }
+    }
+
+    if (found.length === 0) {
+      return;
+    }
+
+    const existingCount = pendingImagesRef.current.length;
+    if (existingCount >= MAX_IMAGE_ATTACHMENTS) {
+      appendMessage(
+        currentNotebookPathRef.current || '',
+        'system',
+        `Too many images attached (max ${MAX_IMAGE_ATTACHMENTS}).`
+      );
+      return;
+    }
+
+    const remainingSlots = MAX_IMAGE_ATTACHMENTS - existingCount;
+    const toAdd: PendingImageAttachment[] = [];
+    let skippedLarge = 0;
+    let skippedTotal = 0;
+    let totalBytes = pendingImagesRef.current.reduce((sum, image) => sum + image.file.size, 0);
+    for (const file of found.slice(0, remainingSlots)) {
+      if (file.size > MAX_IMAGE_ATTACHMENT_BYTES) {
+        skippedLarge += 1;
+        continue;
+      }
+      if (totalBytes + file.size > MAX_IMAGE_ATTACHMENT_TOTAL_BYTES) {
+        skippedTotal += 1;
+        continue;
+      }
+      toAdd.push({ id: crypto.randomUUID(), file, previewUrl: URL.createObjectURL(file) });
+      totalBytes += file.size;
+    }
+
+    if (skippedLarge > 0) {
+      appendMessage(
+        currentNotebookPathRef.current || '',
+        'system',
+        `Skipped ${skippedLarge} image(s): each must be <= ${Math.round(MAX_IMAGE_ATTACHMENT_BYTES / (1024 * 1024))}MB.`
+      );
+    }
+    if (skippedTotal > 0) {
+      appendMessage(
+        currentNotebookPathRef.current || '',
+        'system',
+        `Skipped ${skippedTotal} image(s): total attachments must be <= ${Math.round(MAX_IMAGE_ATTACHMENT_TOTAL_BYTES / (1024 * 1024))}MB.`
+      );
+    }
+
+    if (toAdd.length === 0) {
+      return;
+    }
+
+    setPendingImages(prev => {
+      const next = [...prev, ...toAdd];
+      pendingImagesRef.current = next;
+      return next;
+    });
   }
 
   async function sendMessage(): Promise<void> {
@@ -1978,7 +2116,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     }
 
     const trimmed = input.trim();
-    if (!trimmed) {
+    const hasImages = pendingImagesRef.current.length > 0;
+    if (!trimmed && !hasImages) {
       return;
     }
     if (modelOption === '__custom__' && !selectedModel) {
@@ -2006,31 +2145,54 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       includeActiveCell && includeActiveCellOutput ? getActiveCellOutput(props.notebooks) : '';
     const session = ensureSession(notebookPath);
 
+    const content = trimmed || (hasImages ? 'Please analyze the attached image(s).' : '');
+    let images: { name: string; dataUrl: string }[] | undefined;
+    if (hasImages) {
+      try {
+        images = [];
+        for (const image of pendingImagesRef.current) {
+          const dataUrl = await blobToDataUrl(image.file);
+          images.push({ name: image.file.name || 'clipboard-image', dataUrl });
+        }
+      } catch (err) {
+        appendMessage(notebookPath, 'system', `Failed to attach image(s): ${String(err)}`);
+        return;
+      }
+    }
+
     socket.send(
       JSON.stringify({
         type: 'send',
         sessionId: session.threadId,
-        content: trimmed,
+        content,
         selection,
         cellOutput,
         notebookPath,
         model: selectedModel || undefined,
         reasoningEffort: selectedReasoningEffort || undefined,
-        sandbox: sandboxMode
+        sandbox: sandboxMode,
+        images
       })
     );
 
-    updateSessions(prev => {
-      const next = new Map(prev);
-      const existing =
-        next.get(notebookPath) ?? createSession(notebookPath, `Session started`);
-      const updatedMessages: ChatEntry[] = [
-        ...existing.messages,
-        { kind: 'text', id: crypto.randomUUID(), role: 'user', text: trimmed }
-      ];
-      next.set(notebookPath, {
-        ...existing,
-        messages: updatedMessages,
+	    const imageCount = pendingImagesRef.current.length;
+	    updateSessions(prev => {
+	      const next = new Map(prev);
+	      const existing =
+	        next.get(notebookPath) ?? createSession(notebookPath, `Session started`);
+	      const updatedMessages: ChatEntry[] = [
+	        ...existing.messages,
+	        {
+	          kind: 'text',
+	          id: crypto.randomUUID(),
+	          role: 'user',
+	          text: content,
+	          attachments: imageCount > 0 ? { images: imageCount } : undefined
+	        }
+	      ];
+	      next.set(notebookPath, {
+	        ...existing,
+	        messages: updatedMessages,
         runState: 'running',
         activeRunId: null,
         progress: '',
@@ -2039,6 +2201,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       return next;
     });
     setInput('');
+    clearPendingImages();
   }
 
   const currentSession = currentNotebookPath ? sessions.get(currentNotebookPath) : null;
@@ -2192,24 +2355,37 @@ function CodexChat(props: CodexChatProps): JSX.Element {
               <div className="jp-CodexChat-text">Select a notebook, then start a conversation.</div>
             </div>
           )}
-          {messages.map(entry => {
-            if (entry.kind === 'text') {
-              const systemVariant =
-                entry.role === 'system'
-                  ? isSessionStartNotice(entry.text)
-                    ? ' is-success'
-                    : ' is-warning'
-                  : '';
-              return (
-                <div
-                  key={entry.id}
-                  className={`jp-CodexChat-message jp-CodexChat-${entry.role}${systemVariant}`}
-                >
-                  <div className="jp-CodexChat-role">{entry.role}</div>
-                  <MessageText text={entry.text} canCopyCode={entry.role === 'assistant'} />
-                </div>
-              );
-            }
+	          {messages.map(entry => {
+	            if (entry.kind === 'text') {
+	              const systemVariant =
+	                entry.role === 'system'
+	                  ? isSessionStartNotice(entry.text)
+	                    ? ' is-success'
+	                    : ' is-warning'
+	                  : '';
+	              const imageCount = entry.attachments?.images ?? 0;
+	              return (
+	                <div
+	                  key={entry.id}
+	                  className={`jp-CodexChat-message jp-CodexChat-${entry.role}${systemVariant}`}
+	                >
+	                  <div className="jp-CodexChat-role">{entry.role}</div>
+	                  <MessageText text={entry.text} canCopyCode={entry.role === 'assistant'} />
+	                  {imageCount > 0 && (
+	                    <div
+	                      className="jp-CodexChat-attachments"
+	                      aria-label={`${imageCount} image attachment(s)`}
+	                      title={`${imageCount} image attachment(s)`}
+	                    >
+	                      <span className="jp-CodexChat-attachmentPill">
+	                        <ImageIcon width={14} height={14} />
+	                        <span className="jp-CodexChat-attachmentCount">{imageCount}</span>
+	                      </span>
+	                    </div>
+	                  )}
+	                </div>
+	              );
+	            }
 
             const item = entry.item;
             const trimmedDetail = (item.detail || '').trim();
@@ -2293,39 +2469,58 @@ function CodexChat(props: CodexChatProps): JSX.Element {
             </button>
           </div>
         )}
-        <div className="jp-CodexComposer">
-          <textarea
-            ref={composerTextareaRef}
-            value={input}
-            onChange={e => {
-              setInput(e.currentTarget.value);
-              // Resize using the current target so typing feels immediate.
-              window.requestAnimationFrame(() => autosizeComposerTextarea(e.currentTarget));
-            }}
-            placeholder={
-              currentSession?.pairedOk === false
-                ? 'Disabled: missing Jupytext paired file (.py)'
-                : currentNotebookPath
-                  ? 'Ask Codex...'
-                  : 'Select a notebook first'
-            }
-            rows={1}
-            onKeyDown={e => {
-              // Avoid interfering with IME composition (Korean/Japanese/etc.)
-              const native = e.nativeEvent as unknown as { isComposing?: boolean; keyCode?: number };
-              if (native.isComposing || native.keyCode === 229) {
-                return;
-              }
-              if (e.key === 'Enter' && !e.shiftKey && canSend && input.trim()) {
-                e.preventDefault();
-                void sendMessage();
-              }
-            }}
-          />
-          <div className="jp-CodexComposer-toolbar">
-            <div className="jp-CodexComposer-toolbarLeft">
-              <div className="jp-CodexMenuWrap jp-CodexModelWrap" ref={modelMenuWrapRef}>
-                <button
+	        <div className="jp-CodexComposer">
+	          <textarea
+	            ref={composerTextareaRef}
+	            value={input}
+	            onChange={e => {
+	              setInput(e.currentTarget.value);
+	              // Resize using the current target so typing feels immediate.
+	              window.requestAnimationFrame(() => autosizeComposerTextarea(e.currentTarget));
+	            }}
+	            onPaste={onComposerPaste}
+	            placeholder={
+	              currentSession?.pairedOk === false
+	                ? 'Disabled: missing Jupytext paired file (.py)'
+	                : currentNotebookPath
+	                  ? 'Ask Codex...'
+	                  : 'Select a notebook first'
+	            }
+	            rows={1}
+	            onKeyDown={e => {
+	              // Avoid interfering with IME composition (Korean/Japanese/etc.)
+	              const native = e.nativeEvent as unknown as { isComposing?: boolean; keyCode?: number };
+	              if (native.isComposing || native.keyCode === 229) {
+	                return;
+	              }
+	              if (e.key === 'Enter' && !e.shiftKey && canSend && (input.trim() || pendingImages.length > 0)) {
+	                e.preventDefault();
+	                void sendMessage();
+	              }
+	            }}
+	          />
+	          {pendingImages.length > 0 && (
+	            <div className="jp-CodexComposer-attachments" role="group" aria-label="Attachments">
+	              {pendingImages.map(image => (
+	                <div key={image.id} className="jp-CodexComposer-attachment">
+	                  <img src={image.previewUrl} alt={image.file.name || 'Pasted image'} />
+	                  <button
+	                    type="button"
+	                    className="jp-CodexComposer-attachmentRemove"
+	                    onClick={() => removePendingImage(image.id)}
+	                    aria-label="Remove image"
+	                    title="Remove image"
+	                  >
+	                    <XIcon width={14} height={14} />
+	                  </button>
+	                </div>
+	              ))}
+	            </div>
+	          )}
+	          <div className="jp-CodexComposer-toolbar">
+	            <div className="jp-CodexComposer-toolbarLeft">
+	              <div className="jp-CodexMenuWrap jp-CodexModelWrap" ref={modelMenuWrapRef}>
+	                <button
                   type="button"
                   ref={modelBtnRef}
                   className={`jp-CodexModelBtn ${modelMenuOpen ? 'is-open' : ''}`}
@@ -2338,16 +2533,15 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                   disabled={status === 'running'}
                   aria-label={`Model: ${selectedModelLabel}`}
                   aria-haspopup="menu"
-                  aria-expanded={modelMenuOpen}
-                  title={`Model: ${selectedModelLabel}`}
-                >
-                  <span className="jp-CodexModelBtn-label">{selectedModelLabel}</span>
-                  <ChevronDownIcon className="jp-CodexModelBtn-caret" width={14} height={14} />
-                </button>
-              </div>
-              <PortalMenu
-                open={modelMenuOpen}
-                anchorRef={modelBtnRef}
+	                  aria-expanded={modelMenuOpen}
+	                  title={`Model: ${selectedModelLabel}`}
+	                >
+	                  <span className="jp-CodexModelBtn-label">{selectedModelLabel}</span>
+	                </button>
+	              </div>
+	              <PortalMenu
+	                open={modelMenuOpen}
+	                anchorRef={modelBtnRef}
                 popoverRef={modelPopoverRef}
                 role="menu"
                 ariaLabel="Model"
@@ -2611,7 +2805,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
             </div>
 
             <div className="jp-CodexComposer-toolbarRight">
-              <div className="jp-CodexComposer-hint">Enter to send, Shift+Enter for newline</div>
+              <div className="jp-CodexComposer-hint">Enter to send, Shift+Enter for newline, paste image to attach</div>
               <button
                 type="button"
                 className={`jp-CodexSendBtn${status === 'running' ? ' is-stop' : ''}`}
@@ -2622,7 +2816,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                   }
                   void sendMessage();
                 }}
-                disabled={status === 'running' ? !canStop : !canSend || !input.trim()}
+                disabled={status === 'running' ? !canStop : !canSend || (!input.trim() && pendingImages.length === 0)}
                 aria-label={status === 'running' ? 'Stop run' : 'Send'}
                 title={
                   status === 'running'

@@ -522,9 +522,16 @@
   padding: 12px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  /* Use a tight baseline gap; expand only for full chat bubbles below. */
+  gap: 6px;
   overscroll-behavior: contain;
   scrollbar-gutter: stable both-edges;
+}
+
+.jp-CodexChat-user,
+.jp-CodexChat-assistant {
+  /* Restore a roomier rhythm for the main chat bubbles without affecting activity lines. */
+  margin-top: 6px;
 }
 
 .jp-CodexChat-message {
@@ -618,6 +625,31 @@
   color: inherit;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.jp-CodexChat-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.jp-CodexChat-attachmentPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--cdx-border) 70%, transparent);
+  background: color-mix(in srgb, var(--cdx-surface-2) 80%, transparent);
+  color: var(--cdx-muted);
+  font-family: var(--cdx-mono);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.jp-CodexChat-attachmentCount {
+  color: var(--cdx-text);
 }
 
 .jp-CodexMarkdown {
@@ -812,6 +844,53 @@
   opacity: 0.7;
 }
 
+.jp-CodexComposer-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 4px;
+}
+
+.jp-CodexComposer-attachment {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  border-radius: 14px;
+  border: 1px solid var(--cdx-border);
+  background: var(--cdx-surface-2);
+  overflow: hidden;
+}
+
+.jp-CodexComposer-attachment img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.jp-CodexComposer-attachmentRemove {
+  appearance: none;
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 26px;
+  height: 26px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--cdx-border) 85%, transparent);
+  background: color-mix(in srgb, var(--cdx-surface) 70%, transparent);
+  color: var(--cdx-text);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.jp-CodexComposer-attachmentRemove:hover:not(:disabled) {
+  background: var(--cdx-surface);
+  border-color: color-mix(in srgb, var(--cdx-accent) 25%, var(--cdx-border));
+}
+
 .jp-CodexComposer-toolbar {
   display: flex;
   align-items: center;
@@ -928,8 +1007,7 @@
   color: var(--cdx-text);
   display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  justify-content: flex-start;
   cursor: pointer;
   font-size: 12px;
   font-weight: 650;
@@ -967,11 +1045,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.jp-CodexModelBtn-caret {
-  flex: 0 0 auto;
-  opacity: 0.7;
 }
 
 .jp-CodexMenuWrap-right {

@@ -1,7 +1,9 @@
 import asyncio
+import base64
 import json
 import os
 import re
+import tempfile
 import time
 import uuid
 from datetime import datetime, timezone
@@ -13,6 +15,18 @@ from tornado.websocket import WebSocketHandler
 from .cli_defaults import load_cli_defaults_for_ui
 from .runner import CodexRunner
 from .sessions import SessionStore
+
+
+_MAX_IMAGE_ATTACHMENTS = 4
+_MAX_IMAGE_ATTACHMENT_BYTES = 4 * 1024 * 1024
+_MAX_IMAGE_ATTACHMENTS_TOTAL_BYTES = 6 * 1024 * 1024
+_IMAGE_SUFFIX_BY_MIME = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+}
 
 
 class CodexWSHandler(WebSocketHandler):
@@ -104,6 +118,7 @@ class CodexWSHandler(WebSocketHandler):
         content = payload.get("content", "")
         selection = payload.get("selection", "")
         cell_output = payload.get("cellOutput", "")
+        images_payload = payload.get("images")
         notebook_path = payload.get("notebookPath", "")
         requested_model_raw = payload.get("model")
         requested_model = _sanitize_model_name(requested_model_raw)
@@ -114,7 +129,8 @@ class CodexWSHandler(WebSocketHandler):
         notebook_os_path = self._resolve_notebook_os_path(notebook_path)
         run_id = str(uuid.uuid4())
 
-        if not content:
+        has_images = bool(images_payload)
+        if not content and not has_images:
             self.write_message(json.dumps({"type": "error", "message": "Empty content"}))
             return
         if requested_model_raw and not requested_model:
@@ -126,6 +142,25 @@ class CodexWSHandler(WebSocketHandler):
         if requested_sandbox_raw and not requested_sandbox:
             self.write_message(json.dumps({"type": "error", "message": "Invalid sandbox mode"}))
             return
+
+        images: list[dict[str, str]] = []
+        if images_payload:
+            if not isinstance(images_payload, list):
+                self.write_message(json.dumps({"type": "error", "message": "Invalid images payload"}))
+                return
+            if len(images_payload) > _MAX_IMAGE_ATTACHMENTS:
+                self.write_message(json.dumps({"type": "error", "message": "Too many images attached"}))
+                return
+            for item in images_payload:
+                if not isinstance(item, dict):
+                    self.write_message(json.dumps({"type": "error", "message": "Invalid images payload"}))
+                    return
+                data_url = item.get("dataUrl")
+                if not isinstance(data_url, str) or not data_url.strip():
+                    self.write_message(json.dumps({"type": "error", "message": "Invalid images payload"}))
+                    return
+                name = item.get("name")
+                images.append({"dataUrl": data_url, "name": name if isinstance(name, str) else ""})
 
         paired_ok, paired_path, paired_os_path, paired_message = _compute_pairing_status(
             notebook_path, notebook_os_path
@@ -197,6 +232,8 @@ class CodexWSHandler(WebSocketHandler):
                 )
             )
 
+            temp_images_dir = None
+            image_paths: list[str] = []
             assistant_buffer = []
 
             async def on_event(event: Dict[str, Any]):
@@ -228,6 +265,22 @@ class CodexWSHandler(WebSocketHandler):
                     )
 
             try:
+                if images:
+                    temp_images_dir = tempfile.TemporaryDirectory(prefix="jupyterlab-codex-images-")
+                    total_bytes = 0
+                    for idx, item in enumerate(images):
+                        mime, decoded = _decode_image_data_url(item["dataUrl"])
+                        if len(decoded) > _MAX_IMAGE_ATTACHMENT_BYTES:
+                            raise ValueError("Image attachment too large")
+                        total_bytes += len(decoded)
+                        if total_bytes > _MAX_IMAGE_ATTACHMENTS_TOTAL_BYTES:
+                            raise ValueError("Image attachments too large")
+                        suffix = _IMAGE_SUFFIX_BY_MIME.get(mime.lower(), ".png")
+                        out_path = os.path.join(temp_images_dir.name, f"attachment-{idx}{suffix}")
+                        with open(out_path, "wb") as handle:
+                            handle.write(decoded)
+                        image_paths.append(out_path)
+
                 exit_code = await self._runner.run(
                     prompt,
                     on_event,
@@ -235,6 +288,7 @@ class CodexWSHandler(WebSocketHandler):
                     model=requested_model,
                     reasoning_effort=requested_reasoning,
                     sandbox=requested_sandbox,
+                    images=image_paths,
                 )
                 if assistant_buffer:
                     self._store.append_message(session_id, "assistant", "".join(assistant_buffer))
@@ -335,6 +389,8 @@ class CodexWSHandler(WebSocketHandler):
             finally:
                 # Rate limits are recorded by the Codex Desktop app/CLI in ~/.codex/sessions/*.
                 # Reading the latest snapshot here lets the UI surface "Session" / "Weekly" usage.
+                if temp_images_dir is not None:
+                    temp_images_dir.cleanup()
                 self._send_rate_limits_snapshot()
                 self._active_runs.pop(run_id, None)
 
@@ -626,6 +682,34 @@ def event_to_text(event: Dict[str, Any]) -> str:
         return event["delta"]
 
     return ""
+
+
+def _decode_image_data_url(data_url: str) -> tuple[str, bytes]:
+    raw = (data_url or "").strip()
+    if not raw.startswith("data:"):
+        raise ValueError("Invalid image attachment")
+
+    header, sep, data = raw.partition(",")
+    if not sep:
+        raise ValueError("Invalid image attachment")
+
+    header_lower = header.lower()
+    if ";base64" not in header_lower:
+        raise ValueError("Invalid image attachment")
+
+    mime = header[5:].split(";", 1)[0].strip().lower()
+    if not mime.startswith("image/"):
+        raise ValueError("Invalid image attachment")
+
+    try:
+        decoded = base64.b64decode(data, validate=True)
+    except Exception:
+        raise ValueError("Invalid image attachment") from None
+
+    if not decoded:
+        raise ValueError("Invalid image attachment")
+
+    return mime, decoded
 
 
 def _sanitize_model_name(value: Any) -> str | None:
