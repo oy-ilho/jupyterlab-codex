@@ -57,7 +57,12 @@ class SessionStore:
         return messages
 
     def build_prompt(
-        self, session_id: str, user_content: str, selection: str, cwd: str | None = None
+        self,
+        session_id: str,
+        user_content: str,
+        selection: str,
+        cell_output: str,
+        cwd: str | None = None,
     ) -> str:
         messages = self.load_messages(session_id)
         meta = self._load_meta(session_id)
@@ -120,6 +125,11 @@ class SessionStore:
         if selection:
             parts.append("Current Cell Content:")
             parts.append(selection)
+            parts.append("")
+
+        if cell_output:
+            parts.append("Current Cell Output:")
+            parts.append(cell_output)
             parts.append("")
 
         parts.append("User:")

@@ -10,6 +10,7 @@ from typing import Any, Dict
 
 from tornado.websocket import WebSocketHandler
 
+from .cli_defaults import load_cli_defaults_for_ui
 from .runner import CodexRunner
 from .sessions import SessionStore
 
@@ -26,6 +27,7 @@ class CodexWSHandler(WebSocketHandler):
 
     def open(self):
         self.write_message(json.dumps({"type": "status", "state": "ready"}))
+        self._send_cli_defaults()
         self._send_rate_limits_snapshot()
 
     async def on_message(self, message: str):
@@ -59,6 +61,17 @@ class CodexWSHandler(WebSocketHandler):
 
         self.write_message(json.dumps({"type": "error", "message": "Unknown message type"}))
 
+    def _send_cli_defaults(self) -> None:
+        try:
+            defaults = load_cli_defaults_for_ui()
+        except Exception:  # pragma: no cover - best-effort
+            defaults = {"model": None, "reasoningEffort": None}
+
+        try:
+            self.write_message(json.dumps({"type": "cli_defaults", **defaults}))
+        except Exception:
+            return
+
     async def _handle_start_session(self, payload: Dict[str, Any]):
         session_id = payload.get("sessionId") or str(uuid.uuid4())
         notebook_path = payload.get("notebookPath", "")
@@ -90,6 +103,7 @@ class CodexWSHandler(WebSocketHandler):
         session_id = payload.get("sessionId") or str(uuid.uuid4())
         content = payload.get("content", "")
         selection = payload.get("selection", "")
+        cell_output = payload.get("cellOutput", "")
         notebook_path = payload.get("notebookPath", "")
         requested_model_raw = payload.get("model")
         requested_model = _sanitize_model_name(requested_model_raw)
@@ -163,7 +177,7 @@ class CodexWSHandler(WebSocketHandler):
         watch_paths = _refresh_watch_paths(notebook_os_path)
         before_mtimes = _capture_mtimes(watch_paths)
 
-        prompt = self._store.build_prompt(session_id, content, selection, cwd=cwd)
+        prompt = self._store.build_prompt(session_id, content, selection, cell_output, cwd=cwd)
         self._store.append_message(session_id, "user", content)
 
         async def _run():

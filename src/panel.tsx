@@ -380,6 +380,18 @@ type ChatMessage = {
 
 type RunState = 'ready' | 'running';
 type PanelStatus = 'disconnected' | RunState;
+type ProgressKind = '' | 'reasoning';
+type ActivityPhase = 'started' | 'completed' | '';
+type ActivityCategory = 'reasoning' | 'command' | 'file' | 'tool' | 'event';
+type ActivityItem = {
+  id: string;
+  ts: number;
+  category: ActivityCategory;
+  phase: ActivityPhase;
+  title: string;
+  detail: string;
+  raw: string;
+};
 
 type RateLimitWindowSnapshot = {
   usedPercent: number | null;
@@ -397,12 +409,19 @@ type CodexChatProps = {
   notebooks: INotebookTracker;
 };
 
+type CliDefaultsSnapshot = {
+  model: string | null;
+  reasoningEffort: ReasoningMenuOptionValue | null;
+};
+
 type NotebookSession = {
   threadId: string;
   messages: ChatMessage[];
   runState: RunState;
   activeRunId: string | null;
   progress: string;
+  progressKind: ProgressKind;
+  activity: ActivityItem[];
   pairedOk: boolean | null;
   pairedPath: string;
   pairedOsPath: string;
@@ -423,7 +442,6 @@ type ModelOption = {
 };
 
 const MODEL_OPTIONS: ModelOption[] = [
-  { label: 'From CLI config', value: '__config__' },
   { label: 'GPT-5.3 Codex', value: 'gpt-5.3-codex' },
   { label: 'GPT-5.2 Codex', value: 'gpt-5.2-codex' },
   { label: 'GPT-5.1 Codex Max', value: 'gpt-5.1-codex-max' },
@@ -432,14 +450,14 @@ const MODEL_OPTIONS: ModelOption[] = [
   { label: 'Custom', value: '__custom__' }
 ];
 const DEFAULT_MODEL = '';
-const REASONING_OPTIONS = [
-  { label: 'From CLI config', value: '__config__' },
+const REASONING_MENU_OPTIONS = [
   { label: 'Low', value: 'low' },
   { label: 'Medium', value: 'medium' },
   { label: 'High', value: 'high' },
   { label: 'Extra high', value: 'xhigh' }
 ] as const;
-type ReasoningOptionValue = (typeof REASONING_OPTIONS)[number]['value'];
+type ReasoningMenuOptionValue = (typeof REASONING_MENU_OPTIONS)[number]['value'];
+type ReasoningOptionValue = '__config__' | ReasoningMenuOptionValue;
 const SANDBOX_OPTIONS = [
   { label: 'Default permission', value: 'workspace-write' },
   { label: 'Full access', value: 'danger-full-access' }
@@ -452,6 +470,7 @@ const REASONING_STORAGE_KEY = 'jupyterlab-codex:reasoning-effort';
 const SANDBOX_MODE_STORAGE_KEY = 'jupyterlab-codex:sandbox-mode';
 const SETTINGS_OPEN_STORAGE_KEY = 'jupyterlab-codex:settings-open';
 const INCLUDE_ACTIVE_CELL_STORAGE_KEY = 'jupyterlab-codex:include-active-cell';
+const INCLUDE_ACTIVE_CELL_OUTPUT_STORAGE_KEY = 'jupyterlab-codex:include-active-cell-output';
 
 function isKnownModelOption(value: string): value is ModelOptionValue {
   return MODEL_OPTIONS.some(option => option.value === value);
@@ -467,6 +486,8 @@ function createSession(path: string, intro: string): NotebookSession {
     runState: 'ready',
     activeRunId: null,
     progress: '',
+    progressKind: '',
+    activity: [],
     messages: [{ role: 'system', text: intro || `세션 시작: ${path || 'Untitled'}` }],
     pairedOk: null,
     pairedPath: '',
@@ -484,6 +505,10 @@ function safeLocalStorageGet(key: string): string | null {
   } catch {
     return null;
   }
+}
+
+function hasStoredValue(key: string): boolean {
+  return safeLocalStorageGet(key) !== null;
 }
 
 function safeLocalStorageSet(key: string, value: string): void {
@@ -513,10 +538,17 @@ function readStoredIncludeActiveCell(): boolean {
   return (safeLocalStorageGet(INCLUDE_ACTIVE_CELL_STORAGE_KEY) ?? 'true') !== 'false';
 }
 
+function readStoredIncludeActiveCellOutput(): boolean {
+  return (safeLocalStorageGet(INCLUDE_ACTIVE_CELL_OUTPUT_STORAGE_KEY) ?? 'true') !== 'false';
+}
+
 function readStoredReasoningEffort(): ReasoningOptionValue {
   try {
     const stored = safeLocalStorageGet(REASONING_STORAGE_KEY) ?? '';
-    return REASONING_OPTIONS.some(option => option.value === stored)
+    if (stored === '__config__') {
+      return '__config__';
+    }
+    return REASONING_MENU_OPTIONS.some(option => option.value === stored)
       ? (stored as ReasoningOptionValue)
       : '__config__';
   } catch {
@@ -540,6 +572,10 @@ function persistAutoSave(enabled: boolean): void {
 
 function persistIncludeActiveCell(enabled: boolean): void {
   safeLocalStorageSet(INCLUDE_ACTIVE_CELL_STORAGE_KEY, enabled ? 'true' : 'false');
+}
+
+function persistIncludeActiveCellOutput(enabled: boolean): void {
+  safeLocalStorageSet(INCLUDE_ACTIVE_CELL_OUTPUT_STORAGE_KEY, enabled ? 'true' : 'false');
 }
 
 function persistReasoningEffort(value: ReasoningOptionValue): void {
@@ -658,9 +694,51 @@ function formatResetsIn(resetsAtSec: number | null, nowMs: number): string {
   return formatDurationShort(diffMs);
 }
 
-function summarizeCodexEvent(payload: any): string {
+function truncateEnd(text: string, max: number): string {
+  if (text.length <= max) {
+    return text;
+  }
+  if (max <= 3) {
+    return text.slice(0, max);
+  }
+  return `${text.slice(0, max - 3)}...`;
+}
+
+function safeJsonPreview(value: any, maxChars = 6000): string {
+  try {
+    const text = JSON.stringify(value, null, 2);
+    if (text.length <= maxChars) {
+      return text;
+    }
+    return `${text.slice(0, Math.max(0, maxChars - 40))}\n... (truncated)`;
+  } catch {
+    return '';
+  }
+}
+
+function humanizeToken(value: string): string {
+  const input = (value || '').trim();
+  if (!input) {
+    return '';
+  }
+  return input
+    .split(/[_-]+/)
+    .filter(Boolean)
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function summarizeCodexEvent(payload: any): {
+  progress: string;
+  progressKind: ProgressKind;
+  activity: Omit<ActivityItem, 'id' | 'ts'>;
+} {
   if (!payload || typeof payload !== 'object') {
-    return 'event';
+    return {
+      progress: 'Event',
+      progressKind: '',
+      activity: { category: 'event', phase: '', title: 'Event', detail: '', raw: safeJsonPreview(payload) }
+    };
   }
 
   const type =
@@ -668,8 +746,14 @@ function summarizeCodexEvent(payload: any): string {
     (typeof payload.event === 'string' && payload.event) ||
     'event';
 
-  // Common Codex CLI shape: { type: "item.completed", item: { type: "...", ... } }
-  if (type === 'item.completed' && payload.item && typeof payload.item === 'object') {
+  const raw = safeJsonPreview(payload);
+
+  // Common Codex CLI shape: { type: "item.completed|item.started", item: { type: "...", ... } }
+  if (
+    (type === 'item.completed' || type === 'item.started') &&
+    payload.item &&
+    typeof payload.item === 'object'
+  ) {
     const item: any = payload.item;
     const itemType = typeof item.type === 'string' ? item.type : '';
     const toolName =
@@ -678,17 +762,25 @@ function summarizeCodexEvent(payload: any): string {
       (typeof item.name === 'string' && item.name) ||
       '';
     const path = (typeof item.path === 'string' && item.path) || (typeof item.filename === 'string' && item.filename) || '';
+    const phase: ActivityPhase = type === 'item.started' ? 'started' : type === 'item.completed' ? 'completed' : '';
 
-    const extraParts: string[] = [];
-    if (toolName) {
-      extraParts.push(`(${toolName})`);
-    }
-    if (path) {
-      extraParts.push(truncateMiddle(path, 80));
+    let category: ActivityCategory = 'event';
+    let progressKind: ProgressKind = '';
+
+    if (itemType === 'reasoning') {
+      category = 'reasoning';
+      progressKind = 'reasoning';
+    } else if (itemType === 'command_execution') {
+      category = 'command';
+    } else if (itemType === 'file_change') {
+      category = 'file';
+    } else if (toolName) {
+      category = 'tool';
     }
 
-    // Commonly useful item types:
-    // - command_execution: show the command if we can find it.
+    let title = '';
+    let detail = '';
+
     if (itemType === 'command_execution') {
       const commandField =
         item.command ?? item.cmd ?? item.shell_command ?? item.argv ?? item.args ?? item.commandLine ?? item.command_line;
@@ -704,14 +796,57 @@ function summarizeCodexEvent(payload: any): string {
       } else {
         commandHint = safePreview(commandField);
       }
-      if (commandHint) {
-        extraParts.push(truncateMiddle(commandHint, 140));
+      const exitCode = typeof item.exit_code === 'number' ? item.exit_code : typeof item.exitCode === 'number' ? item.exitCode : null;
+      title = phase === 'started' ? 'Run command' : phase === 'completed' ? 'Command finished' : 'Command';
+      detail = commandHint || '';
+      if (exitCode != null) {
+        detail = detail ? `${detail}\n(exit ${exitCode})` : `(exit ${exitCode})`;
       }
+    } else if (itemType === 'file_change') {
+      title = phase === 'started' ? 'Update file' : phase === 'completed' ? 'File updated' : 'File change';
+      detail = path || '';
+    } else if (itemType === 'reasoning') {
+      title = phase === 'started' ? 'Reasoning' : phase === 'completed' ? 'Reasoning step' : 'Reasoning';
+      detail = toolName ? `(${toolName})` : '';
+    } else {
+      const base = humanizeToken(itemType) || humanizeToken(type) || 'Event';
+      title = phase === 'started' ? `${base} started` : phase === 'completed' ? `${base} completed` : base;
+      const detailParts: string[] = [];
+      if (toolName) {
+        detailParts.push(`tool: ${toolName}`);
+      }
+      if (path) {
+        detailParts.push(`path: ${path}`);
+      }
+      detail = detailParts.join('\n');
     }
 
-    if (itemType) {
-      return `${type}: ${itemType}${extraParts.length ? ` ${extraParts.join(' ')}` : ''}`;
+    if (!title) {
+      title = humanizeToken(itemType) || 'Event';
     }
+    detail = truncateEnd(detail, 1400);
+
+    const progressParts: string[] = [];
+    if (title) {
+      progressParts.push(title);
+    }
+    if (detail) {
+      const oneLine = detail.replace(/\s+/g, ' ').trim();
+      progressParts.push(truncateMiddle(oneLine, 200));
+    }
+    const progress = progressParts.join(': ') || humanizeToken(type) || 'Event';
+
+    return {
+      progress,
+      progressKind,
+      activity: {
+        category,
+        phase,
+        title,
+        detail,
+        raw
+      }
+    };
   }
 
   const label =
@@ -721,34 +856,39 @@ function summarizeCodexEvent(payload: any): string {
     (typeof payload.tool === 'string' && payload.tool) ||
     '';
   if (label && label !== type) {
-    return `${type}: ${truncateMiddle(label, 120)}`;
+    const progress = `${humanizeToken(type) || type}: ${truncateMiddle(label, 120)}`;
+    return {
+      progress,
+      progressKind: '',
+      activity: { category: 'event', phase: '', title: humanizeToken(type) || type, detail: label, raw }
+    };
   }
 
   const commandHint = safePreview(payload.command);
   if (commandHint) {
-    return `${type}: ${commandHint}`;
+    const progress = `${humanizeToken(type) || type}: ${commandHint}`;
+    return {
+      progress,
+      progressKind: '',
+      activity: { category: 'event', phase: '', title: humanizeToken(type) || type, detail: commandHint, raw }
+    };
   }
 
   const pathHint = safePreview(payload.path);
   if (pathHint) {
-    return `${type}: ${pathHint}`;
+    const progress = `${humanizeToken(type) || type}: ${pathHint}`;
+    return {
+      progress,
+      progressKind: '',
+      activity: { category: 'event', phase: '', title: humanizeToken(type) || type, detail: pathHint, raw }
+    };
   }
 
-  return type;
-}
-
-function inferProgressKind(progress: string): '' | 'reasoning' {
-  const value = (progress || '').trim();
-  if (!value) {
-    return '';
-  }
-
-  // `summarizeCodexEvent()` formats these as `item.completed: <itemType> ...`.
-  if (value.startsWith('item.completed: reasoning') || value.startsWith('item.started: reasoning')) {
-    return 'reasoning';
-  }
-
-  return '';
+  return {
+    progress: humanizeToken(type) || type,
+    progressKind: '',
+    activity: { category: 'event', phase: '', title: humanizeToken(type) || type, detail: '', raw }
+  };
 }
 
 function isNoiseCodexEvent(payload: any): boolean {
@@ -937,6 +1077,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const sessionsRef = useRef<Map<string, NotebookSession>>(new Map());
   const [currentNotebookPath, setCurrentNotebookPath] = useState<string>('');
   const currentNotebookPathRef = useRef<string>('');
+  const [cliDefaults, setCliDefaults] = useState<CliDefaultsSnapshot>({ model: null, reasoningEffort: null });
   const [modelOption, setModelOption] = useState<ModelOptionValue>(() => {
     const savedModel = readStoredModel();
     if (isKnownModelOption(savedModel)) {
@@ -958,10 +1099,16 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const [sandboxMode, setSandboxMode] = useState<SandboxMode>(() => readStoredSandboxMode());
   const [autoSaveBeforeSend, setAutoSaveBeforeSend] = useState<boolean>(() => readStoredAutoSave());
   const [includeActiveCell, setIncludeActiveCell] = useState<boolean>(() => readStoredIncludeActiveCell());
+  const [includeActiveCellOutput, setIncludeActiveCellOutput] = useState<boolean>(() =>
+    readStoredIncludeActiveCellOutput()
+  );
   const [settingsOpen, setSettingsOpen] = useState<boolean>(() => readStoredSettingsOpen());
   const [input, setInput] = useState('');
   const [socketConnected, setSocketConnected] = useState(false);
   const [isAtBottom, setIsAtBottom] = useState(true);
+  const [activityOpen, setActivityOpen] = useState(false);
+  const [activityShowRaw, setActivityShowRaw] = useState(false);
+  const [activityCopied, setActivityCopied] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [reasoningMenuOpen, setReasoningMenuOpen] = useState(false);
   const [usagePopoverOpen, setUsagePopoverOpen] = useState(false);
@@ -995,6 +1142,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         ? ''
         : modelOption;
   const selectedReasoningEffort = reasoningEffort === '__config__' ? '' : reasoningEffort;
+  const autoModel = cliDefaults.model;
+  const autoReasoningEffort = cliDefaults.reasoningEffort;
 
   useEffect(() => {
     sessionsRef.current = sessions;
@@ -1011,6 +1160,17 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   useEffect(() => {
     persistIncludeActiveCell(includeActiveCell);
   }, [includeActiveCell]);
+
+  useEffect(() => {
+    // If the user enables "Include active cell" for the first time, default output to ON as well.
+    if (includeActiveCell && !includeActiveCellOutput && !hasStoredValue(INCLUDE_ACTIVE_CELL_OUTPUT_STORAGE_KEY)) {
+      setIncludeActiveCellOutput(true);
+    }
+  }, [includeActiveCell, includeActiveCellOutput]);
+
+  useEffect(() => {
+    persistIncludeActiveCellOutput(includeActiveCellOutput);
+  }, [includeActiveCellOutput]);
 
   useEffect(() => {
     persistReasoningEffort(reasoningEffort);
@@ -1191,26 +1351,66 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       const next = new Map(prev);
       const session = next.get(path) ?? createSession(path, `세션 시작: ${path || 'Untitled'}`);
       const progress = session.runState === runState ? session.progress : '';
-      next.set(path, { ...session, runState, activeRunId: runId, progress });
+      const progressKind = session.runState === runState ? session.progressKind : '';
+      next.set(path, { ...session, runState, activeRunId: runId, progress, progressKind });
       return next;
     });
   }
 
-  function setSessionProgress(path: string, progress: string): void {
+  function setSessionProgress(path: string, progress: string, kind: ProgressKind = ''): void {
     const targetPath = path || currentNotebookPathRef.current || '';
     if (!targetPath) {
       return;
     }
 
     const nextProgress = progress ? truncateMiddle(progress, 260) : '';
+    const nextKind: ProgressKind = nextProgress ? kind : '';
     updateSessions(prev => {
       const next = new Map(prev);
       const session =
         next.get(targetPath) ?? createSession(targetPath, `세션 시작: ${targetPath || 'Untitled'}`);
-      if (session.progress === nextProgress) {
+      if (session.progress === nextProgress && session.progressKind === nextKind) {
         return prev;
       }
-      next.set(targetPath, { ...session, progress: nextProgress });
+      next.set(targetPath, { ...session, progress: nextProgress, progressKind: nextKind });
+      return next;
+    });
+  }
+
+  function clearSessionActivity(path: string): void {
+    const targetPath = path || currentNotebookPathRef.current || '';
+    if (!targetPath) {
+      return;
+    }
+    updateSessions(prev => {
+      const next = new Map(prev);
+      const session =
+        next.get(targetPath) ?? createSession(targetPath, `세션 시작: ${targetPath || 'Untitled'}`);
+      if (session.activity.length === 0) {
+        return prev;
+      }
+      next.set(targetPath, { ...session, activity: [] });
+      return next;
+    });
+  }
+
+  function appendSessionActivity(path: string, item: Omit<ActivityItem, 'id' | 'ts'>): void {
+    const targetPath = path || currentNotebookPathRef.current || '';
+    if (!targetPath) {
+      return;
+    }
+    const entry: ActivityItem = {
+      id: crypto.randomUUID(),
+      ts: Date.now(),
+      ...item
+    };
+    const maxItems = 120;
+    updateSessions(prev => {
+      const next = new Map(prev);
+      const session =
+        next.get(targetPath) ?? createSession(targetPath, `세션 시작: ${targetPath || 'Untitled'}`);
+      const updated = [...session.activity, entry];
+      next.set(targetPath, { ...session, activity: updated.slice(Math.max(0, updated.length - maxItems)) });
       return next;
     });
   }
@@ -1410,6 +1610,17 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       const runId = typeof msg.runId === 'string' ? msg.runId : '';
       const targetPath = resolveMessagePath(msg);
 
+      if (msg.type === 'cli_defaults') {
+        const model = typeof msg.model === 'string' && msg.model.trim() ? msg.model.trim() : null;
+        const rawReasoning =
+          typeof msg.reasoningEffort === 'string' ? msg.reasoningEffort.trim().toLowerCase() : '';
+        const reasoningEffort = REASONING_MENU_OPTIONS.some(option => option.value === rawReasoning)
+          ? (rawReasoning as ReasoningMenuOptionValue)
+          : null;
+        setCliDefaults({ model, reasoningEffort });
+        return;
+      }
+
       if (msg.type === 'rate_limits') {
         setRateLimits(coerceRateLimitsSnapshot(msg.snapshot));
         return;
@@ -1427,10 +1638,11 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         }
         if (msg.state === 'running' && targetPath) {
           setSessionRunState(targetPath, 'running', runId || null);
-          setSessionProgress(targetPath, '');
+          setSessionProgress(targetPath, '', '');
+          clearSessionActivity(targetPath);
         } else if (msg.state === 'ready' && targetPath) {
           setSessionRunState(targetPath, 'ready', null);
-          setSessionProgress(targetPath, '');
+          setSessionProgress(targetPath, '', '');
           if (runId) {
             runToPathRef.current.delete(runId);
           }
@@ -1448,7 +1660,9 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         if (isNoiseCodexEvent(payload)) {
           return;
         }
-        setSessionProgress(targetPath, summarizeCodexEvent(payload));
+        const summary = summarizeCodexEvent(payload);
+        appendSessionActivity(targetPath, summary.activity);
+        setSessionProgress(targetPath, summary.progress, summary.progressKind);
         return;
       }
 
@@ -1465,7 +1679,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         }
         if (targetPath) {
           setSessionRunState(targetPath, 'ready', null);
-          setSessionProgress(targetPath, '');
+          setSessionProgress(targetPath, '', '');
         }
         if (runId) {
           runToPathRef.current.delete(runId);
@@ -1489,7 +1703,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         }
         if (targetPath) {
           setSessionRunState(targetPath, 'ready', null);
-          setSessionProgress(targetPath, '');
+          setSessionProgress(targetPath, '', '');
         }
         if (runId) {
           runToPathRef.current.delete(runId);
@@ -1667,6 +1881,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     }
 
     const selection = includeActiveCell ? getActiveCellText(props.notebooks) : '';
+    const cellOutput =
+      includeActiveCell && includeActiveCellOutput ? getActiveCellOutput(props.notebooks) : '';
     const session = ensureSession(notebookPath);
 
     socket.send(
@@ -1675,6 +1891,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         sessionId: session.threadId,
         content: trimmed,
         selection,
+        cellOutput,
         notebookPath,
         model: selectedModel || undefined,
         reasoningEffort: selectedReasoningEffort || undefined,
@@ -1684,14 +1901,16 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 
     appendMessage(notebookPath, 'user', trimmed);
     setSessionRunState(notebookPath, 'running', null);
-    setSessionProgress(notebookPath, '');
+    setSessionProgress(notebookPath, '', '');
+    clearSessionActivity(notebookPath);
     setInput('');
   }
 
   const currentSession = currentNotebookPath ? sessions.get(currentNotebookPath) : null;
   const messages = currentSession?.messages ?? [];
   const progress = currentSession?.progress ?? '';
-  const progressKind = inferProgressKind(progress);
+  const progressKind = currentSession?.progressKind ?? '';
+  const activity = currentSession?.activity ?? [];
   const status: PanelStatus = socketConnected ? currentSession?.runState ?? 'ready' : 'disconnected';
   const displayPath = currentNotebookPath
     ? currentNotebookPath.split('/').pop() || 'Untitled'
@@ -1702,14 +1921,28 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     (modelOption !== '__custom__' || selectedModel.length > 0) &&
     currentSession?.pairedOk !== false;
   const runningSummary = status === 'running' ? progress || 'Working...' : '';
+  const autoModelLabel = autoModel
+    ? MODEL_OPTIONS.find(option => option.value === autoModel)?.label ?? truncateMiddle(autoModel, 32)
+    : 'Auto';
   const selectedModelLabel =
     modelOption === '__custom__'
       ? customModel.trim() || 'Custom'
-      : MODEL_OPTIONS.find(option => option.value === modelOption)?.label ?? 'Model';
+      : modelOption === '__config__'
+        ? autoModelLabel
+        : MODEL_OPTIONS.find(option => option.value === modelOption)?.label ?? 'Model';
+  const autoReasoningLabel = autoReasoningEffort
+    ? REASONING_MENU_OPTIONS.find(option => option.value === autoReasoningEffort)?.label ?? 'Auto'
+    : 'Auto';
   const selectedReasoningLabel =
-    REASONING_OPTIONS.find(option => option.value === reasoningEffort)?.label ?? 'Reasoning';
+    reasoningEffort === '__config__'
+      ? autoReasoningLabel
+      : REASONING_MENU_OPTIONS.find(option => option.value === reasoningEffort)?.label ?? 'Reasoning';
   const selectedSandboxLabel = SANDBOX_OPTIONS.find(option => option.value === sandboxMode)?.label ?? 'Permission';
   const canStop = status === 'running' && Boolean(currentSession?.activeRunId);
+  const lastActivity = activity.length > 0 ? activity[activity.length - 1] : null;
+  const activitySummary = lastActivity
+    ? `${lastActivity.title}${lastActivity.detail ? `: ${truncateMiddle(lastActivity.detail.replace(/\\s+/g, ' ').trim(), 180)}` : ''}`
+    : '';
   const nowMs = Date.now();
   const rateUpdatedAtMs = safeParseDateMs(rateLimits?.updatedAt ?? null);
   const rateAgeMs = rateUpdatedAtMs == null ? null : nowMs - rateUpdatedAtMs;
@@ -1807,12 +2040,129 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                 />
                 Include active cell
               </label>
+              <label className="jp-CodexChat-toggle">
+                <input
+                  type="checkbox"
+                  checked={includeActiveCellOutput}
+                  onChange={e => setIncludeActiveCellOutput(e.currentTarget.checked)}
+                  disabled={status === 'running' || !includeActiveCell}
+                />
+                Include active cell output
+              </label>
             </div>
           </div>
         )}
       </div>
 
       <div className="jp-CodexChat-body">
+        {(status === 'running' || activity.length > 0) && (
+          <div className={`jp-CodexActivity${activityOpen ? ' is-open' : ''}`}>
+            <div className="jp-CodexActivityBar">
+              <button
+                type="button"
+                className="jp-CodexActivityToggle"
+                onClick={() => setActivityOpen(open => !open)}
+                aria-expanded={activityOpen}
+                aria-label="Toggle activity"
+                title="Toggle activity"
+              >
+                <ChevronDownIcon width={16} height={16} className={`jp-CodexActivityCaret${activityOpen ? ' is-open' : ''}`} />
+                <span className="jp-CodexActivityLabel">Activity</span>
+                <span className="jp-CodexActivityCount" aria-label="Event count" title="Event count">
+                  {activity.length}
+                </span>
+              </button>
+
+              <div className="jp-CodexActivitySummary" title={activitySummary || (status === 'running' ? runningSummary : '')}>
+                {activitySummary || (status === 'running' ? runningSummary || 'Working...' : 'No recent activity')}
+              </div>
+
+              <div className="jp-CodexActivityActions">
+                <label className="jp-CodexActivityRawToggle" title="Show raw JSON">
+                  <input
+                    type="checkbox"
+                    checked={activityShowRaw}
+                    onChange={e => setActivityShowRaw(e.currentTarget.checked)}
+                  />
+                  Raw
+                </label>
+                <button
+                  type="button"
+                  className="jp-CodexBtn jp-CodexBtn-ghost jp-CodexBtn-xs"
+                  disabled={activity.length === 0}
+                  onClick={() => {
+                    const lines = activity.map(item => {
+                      const t = new Date(item.ts).toLocaleTimeString();
+                      const phase = item.phase ? ` [${item.phase}]` : '';
+                      const header = `${t}${phase} ${item.title}`;
+                      return item.detail ? `${header}\n${item.detail}` : header;
+                    });
+                    const text = lines.join('\n\n');
+                    void (async () => {
+                      const ok = await copyToClipboard(text);
+                      if (!ok) {
+                        return;
+                      }
+                      setActivityCopied(true);
+                      window.setTimeout(() => setActivityCopied(false), 900);
+                    })();
+                  }}
+                  title="Copy activity"
+                >
+                  {activityCopied ? 'Copied' : 'Copy'}
+                </button>
+                <button
+                  type="button"
+                  className="jp-CodexBtn jp-CodexBtn-ghost jp-CodexBtn-xs"
+                  disabled={status === 'running' || activity.length === 0}
+                  onClick={() => clearSessionActivity(currentNotebookPath)}
+                  title={status === 'running' ? 'Cannot clear while running' : 'Clear activity'}
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+
+            {activityOpen && (
+              <div className="jp-CodexActivityPanel" role="region" aria-label="Activity log">
+                <div className="jp-CodexActivityList">
+                  {activity.length === 0 && (
+                    <div className="jp-CodexActivityEmpty">
+                      {status === 'running' ? 'Waiting for tool events...' : 'No activity events.'}
+                    </div>
+                  )}
+                  {activity.map(item => (
+                    <div
+                      key={item.id}
+                      className={`jp-CodexActivityItem is-${item.category}${item.phase ? ` is-${item.phase}` : ''}`}
+                    >
+                      <div className="jp-CodexActivityItemTop">
+                        <div className="jp-CodexActivityItemTitle" title={item.title}>
+                          {item.title}
+                        </div>
+                        <div className="jp-CodexActivityItemMeta">
+                          {item.phase === 'completed' && <CheckIcon width={14} height={14} />}
+                          {item.phase === 'started' && <span className="jp-CodexActivityItemDot" aria-hidden="true" />}
+                        </div>
+                      </div>
+                      {item.detail && (
+                        <div className="jp-CodexActivityItemDetail" title={item.detail}>
+                          {item.detail}
+                        </div>
+                      )}
+                      {activityShowRaw && item.raw && (
+                        <pre className="jp-CodexActivityItemRaw">
+                          <code>{item.raw}</code>
+                        </pre>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="jp-CodexChat-messages" ref={scrollRef} onScroll={onScrollMessages}>
           {messages.length === 0 && (
             <div className="jp-CodexChat-message jp-CodexChat-system">
@@ -1831,6 +2181,16 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 	            <div
 	              className={`jp-CodexChat-loading${progressKind === 'reasoning' ? ' is-reasoning' : ''}`}
 	              aria-label={progressKind === 'reasoning' ? 'Reasoning' : 'Running'}
+                role="button"
+                tabIndex={0}
+                onClick={() => setActivityOpen(true)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    setActivityOpen(true);
+                  }
+                }}
+                title="Click to open activity"
 	            >
 	              <div className="jp-CodexChat-loading-dots">
 	                <span></span>
@@ -1915,24 +2275,31 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                 ariaLabel="Model"
                 align="left"
               >
-                {MODEL_OPTIONS.map(option => (
-                  <button
-                    key={option.value}
-                    type="button"
-                    className={`jp-CodexMenuItem ${modelOption === option.value ? 'is-active' : ''}`}
-                    onClick={() => {
-                      setModelOption(option.value);
-                      if (option.value !== '__custom__') {
-                        setModelMenuOpen(false);
-                      }
-                    }}
-                  >
-                    <span className="jp-CodexMenuItemLabel">{option.label}</span>
-                    {modelOption === option.value && (
-                      <CheckIcon className="jp-CodexMenuCheck" width={16} height={16} />
-                    )}
-                  </button>
-                ))}
+                {MODEL_OPTIONS.map(option => {
+                  const inferred =
+                    modelOption === '__config__' && autoModel && isKnownModelOption(autoModel)
+                      ? (autoModel as ModelOptionValue)
+                      : modelOption;
+                  const isActive = inferred === option.value;
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={`jp-CodexMenuItem ${isActive ? 'is-active' : ''}`}
+                      onClick={() => {
+                        setModelOption(option.value);
+                        if (option.value !== '__custom__') {
+                          setModelMenuOpen(false);
+                        }
+                      }}
+                    >
+                      <span className="jp-CodexMenuItemLabel">{option.label}</span>
+                      {isActive && (
+                        <CheckIcon className="jp-CodexMenuCheck" width={16} height={16} />
+                      )}
+                    </button>
+                  );
+                })}
 
                 {modelOption === '__custom__' && (
                   <>
@@ -1976,7 +2343,15 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                   aria-expanded={reasoningMenuOpen}
                   title={`Reasoning: ${selectedReasoningLabel}`}
                 >
-                  <ReasoningEffortIcon effort={reasoningEffort} width={18} height={18} />
+                  <ReasoningEffortIcon
+                    effort={
+                      (reasoningEffort === '__config__' && autoReasoningEffort
+                        ? autoReasoningEffort
+                        : reasoningEffort) as ReasoningOptionValue
+                    }
+                    width={18}
+                    height={18}
+                  />
                 </button>
               </div>
               <PortalMenu
@@ -1987,22 +2362,27 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                 ariaLabel="Reasoning"
                 align="left"
               >
-                {REASONING_OPTIONS.map(option => (
-                  <button
-                    key={option.value}
-                    type="button"
-                    className={`jp-CodexMenuItem ${reasoningEffort === option.value ? 'is-active' : ''}`}
-                    onClick={() => {
-                      setReasoningEffort(option.value as ReasoningOptionValue);
-                      setReasoningMenuOpen(false);
-                    }}
-                  >
-                    <span className="jp-CodexMenuItemLabel">{option.label}</span>
-                    {reasoningEffort === option.value && (
-                      <CheckIcon className="jp-CodexMenuCheck" width={16} height={16} />
-                    )}
-                  </button>
-                ))}
+                {REASONING_MENU_OPTIONS.map(option => {
+                  const inferred =
+                    reasoningEffort === '__config__' && autoReasoningEffort ? autoReasoningEffort : reasoningEffort;
+                  const isActive = inferred === option.value;
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={`jp-CodexMenuItem ${isActive ? 'is-active' : ''}`}
+                      onClick={() => {
+                        setReasoningEffort(option.value);
+                        setReasoningMenuOpen(false);
+                      }}
+                    >
+                      <span className="jp-CodexMenuItemLabel">{option.label}</span>
+                      {isActive && (
+                        <CheckIcon className="jp-CodexMenuCheck" width={16} height={16} />
+                      )}
+                    </button>
+                  );
+                })}
               </PortalMenu>
 
               <div
@@ -2201,4 +2581,154 @@ function getActiveCellText(notebooks: INotebookTracker): string {
   }
   const activeCell = widget.content.activeCell;
   return activeCell ? activeCell.model.sharedModel.getSource() : '';
+}
+
+const ACTIVE_CELL_OUTPUT_MAX_CHARS = 6000;
+const ACTIVE_CELL_OUTPUT_MAX_ITEMS = 24;
+
+function stripAnsi(value: string): string {
+  // Best-effort removal of ANSI escape codes (tracebacks sometimes include them).
+  return value.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
+}
+
+function coerceText(value: unknown): string {
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.filter(item => typeof item === 'string').join('');
+  }
+  return '';
+}
+
+function formatJupyterOutput(output: any): string {
+  if (!output || typeof output !== 'object') {
+    return '';
+  }
+  const outputType = typeof output.output_type === 'string' ? output.output_type : '';
+  if (!outputType) {
+    return '';
+  }
+
+  if (outputType === 'stream') {
+    const text = coerceText(output.text);
+    if (!text) {
+      return '';
+    }
+    const name = typeof output.name === 'string' ? output.name : '';
+    const cleaned = stripAnsi(text).replace(/\s+$/, '');
+    if (!cleaned) {
+      return '';
+    }
+    return name === 'stderr' ? `[stderr]\n${cleaned}` : cleaned;
+  }
+
+  if (outputType === 'error') {
+    const traceback = Array.isArray(output.traceback)
+      ? output.traceback.filter((line: unknown) => typeof line === 'string')
+      : [];
+    const tbText = stripAnsi(traceback.join('\n')).replace(/\s+$/, '');
+    if (tbText) {
+      return tbText;
+    }
+    const ename = typeof output.ename === 'string' ? output.ename : '';
+    const evalue = typeof output.evalue === 'string' ? output.evalue : '';
+    const summary = [ename, evalue].filter(Boolean).join(': ').trim();
+    return summary;
+  }
+
+  if (outputType === 'execute_result' || outputType === 'display_data' || outputType === 'update_display_data') {
+    const data = output.data && typeof output.data === 'object' ? output.data : null;
+    if (!data) {
+      return '';
+    }
+    const textPlain = coerceText((data as any)['text/plain']);
+    if (textPlain) {
+      const cleaned = stripAnsi(textPlain).replace(/\s+$/, '');
+      if (!cleaned) {
+        return '';
+      }
+      if (outputType === 'execute_result' && typeof output.execution_count === 'number') {
+        return `Out[${output.execution_count}]:\n${cleaned}`;
+      }
+      return cleaned;
+    }
+
+    const mimeTypes = Object.keys(data as any).filter(mime => mime && mime !== 'text/plain');
+    if (mimeTypes.length > 0) {
+      return `[non-text output omitted: ${mimeTypes.slice(0, 6).join(', ')}${mimeTypes.length > 6 ? ', ...' : ''}]`;
+    }
+    return '';
+  }
+
+  return '';
+}
+
+function summarizeJupyterOutputs(outputs: any[]): string {
+  if (!Array.isArray(outputs) || outputs.length === 0) {
+    return '';
+  }
+
+  let combined = '';
+  let appended = 0;
+  let truncated = false;
+
+  for (const output of outputs) {
+    if (appended >= ACTIVE_CELL_OUTPUT_MAX_ITEMS) {
+      truncated = true;
+      break;
+    }
+    const chunk = formatJupyterOutput(output);
+    if (!chunk) {
+      continue;
+    }
+    appended += 1;
+
+    const sep = combined ? '\n\n' : '';
+    const remaining = ACTIVE_CELL_OUTPUT_MAX_CHARS - combined.length - sep.length;
+    if (remaining <= 0) {
+      truncated = true;
+      break;
+    }
+
+    const slice = chunk.length > remaining ? chunk.slice(0, remaining) : chunk;
+    combined += sep + slice;
+    if (slice.length !== chunk.length) {
+      truncated = true;
+      break;
+    }
+  }
+
+  combined = combined.replace(/\s+$/, '');
+  if (!combined) {
+    return '';
+  }
+  if (truncated) {
+    combined += '\n\n... (truncated)';
+  }
+  return combined;
+}
+
+function getActiveCellOutput(notebooks: INotebookTracker): string {
+  const widget = notebooks.currentWidget;
+  if (!widget) {
+    return '';
+  }
+  const activeCell = widget.content.activeCell;
+  if (!activeCell) {
+    return '';
+  }
+
+  try {
+    const model: any = activeCell.model as any;
+    const cellType = typeof model?.type === 'string' ? model.type : '';
+    if (cellType && cellType !== 'code') {
+      return '';
+    }
+    const json = typeof model?.toJSON === 'function' ? model.toJSON() : null;
+    const outputs = json && Array.isArray((json as any).outputs) ? (json as any).outputs : [];
+    return summarizeJupyterOutputs(outputs);
+  } catch {
+    return '';
+  }
 }

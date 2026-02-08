@@ -4,14 +4,46 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+echo "[0/6] Checking Python/Jupyter prerequisites"
+
+if ! command -v python >/dev/null 2>&1; then
+  echo "ERROR: python not found on PATH"
+  exit 1
+fi
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "ERROR: node not found on PATH (required to build the front-end)"
+  exit 1
+fi
+
+# `jlpm` is shipped with the Python `jupyterlab` package. If this repo is run in a fresh env,
+# install JupyterLab first so both `jupyter` and `jlpm` become available.
+if ! python -c 'import jupyterlab' >/dev/null 2>&1; then
+  echo "JupyterLab not found in this Python environment. Installing (jupyterlab>=4,<5; jupyter_server>=2,<3)..."
+  python -m pip install -q "jupyterlab>=4,<5" "jupyter_server>=2,<3"
+fi
+
+JLPM="jlpm"
+if ! command -v jlpm >/dev/null 2>&1; then
+  # Fallback: some environments may not put console scripts on PATH immediately.
+  JLPM="python -m jupyterlab.jlpm"
+fi
+
+if ! command -v jupyter >/dev/null 2>&1; then
+  echo "ERROR: jupyter command not found (expected after installing jupyterlab)."
+  echo "Try: python -m pip install \"jupyterlab>=4,<5\""
+  exit 1
+fi
+
 echo "[1/6] Installing JS dependencies"
-jlpm install
+$JLPM install
 
 echo "[2/6] Building JupyterLab extension"
-jlpm run build
+$JLPM run build
 
 echo "[3/6] Installing Python package (editable)"
-python -m pip install -e "$ROOT_DIR"
+# For local dev runs, avoid re-resolving the whole environment (can downgrade unrelated packages).
+python -m pip install -e "$ROOT_DIR" --no-deps
 
 echo "[4/6] Enabling server extension"
 PREFIX="${CONDA_PREFIX:-$(python -c 'import sys; print(sys.prefix)')}"

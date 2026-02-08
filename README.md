@@ -91,6 +91,7 @@ jupyter lab
 3) Settings에서 아래 옵션을 조정할 수 있습니다.
 - Auto-save before send: 전송 전에 노트북을 자동 저장
 - Include active cell: 활성 셀 텍스트를 프롬프트에 포함
+- Include active cell output: 활성 셀 output(텍스트 위주)을 프롬프트에 포함
 - Model / Reasoning Effort / Permission(샌드박스)
 
 ## 설정(옵션)
