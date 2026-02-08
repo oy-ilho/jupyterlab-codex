@@ -39,6 +39,9 @@
   display: flex;
   flex-direction: column;
   height: 100%;
+
+  /* Space reserved for the input's top fade overlay so the last message isn't washed out. */
+  --cdx-chat-bottom-fade: 28px;
 }
 
 .jp-CodexChat-header {
@@ -527,13 +530,15 @@
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 12px;
+  /* Extra bottom padding keeps the last message out from under the input's fade overlay. */
+  padding: 12px 12px calc(12px + var(--cdx-chat-bottom-fade) + env(safe-area-inset-bottom, 0px));
   display: flex;
   flex-direction: column;
   /* Use a tight baseline gap; expand only for full chat bubbles below. */
   gap: 6px;
   overscroll-behavior: contain;
   scrollbar-gutter: stable both-edges;
+  scroll-padding-bottom: calc(12px + var(--cdx-chat-bottom-fade) + env(safe-area-inset-bottom, 0px));
 }
 
 .jp-CodexChat-user,
@@ -801,8 +806,8 @@
   position: absolute;
   left: 0;
   right: 0;
-  top: -28px;
-  height: 28px;
+  top: calc(-1 * var(--cdx-chat-bottom-fade));
+  height: var(--cdx-chat-bottom-fade);
   background: linear-gradient(
     to bottom,
     color-mix(in srgb, var(--cdx-bg) 0%, transparent),
