@@ -2,7 +2,10 @@ import asyncio
 import json
 import os
 import re
+import time
 import uuid
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict
 
 from tornado.websocket import WebSocketHandler
@@ -23,6 +26,7 @@ class CodexWSHandler(WebSocketHandler):
 
     def open(self):
         self.write_message(json.dumps({"type": "status", "state": "ready"}))
+        self._send_rate_limits_snapshot()
 
     async def on_message(self, message: str):
         try:
@@ -47,6 +51,10 @@ class CodexWSHandler(WebSocketHandler):
 
         if msg_type == "end_session":
             await self._handle_end_session(payload)
+            return
+
+        if msg_type == "refresh_rate_limits":
+            self._send_rate_limits_snapshot(force=True)
             return
 
         self.write_message(json.dumps({"type": "error", "message": "Unknown message type"}))
@@ -236,6 +244,9 @@ class CodexWSHandler(WebSocketHandler):
                     )
                 )
             finally:
+                # Rate limits are recorded by the Codex Desktop app/CLI in ~/.codex/sessions/*.
+                # Reading the latest snapshot here lets the UI surface "Session" / "Weekly" usage.
+                self._send_rate_limits_snapshot()
                 self._active_runs.pop(run_id, None)
 
         task = asyncio.create_task(_run())
@@ -244,6 +255,18 @@ class CodexWSHandler(WebSocketHandler):
             "sessionId": session_id,
             "notebookPath": notebook_path,
         }
+
+    def _send_rate_limits_snapshot(self, force: bool = False) -> None:
+        try:
+            snapshot = load_latest_rate_limits(force=force)
+        except Exception:  # pragma: no cover - best-effort telemetry
+            snapshot = None
+
+        try:
+            self.write_message(json.dumps({"type": "rate_limits", "snapshot": snapshot}))
+        except Exception:
+            # Socket may already be closed; ignore.
+            return
 
     async def _handle_cancel(self, payload: Dict[str, Any]):
         run_id = payload.get("runId")
@@ -299,6 +322,178 @@ class CodexWSHandler(WebSocketHandler):
             return os.path.abspath(os.path.join(root_dir, normalized))
 
         return ""
+
+
+_RATE_LIMITS_CACHE_TTL_SECONDS = 30.0
+_RATE_LIMITS_CACHE: Dict[str, Any] = {"fetched_at": 0.0, "snapshot": None}
+
+
+def load_latest_rate_limits(force: bool = False) -> Dict[str, Any] | None:
+    """
+    Best-effort lookup of the latest Codex account rate limits ("Session" / "Weekly").
+
+    The Codex CLI/Desktop app persists rich JSONL session logs under ~/.codex/sessions.
+    These logs include `token_count` events with `rate_limits` fields that expose:
+    - primary window (typically 5h / 300 mins)
+    - secondary window (typically 7d / 10080 mins)
+    """
+    now = time.time()
+    if (
+        not force
+        and isinstance(_RATE_LIMITS_CACHE.get("fetched_at"), (int, float))
+        and now - float(_RATE_LIMITS_CACHE["fetched_at"]) < _RATE_LIMITS_CACHE_TTL_SECONDS
+    ):
+        return _RATE_LIMITS_CACHE.get("snapshot")
+
+    snapshot = _scan_latest_rate_limits()
+    _RATE_LIMITS_CACHE["fetched_at"] = now
+    _RATE_LIMITS_CACHE["snapshot"] = snapshot
+    return snapshot
+
+
+def _scan_latest_rate_limits() -> Dict[str, Any] | None:
+    base = Path(os.path.expanduser("~")) / ".codex" / "sessions"
+    if not base.is_dir():
+        return None
+
+    candidates: list[tuple[float, Path]] = []
+    for path in base.rglob("*.jsonl"):
+        try:
+            candidates.append((path.stat().st_mtime, path))
+        except OSError:
+            continue
+    candidates.sort(key=lambda item: item[0], reverse=True)
+
+    # Most recent sessions tend to have the freshest snapshot. Limit work to a small set.
+    for _mtime, path in candidates[:25]:
+        snapshot = _extract_rate_limits_from_session_file(path)
+        if snapshot:
+            return snapshot
+
+    return None
+
+
+def _extract_rate_limits_from_session_file(path: Path) -> Dict[str, Any] | None:
+    # Read the tail only; large sessions can be tens of MBs.
+    tail = _read_file_tail(path, max_bytes=1024 * 1024)
+    if not tail:
+        return None
+
+    lines = tail.splitlines()
+    for line in reversed(lines):
+        line = line.strip()
+        if not line or ("rate_limits" not in line and "rateLimits" not in line):
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+        snapshot = _extract_rate_limits_from_session_event(obj)
+        if snapshot:
+            return snapshot
+
+    return None
+
+
+def _read_file_tail(path: Path, max_bytes: int) -> str:
+    try:
+        with path.open("rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            start = max(0, size - max_bytes)
+            f.seek(start, os.SEEK_SET)
+            data = f.read()
+    except OSError:
+        return ""
+    return data.decode("utf-8", errors="replace")
+
+
+def _extract_rate_limits_from_session_event(obj: Dict[str, Any]) -> Dict[str, Any] | None:
+    if obj.get("type") != "event_msg":
+        return None
+    payload = obj.get("payload")
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("type") != "token_count":
+        return None
+
+    rl = payload.get("rate_limits")
+    if not isinstance(rl, dict):
+        rl = payload.get("rateLimits")
+    if not isinstance(rl, dict):
+        return None
+
+    primary = rl.get("primary")
+    secondary = rl.get("secondary")
+    if not isinstance(primary, dict) or not isinstance(secondary, dict):
+        return None
+
+    updated_at = obj.get("timestamp")
+    if not isinstance(updated_at, str) or not updated_at.strip():
+        updated_at = None
+
+    return {
+        "updatedAt": _normalize_iso8601(updated_at) if updated_at else None,
+        "primary": _coerce_rate_limit_window(primary),
+        "secondary": _coerce_rate_limit_window(secondary),
+    }
+
+
+def _coerce_rate_limit_window(window: Dict[str, Any]) -> Dict[str, Any]:
+    used = _coerce_number(_pick(window, "used_percent", "usedPercent"))
+    window_mins = _coerce_int(
+        _pick(window, "window_minutes", "windowDurationMins", "window_duration_mins")
+    )
+    resets_at = _coerce_int(_pick(window, "resets_at", "resetsAt"))
+    return {"usedPercent": used, "windowMinutes": window_mins, "resetsAt": resets_at}
+
+
+def _pick(d: Dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in d:
+            return d.get(key)
+    return None
+
+
+def _coerce_number(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)) and value == value:
+        return float(value)
+    return None
+
+
+def _coerce_int(value: Any) -> int | None:
+    num = _coerce_number(value)
+    if num is None:
+        return None
+    try:
+        return int(num)
+    except Exception:
+        return None
+
+
+def _normalize_iso8601(value: str) -> str:
+    """
+    Ensure timestamps are parseable by JS `Date.parse` across browsers.
+    """
+    raw = (value or "").strip()
+    if not raw:
+        return raw
+
+    # Already well-formed with timezone
+    if raw.endswith("Z") or "+" in raw or raw.endswith("z"):
+        return raw.replace("z", "Z")
+
+    # If it looks like a naive timestamp, assume UTC.
+    try:
+        dt = datetime.fromisoformat(raw)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    except Exception:
+        return raw
 
 
 def event_to_text(event: Dict[str, Any]) -> str:

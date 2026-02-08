@@ -1,4 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { ReactWidget, Dialog, showDialog } from '@jupyterlab/apputils';
 import { INotebookTracker } from '@jupyterlab/notebook';
 import { ServerConnection } from '@jupyterlab/services';
@@ -154,6 +155,136 @@ function ReasoningEffortIcon(
   );
 }
 
+function BatteryIcon(
+  props: React.SVGProps<SVGSVGElement> & { level?: number | null }
+): JSX.Element {
+  const { level, ...svgProps } = props;
+  const clamped =
+    typeof level === 'number' && Number.isFinite(level) ? Math.min(1, Math.max(0, level)) : null;
+  const innerWidth = 14;
+  const fillWidth = clamped == null ? 0 : Math.max(0, Math.round(innerWidth * clamped));
+  const dashed = clamped == null;
+
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" {...svgProps}>
+      <rect
+        x="2"
+        y="7"
+        width="18"
+        height="10"
+        rx="2.5"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeDasharray={dashed ? '4 2' : undefined}
+      />
+      <rect x="21" y="10" width="2" height="4" rx="1" fill="currentColor" opacity={0.85} />
+      {fillWidth > 0 && (
+        <rect x="4" y="9" width={fillWidth} height="6" rx="1.4" fill="currentColor" opacity={0.9} />
+      )}
+    </svg>
+  );
+}
+
+function PortalMenu(props: {
+  open: boolean;
+  anchorRef: React.RefObject<HTMLElement>;
+  popoverRef: React.RefObject<HTMLDivElement>;
+  className?: string;
+  role?: 'dialog' | 'menu';
+  align?: 'left' | 'right';
+  ariaLabel?: string;
+  onMouseEnter?: () => void;
+  onMouseLeave?: () => void;
+  children: React.ReactNode;
+}): JSX.Element | null {
+  const {
+    open,
+    anchorRef,
+    popoverRef,
+    className,
+    role = 'dialog',
+    align = 'left',
+    ariaLabel,
+    onMouseEnter,
+    onMouseLeave,
+    children
+  } = props;
+  const [style, setStyle] = useState<React.CSSProperties>(() => ({
+    left: 0,
+    top: 0,
+    visibility: 'hidden'
+  }));
+
+  useLayoutEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    const update = () => {
+      const anchor = anchorRef.current;
+      const popover = popoverRef.current;
+      if (!anchor || !popover) {
+        return;
+      }
+
+      const margin = 8;
+      const offset = 10;
+      const viewportW = window.innerWidth;
+      const viewportH = window.innerHeight;
+      const anchorRect = anchor.getBoundingClientRect();
+      const popRect = popover.getBoundingClientRect();
+
+      // Default: above, aligned to the anchor.
+      let left = align === 'right' ? anchorRect.right - popRect.width : anchorRect.left;
+      left = clampNumber(left, margin, Math.max(margin, viewportW - popRect.width - margin));
+
+      let top = anchorRect.top - offset - popRect.height;
+      const belowTop = anchorRect.bottom + offset;
+      if (top < margin && belowTop + popRect.height + margin <= viewportH) {
+        top = belowTop;
+      }
+      top = clampNumber(top, margin, Math.max(margin, viewportH - popRect.height - margin));
+
+      setStyle({
+        left: Math.round(left),
+        top: Math.round(top),
+        visibility: 'visible'
+      });
+    };
+
+    const raf = window.requestAnimationFrame(update);
+    const onResize = () => update();
+    const onScroll = () => update();
+    window.addEventListener('resize', onResize);
+    // Capture scroll events from any scroll container.
+    window.addEventListener('scroll', onScroll, true);
+    return () => {
+      window.cancelAnimationFrame(raf);
+      window.removeEventListener('resize', onResize);
+      window.removeEventListener('scroll', onScroll, true);
+    };
+  }, [open, anchorRef, popoverRef]);
+
+  if (!open) {
+    return null;
+  }
+
+  return createPortal(
+    <div
+      ref={popoverRef}
+      className={`jp-CodexMenu jp-CodexMenuPortal${className ? ` ${className}` : ''}`}
+      role={role}
+      aria-label={ariaLabel}
+      style={style}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+    >
+      {children}
+    </div>,
+    document.body
+  );
+}
+
 function CheckIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
   return (
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" {...props}>
@@ -236,6 +367,18 @@ type ChatMessage = {
 
 type RunState = 'ready' | 'running';
 type PanelStatus = 'disconnected' | RunState;
+
+type RateLimitWindowSnapshot = {
+  usedPercent: number | null;
+  windowMinutes: number | null;
+  resetsAt: number | null;
+};
+
+type CodexRateLimitsSnapshot = {
+  updatedAt: string | null;
+  primary: RateLimitWindowSnapshot | null;
+  secondary: RateLimitWindowSnapshot | null;
+};
 
 type CodexChatProps = {
   notebooks: INotebookTracker;
@@ -403,6 +546,76 @@ function safePreview(value: unknown, max = 220): string {
   } catch {
     return '';
   }
+}
+
+function coerceRateLimitWindow(raw: any): RateLimitWindowSnapshot | null {
+  if (!raw || typeof raw !== 'object') {
+    return null;
+  }
+  const usedPercent = typeof raw.usedPercent === 'number' && Number.isFinite(raw.usedPercent) ? raw.usedPercent : null;
+  const windowMinutes =
+    typeof raw.windowMinutes === 'number' && Number.isFinite(raw.windowMinutes) ? Math.round(raw.windowMinutes) : null;
+  const resetsAt = typeof raw.resetsAt === 'number' && Number.isFinite(raw.resetsAt) ? Math.round(raw.resetsAt) : null;
+  return { usedPercent, windowMinutes, resetsAt };
+}
+
+function coerceRateLimitsSnapshot(raw: any): CodexRateLimitsSnapshot | null {
+  if (!raw || typeof raw !== 'object') {
+    return null;
+  }
+  const updatedAt = typeof raw.updatedAt === 'string' && raw.updatedAt.trim() ? raw.updatedAt : null;
+  return {
+    updatedAt,
+    primary: coerceRateLimitWindow(raw.primary),
+    secondary: coerceRateLimitWindow(raw.secondary)
+  };
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function percentLeftFromUsed(usedPercent: number | null): number | null {
+  if (typeof usedPercent !== 'number' || !Number.isFinite(usedPercent)) {
+    return null;
+  }
+  return Math.round(clampNumber(100 - usedPercent, 0, 100));
+}
+
+function safeParseDateMs(value: string | null): number | null {
+  if (!value) {
+    return null;
+  }
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function formatDurationShort(ms: number): string {
+  if (!Number.isFinite(ms)) {
+    return '0m';
+  }
+  const totalMinutes = Math.max(0, Math.floor(ms / 60000));
+  const days = Math.floor(totalMinutes / (60 * 24));
+  const hours = Math.floor((totalMinutes % (60 * 24)) / 60);
+  const minutes = totalMinutes % 60;
+  if (days > 0) {
+    return `${days}d ${hours}h`;
+  }
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`;
+  }
+  return `${minutes}m`;
+}
+
+function formatResetsIn(resetsAtSec: number | null, nowMs: number): string {
+  if (typeof resetsAtSec !== 'number' || !Number.isFinite(resetsAtSec)) {
+    return 'Unknown';
+  }
+  const diffMs = resetsAtSec * 1000 - nowMs;
+  if (diffMs <= 0) {
+    return 'Overdue';
+  }
+  return formatDurationShort(diffMs);
 }
 
 function summarizeCodexEvent(payload: any): string {
@@ -601,17 +814,22 @@ function renderMarkdownToSafeHtml(markdown: string): string {
 }
 
 function StatusPill(props: { status: PanelStatus }): JSX.Element {
+  // Visual: dot only. Keep an accessible label + tooltip for status.
   const label =
     props.status === 'disconnected' ? 'Disconnected' : props.status === 'running' ? 'Running' : 'Ready';
   return (
-    <span className={`jp-CodexStatusPill jp-CodexStatusPill-${props.status}`}>
+    <span
+      className={`jp-CodexStatusPill jp-CodexStatusPill-${props.status}`}
+      role="img"
+      aria-label={label}
+      title={label}
+    >
       <span className="jp-CodexStatusPill-dot" aria-hidden="true" />
-      {label}
     </span>
   );
 }
 
-function CodeBlock(props: { lang: string; code: string }): JSX.Element {
+function CodeBlock(props: { lang: string; code: string; canCopy: boolean }): JSX.Element {
   const [copied, setCopied] = useState(false);
 
   async function onCopy(): Promise<void> {
@@ -629,9 +847,14 @@ function CodeBlock(props: { lang: string; code: string }): JSX.Element {
         <span className="jp-CodexCodeBlockMeta">
           {props.lang ? <span className="jp-CodexCodeBlockLang">{props.lang}</span> : <span />}
         </span>
-        <button className="jp-CodexBtn jp-CodexBtn-ghost jp-CodexBtn-xs" onClick={() => void onCopy()}>
-          {copied ? 'Copied' : 'Copy'}
-        </button>
+        {props.canCopy && (
+          <button
+            className="jp-CodexBtn jp-CodexBtn-ghost jp-CodexBtn-xs jp-CodexCodeBlockCopyBtn"
+            onClick={() => void onCopy()}
+          >
+            {copied ? 'Copied' : 'Copy'}
+          </button>
+        )}
       </div>
       <pre className="jp-CodexCodeBlock">
         <code>{props.code}</code>
@@ -640,13 +863,13 @@ function CodeBlock(props: { lang: string; code: string }): JSX.Element {
   );
 }
 
-function MessageText(props: { text: string }): JSX.Element {
+function MessageText(props: { text: string; canCopyCode?: boolean }): JSX.Element {
   const blocks = splitFencedCodeBlocks(props.text);
   return (
     <div className="jp-CodexChat-text">
       {blocks.map((block, idx) => {
         if (block.kind === 'code') {
-          return <CodeBlock key={idx} lang={block.lang} code={block.code} />;
+          return <CodeBlock key={idx} lang={block.lang} code={block.code} canCopy={Boolean(props.canCopyCode)} />;
         }
         const html = renderMarkdownToSafeHtml(block.text);
         return <div key={idx} className="jp-CodexMarkdown" dangerouslySetInnerHTML={{ __html: html }} />;
@@ -686,14 +909,26 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [reasoningMenuOpen, setReasoningMenuOpen] = useState(false);
+  const [usagePopoverOpen, setUsagePopoverOpen] = useState(false);
+  const [rateLimits, setRateLimits] = useState<CodexRateLimitsSnapshot | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const runToPathRef = useRef<Map<string, string>>(new Map());
+  const lastRateLimitsRefreshRef = useRef<number>(0);
+  const usageHoverCloseTimerRef = useRef<number | null>(null);
   const pendingRefreshPathsRef = useRef<Set<string>>(new Set());
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
   const modelMenuWrapRef = useRef<HTMLDivElement | null>(null);
   const reasoningMenuWrapRef = useRef<HTMLDivElement | null>(null);
+  const usageMenuWrapRef = useRef<HTMLDivElement | null>(null);
+  const modelBtnRef = useRef<HTMLButtonElement>(null);
+  const modelPopoverRef = useRef<HTMLDivElement>(null);
+  const reasoningBtnRef = useRef<HTMLButtonElement>(null);
+  const reasoningPopoverRef = useRef<HTMLDivElement>(null);
+  const usageBtnRef = useRef<HTMLButtonElement>(null);
+  const usagePopoverRef = useRef<HTMLDivElement>(null);
   const customModelInputRef = useRef<HTMLInputElement | null>(null);
+  const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const selectedModel =
     modelOption === '__custom__'
       ? customModel.trim()
@@ -738,7 +973,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   }, [modelMenuOpen, modelOption]);
 
   useEffect(() => {
-    if (!modelMenuOpen && !reasoningMenuOpen) {
+    if (!modelMenuOpen && !reasoningMenuOpen && !usagePopoverOpen) {
       return;
     }
 
@@ -750,12 +985,17 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 
       const inModel = modelMenuWrapRef.current?.contains(target) ?? false;
       const inReasoning = reasoningMenuWrapRef.current?.contains(target) ?? false;
-      if (inModel || inReasoning) {
+      const inUsage = usageMenuWrapRef.current?.contains(target) ?? false;
+      const inModelPopover = modelPopoverRef.current?.contains(target) ?? false;
+      const inReasoningPopover = reasoningPopoverRef.current?.contains(target) ?? false;
+      const inUsagePopover = usagePopoverRef.current?.contains(target) ?? false;
+      if (inModel || inReasoning || inUsage || inModelPopover || inReasoningPopover || inUsagePopover) {
         return;
       }
 
       setModelMenuOpen(false);
       setReasoningMenuOpen(false);
+      setUsagePopoverOpen(false);
     };
 
     const onKeyDown = (event: KeyboardEvent) => {
@@ -765,6 +1005,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       event.preventDefault();
       setModelMenuOpen(false);
       setReasoningMenuOpen(false);
+      setUsagePopoverOpen(false);
     };
 
     window.addEventListener('pointerdown', onPointerDown, true);
@@ -773,7 +1014,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       window.removeEventListener('pointerdown', onPointerDown, true);
       window.removeEventListener('keydown', onKeyDown);
     };
-  }, [modelMenuOpen, reasoningMenuOpen]);
+  }, [modelMenuOpen, reasoningMenuOpen, usagePopoverOpen]);
 
   function replaceSessions(next: Map<string, NotebookSession>): void {
     sessionsRef.current = next;
@@ -802,6 +1043,50 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     next.set(normalizedPath, created);
     replaceSessions(next);
     return created;
+  }
+
+  function requestRateLimitsRefresh(force = false): void {
+    const socket = wsRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    const now = Date.now();
+    if (!force && now - lastRateLimitsRefreshRef.current < 15000) {
+      return;
+    }
+    lastRateLimitsRefreshRef.current = now;
+
+    socket.send(JSON.stringify({ type: 'refresh_rate_limits' }));
+  }
+
+  function cancelUsageHoverClose(): void {
+    const timer = usageHoverCloseTimerRef.current;
+    if (timer != null) {
+      window.clearTimeout(timer);
+      usageHoverCloseTimerRef.current = null;
+    }
+  }
+
+  function scheduleUsageHoverClose(): void {
+    cancelUsageHoverClose();
+    usageHoverCloseTimerRef.current = window.setTimeout(() => setUsagePopoverOpen(false), 160);
+  }
+
+  function openUsagePopover(): void {
+    cancelUsageHoverClose();
+    setUsagePopoverOpen(true);
+    setModelMenuOpen(false);
+    setReasoningMenuOpen(false);
+    requestRateLimitsRefresh();
+  }
+
+  function toggleUsagePopover(): void {
+    cancelUsageHoverClose();
+    setUsagePopoverOpen(open => !open);
+    setModelMenuOpen(false);
+    setReasoningMenuOpen(false);
+    requestRateLimitsRefresh();
   }
 
   function sendStartSession(session: NotebookSession, notebookPath: string): void {
@@ -1024,6 +1309,11 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       const runId = typeof msg.runId === 'string' ? msg.runId : '';
       const targetPath = resolveMessagePath(msg);
 
+      if (msg.type === 'rate_limits') {
+        setRateLimits(coerceRateLimitsSnapshot(msg.snapshot));
+        return;
+      }
+
       if (msg.type === 'status') {
         if (msg.state === 'running' && targetPath) {
           setSessionRunState(targetPath, 'running', runId || null);
@@ -1094,10 +1384,80 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     return () => window.cancelAnimationFrame(id);
   }, [isAtBottom, sessions, currentNotebookPath, socketConnected]);
 
-  function startNewThread(): void {
+  function autosizeComposerTextarea(el?: HTMLTextAreaElement | null): void {
+    const textarea = el ?? composerTextareaRef.current;
+    if (!textarea) {
+      return;
+    }
+
+    // Reset first so it can shrink as content is removed.
+    textarea.style.height = 'auto';
+
+    const cs = window.getComputedStyle(textarea);
+
+    // Prefer CSS-controlled min/max heights so the JS sizing stays consistent
+    // with the visual design (and any future CSS tweaks).
+    let minHeight = Number.parseFloat(cs.minHeight || '');
+    let maxHeight = Number.parseFloat(cs.maxHeight || '');
+
+    if (!Number.isFinite(minHeight) || minHeight <= 0) {
+      const fontSize = Number.parseFloat(cs.fontSize || '13');
+      let lineHeight = Number.parseFloat(cs.lineHeight || '');
+      if (!Number.isFinite(lineHeight)) {
+        lineHeight = fontSize * 1.35;
+      }
+      minHeight = lineHeight;
+    }
+
+    if (!Number.isFinite(maxHeight) || maxHeight <= 0) {
+      const fontSize = Number.parseFloat(cs.fontSize || '13');
+      let lineHeight = Number.parseFloat(cs.lineHeight || '');
+      if (!Number.isFinite(lineHeight)) {
+        lineHeight = fontSize * 1.35;
+      }
+      maxHeight = lineHeight * 3;
+    }
+
+    const scrollHeight = textarea.scrollHeight;
+    const isEmpty = textarea.value.length === 0;
+    const unclampedHeight = isEmpty ? minHeight : scrollHeight;
+    const nextHeight = Math.ceil(Math.min(Math.max(unclampedHeight, minHeight), maxHeight));
+
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY = scrollHeight > maxHeight + 1 ? 'auto' : 'hidden';
+  }
+
+  useEffect(() => {
+    // Defer to the next frame so layout reflects the latest value.
+    const id = window.requestAnimationFrame(() => autosizeComposerTextarea());
+    return () => window.cancelAnimationFrame(id);
+  }, [input]);
+
+  useEffect(() => {
+    const onResize = () => autosizeComposerTextarea();
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  async function startNewThread(): Promise<void> {
     const path = currentNotebookPathRef.current || '';
     if (!path) {
       return;
+    }
+
+    const existing = sessionsRef.current.get(path);
+    const hasConversation =
+      existing?.messages.some(msg => msg.role === 'user' || msg.role === 'assistant') ?? false;
+    if (hasConversation) {
+      const result = await showDialog({
+        title: '새 스레드를 만들까요?',
+        body:
+          '새 스레드를 만들면 현재 대화가 초기화되며, 이 패널에서는 기존 대화를 다시 볼 수 없습니다.\n계속할까요?',
+        buttons: [Dialog.cancelButton(), Dialog.okButton({ label: '새 스레드' })]
+      });
+      if (!result.button.accept) {
+        return;
+      }
     }
 
     const newSession = createSession(path, `새 스레드 시작: ${new Date().toLocaleTimeString()}`);
@@ -1206,19 +1566,40 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       : MODEL_OPTIONS.find(option => option.value === modelOption)?.label ?? 'Model';
   const selectedReasoningLabel =
     REASONING_OPTIONS.find(option => option.value === reasoningEffort)?.label ?? 'Reasoning';
+  const canStop = status === 'running' && Boolean(currentSession?.activeRunId);
+  const nowMs = Date.now();
+  const rateUpdatedAtMs = safeParseDateMs(rateLimits?.updatedAt ?? null);
+  const rateAgeMs = rateUpdatedAtMs == null ? null : nowMs - rateUpdatedAtMs;
+  const usageIsStale = rateAgeMs == null ? true : rateAgeMs > 10 * 60 * 1000;
+  const sessionLeftPercent = percentLeftFromUsed(rateLimits?.primary?.usedPercent ?? null);
+  const weeklyLeftPercent = percentLeftFromUsed(rateLimits?.secondary?.usedPercent ?? null);
+  const usageIsUnknown = rateUpdatedAtMs == null && sessionLeftPercent == null && weeklyLeftPercent == null;
+  const sessionResetsIn = formatResetsIn(rateLimits?.primary?.resetsAt ?? null, nowMs);
+  const weeklyResetsIn = formatResetsIn(rateLimits?.secondary?.resetsAt ?? null, nowMs);
+  const usageIsOverdue =
+    sessionResetsIn === 'Overdue' || weeklyResetsIn === 'Overdue' || (rateAgeMs != null && rateAgeMs > 60 * 60 * 1000);
+  const batteryLevel = sessionLeftPercent == null ? null : sessionLeftPercent / 100;
+  const usageUpdatedAgo = rateAgeMs == null ? 'Unknown' : `${formatDurationShort(rateAgeMs)} ago`;
+  const sessionWindowMinutes = rateLimits?.primary?.windowMinutes ?? null;
+  const weeklyWindowMinutes = rateLimits?.secondary?.windowMinutes ?? null;
+  const sessionWindowLabel = sessionWindowMinutes == null ? '' : `Window: ${Math.round(sessionWindowMinutes / 60)}h`;
+  const weeklyWindowLabel =
+    weeklyWindowMinutes == null ? '' : `Window: ${Math.round(weeklyWindowMinutes / (60 * 24))}d`;
 
   return (
     <div className="jp-CodexChat">
       <div className="jp-CodexChat-header">
         <div className="jp-CodexChat-header-top">
-          <StatusPill status={status} />
-          <span className="jp-CodexChat-notebook" title={currentNotebookPath || ''}>
-            {displayPath}
-          </span>
+          <div className="jp-CodexChat-header-left">
+            <StatusPill status={status} />
+            <span className="jp-CodexChat-notebook" title={currentNotebookPath || ''}>
+              {displayPath}
+            </span>
+          </div>
           <div className="jp-CodexChat-header-actions">
             <button
               type="button"
-              onClick={startNewThread}
+              onClick={() => void startNewThread()}
               className="jp-CodexHeaderBtn"
               disabled={!currentNotebookPath || status === 'running'}
               aria-label="New thread"
@@ -1226,21 +1607,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
             >
               <PlusIcon width={16} height={16} />
               <span className="jp-CodexHeaderBtn-label">New</span>
-            </button>
-            <button
-              type="button"
-              onClick={cancelRun}
-              className="jp-CodexHeaderBtn jp-CodexHeaderBtn-danger"
-              disabled={status !== 'running' || !currentSession?.activeRunId}
-              title={
-                currentSession?.activeRunId
-                  ? `runId: ${currentSession.activeRunId}`
-                  : 'Waiting for run id...'
-              }
-              aria-label="Stop run"
-            >
-              <StopIcon width={16} height={16} />
-              <span className="jp-CodexHeaderBtn-label">Stop</span>
             </button>
             <button
               type="button"
@@ -1309,15 +1675,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
           {messages.map((msg, idx) => (
             <div key={idx} className={`jp-CodexChat-message jp-CodexChat-${msg.role}`}>
               <div className="jp-CodexChat-role">{msg.role}</div>
-              <div className="jp-CodexChat-message-actions">
-                <button
-                  className="jp-CodexBtn jp-CodexBtn-ghost jp-CodexBtn-xs"
-                  onClick={() => void copyToClipboard(msg.text)}
-                >
-                  Copy
-                </button>
-              </div>
-              <MessageText text={msg.text} />
+              <MessageText text={msg.text} canCopyCode={msg.role === 'assistant'} />
             </div>
           ))}
 
@@ -1349,18 +1707,22 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       <div className="jp-CodexChat-input">
         <div className="jp-CodexComposer">
           <textarea
+            ref={composerTextareaRef}
             value={input}
-            onChange={e => setInput(e.currentTarget.value)}
+            onChange={e => {
+              setInput(e.currentTarget.value);
+              // Resize using the current target so typing feels immediate.
+              window.requestAnimationFrame(() => autosizeComposerTextarea(e.currentTarget));
+            }}
             placeholder={currentNotebookPath ? 'Ask Codex...' : 'Select a notebook first'}
-            rows={3}
-            disabled={!canSend}
+            rows={1}
             onKeyDown={e => {
               // Avoid interfering with IME composition (Korean/Japanese/etc.)
               const native = e.nativeEvent as unknown as { isComposing?: boolean; keyCode?: number };
               if (native.isComposing || native.keyCode === 229) {
                 return;
               }
-              if (e.key === 'Enter' && !e.shiftKey) {
+              if (e.key === 'Enter' && !e.shiftKey && canSend && input.trim()) {
                 e.preventDefault();
                 void sendMessage();
               }
@@ -1371,10 +1733,12 @@ function CodexChat(props: CodexChatProps): JSX.Element {
               <div className="jp-CodexMenuWrap jp-CodexModelWrap" ref={modelMenuWrapRef}>
                 <button
                   type="button"
+                  ref={modelBtnRef}
                   className={`jp-CodexModelBtn ${modelMenuOpen ? 'is-open' : ''}`}
                   onClick={() => {
                     setModelMenuOpen(open => !open);
                     setReasoningMenuOpen(false);
+                    setUsagePopoverOpen(false);
                   }}
                   disabled={status === 'running'}
                   aria-label={`Model: ${selectedModelLabel}`}
@@ -1385,62 +1749,68 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                   <span className="jp-CodexModelBtn-label">{selectedModelLabel}</span>
                   <ChevronDownIcon className="jp-CodexModelBtn-caret" width={14} height={14} />
                 </button>
+              </div>
+              <PortalMenu
+                open={modelMenuOpen}
+                anchorRef={modelBtnRef}
+                popoverRef={modelPopoverRef}
+                role="menu"
+                ariaLabel="Model"
+                align="left"
+              >
+                {MODEL_OPTIONS.map(option => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className={`jp-CodexMenuItem ${modelOption === option.value ? 'is-active' : ''}`}
+                    onClick={() => {
+                      setModelOption(option.value);
+                      if (option.value !== '__custom__') {
+                        setModelMenuOpen(false);
+                      }
+                    }}
+                  >
+                    <span className="jp-CodexMenuItemLabel">{option.label}</span>
+                    {modelOption === option.value && (
+                      <CheckIcon className="jp-CodexMenuCheck" width={16} height={16} />
+                    )}
+                  </button>
+                ))}
 
-                {modelMenuOpen && (
-                  <div className="jp-CodexMenu" role="menu" aria-label="Model">
-                    {MODEL_OPTIONS.map(option => (
-                      <button
-                        key={option.value}
-                        type="button"
-                        className={`jp-CodexMenuItem ${modelOption === option.value ? 'is-active' : ''}`}
-                        onClick={() => {
-                          setModelOption(option.value);
-                          if (option.value !== '__custom__') {
+                {modelOption === '__custom__' && (
+                  <>
+                    <div className="jp-CodexMenuDivider" role="separator" />
+                    <div className="jp-CodexMenuCustom">
+                      <div className="jp-CodexMenuCustomLabel">Custom model</div>
+                      <input
+                        ref={customModelInputRef}
+                        className="jp-CodexMenuInput"
+                        value={customModel}
+                        onChange={e => setCustomModel(e.currentTarget.value)}
+                        placeholder={DEFAULT_MODEL || 'gpt-5.3-codex'}
+                        disabled={status === 'running'}
+                        aria-label="Custom model"
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
                             setModelMenuOpen(false);
                           }
                         }}
-                      >
-                        <span className="jp-CodexMenuItemLabel">{option.label}</span>
-                        {modelOption === option.value && (
-                          <CheckIcon className="jp-CodexMenuCheck" width={16} height={16} />
-                        )}
-                      </button>
-                    ))}
-
-                    {modelOption === '__custom__' && (
-                      <>
-                        <div className="jp-CodexMenuDivider" role="separator" />
-                        <div className="jp-CodexMenuCustom">
-                          <div className="jp-CodexMenuCustomLabel">Custom model</div>
-                          <input
-                            ref={customModelInputRef}
-                            className="jp-CodexMenuInput"
-                            value={customModel}
-                            onChange={e => setCustomModel(e.currentTarget.value)}
-                            placeholder={DEFAULT_MODEL || 'gpt-5.3-codex'}
-                            disabled={status === 'running'}
-                            aria-label="Custom model"
-                            onKeyDown={e => {
-                              if (e.key === 'Enter') {
-                                e.preventDefault();
-                                setModelMenuOpen(false);
-                              }
-                            }}
-                          />
-                        </div>
-                      </>
-                    )}
-                  </div>
+                      />
+                    </div>
+                  </>
                 )}
-              </div>
+              </PortalMenu>
 
               <div className="jp-CodexMenuWrap" ref={reasoningMenuWrapRef}>
                 <button
                   type="button"
+                  ref={reasoningBtnRef}
                   className={`jp-CodexIconBtn ${reasoningMenuOpen ? 'is-open' : ''}`}
                   onClick={() => {
                     setReasoningMenuOpen(open => !open);
                     setModelMenuOpen(false);
+                    setUsagePopoverOpen(false);
                   }}
                   disabled={status === 'running'}
                   aria-label={`Reasoning: ${selectedReasoningLabel}`}
@@ -1450,47 +1820,165 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                 >
                   <ReasoningEffortIcon effort={reasoningEffort} width={18} height={18} />
                 </button>
+              </div>
+              <PortalMenu
+                open={reasoningMenuOpen}
+                anchorRef={reasoningBtnRef}
+                popoverRef={reasoningPopoverRef}
+                role="menu"
+                ariaLabel="Reasoning"
+                align="left"
+              >
+                {REASONING_OPTIONS.map(option => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className={`jp-CodexMenuItem ${reasoningEffort === option.value ? 'is-active' : ''}`}
+                    onClick={() => {
+                      setReasoningEffort(option.value as ReasoningOptionValue);
+                      setReasoningMenuOpen(false);
+                    }}
+                  >
+                    <span className="jp-CodexMenuItemLabel">{option.label}</span>
+                    {reasoningEffort === option.value && (
+                      <CheckIcon className="jp-CodexMenuCheck" width={16} height={16} />
+                    )}
+                  </button>
+                ))}
+              </PortalMenu>
 
-                {reasoningMenuOpen && (
-                  <div className="jp-CodexMenu" role="menu" aria-label="Reasoning">
-                    {REASONING_OPTIONS.map(option => (
-                      <button
-                        key={option.value}
-                        type="button"
-                        className={`jp-CodexMenuItem ${reasoningEffort === option.value ? 'is-active' : ''}`}
-                        onClick={() => {
-                          setReasoningEffort(option.value as ReasoningOptionValue);
-                          setReasoningMenuOpen(false);
-                        }}
-                      >
-                        <span className="jp-CodexMenuItemLabel">{option.label}</span>
-                        {reasoningEffort === option.value && (
-                          <CheckIcon className="jp-CodexMenuCheck" width={16} height={16} />
-                        )}
-                      </button>
-                    ))}
+              <div
+                className="jp-CodexMenuWrap"
+                ref={usageMenuWrapRef}
+                onMouseEnter={() => openUsagePopover()}
+                onMouseLeave={() => scheduleUsageHoverClose()}
+              >
+                <button
+                  type="button"
+                  className={`jp-CodexIconBtn jp-CodexUsageBtn${usagePopoverOpen ? ' is-open' : ''}${usageIsStale ? ' is-stale' : ''}${usageIsOverdue ? ' is-overdue' : ''}`}
+                  ref={usageBtnRef}
+                  onClick={() => toggleUsagePopover()}
+                  aria-label={
+                    sessionLeftPercent == null ? 'Codex usage' : `Codex usage: ${sessionLeftPercent}% left`
+                  }
+                  aria-haspopup="dialog"
+                  aria-expanded={usagePopoverOpen}
+                  title={
+                    sessionLeftPercent == null
+                      ? 'Codex usage: unknown'
+                      : `Codex usage: ${sessionLeftPercent}% left (resets in ${sessionResetsIn})`
+                  }
+                  onFocus={() => {
+                    openUsagePopover();
+                  }}
+                  onBlur={() => scheduleUsageHoverClose()}
+                >
+                  <BatteryIcon level={batteryLevel} width={18} height={18} />
+                </button>
+              </div>
+              <PortalMenu
+                open={usagePopoverOpen}
+                anchorRef={usageBtnRef}
+                popoverRef={usagePopoverRef}
+                className="jp-CodexUsagePopover"
+                ariaLabel="Codex usage"
+                role="dialog"
+                align="right"
+                onMouseEnter={() => cancelUsageHoverClose()}
+                onMouseLeave={() => scheduleUsageHoverClose()}
+              >
+                {(usageIsOverdue || usageIsStale) && (
+                  <div
+                    className={`jp-CodexUsageNotice${usageIsOverdue ? ' is-overdue' : usageIsStale ? ' is-stale' : ''}`}
+                  >
+                    <div className="jp-CodexUsageNoticeTitle">
+                      {usageIsUnknown
+                        ? 'Usage unavailable'
+                        : usageIsOverdue
+                          ? 'Overdue usage snapshot'
+                          : 'Stale usage snapshot'}
+                    </div>
+                    <div className="jp-CodexUsageNoticeBody">
+                      {usageIsUnknown
+                        ? 'Run Codex once to fetch usage limits.'
+                        : 'Run Codex again to refresh these numbers.'}
+                    </div>
                   </div>
                 )}
-              </div>
+
+                <div className="jp-CodexUsageSection">
+                  <div className="jp-CodexUsageSectionTop">
+                    <div className="jp-CodexUsageSectionTitle">Session</div>
+                    <div className="jp-CodexUsageSectionReset">Resets in {sessionResetsIn}</div>
+                  </div>
+                  <div className="jp-CodexUsageBar">
+                    <div
+                      className={`jp-CodexUsageBarFill${usageIsStale ? ' is-stale' : ''}`}
+                      style={{ width: `${sessionLeftPercent ?? 0}%` }}
+                    />
+                  </div>
+                  <div className="jp-CodexUsageMeta">
+                    <div className="jp-CodexUsageMetaLeft">
+                      {sessionLeftPercent == null ? '--% left' : `${sessionLeftPercent}% left`}
+                    </div>
+                    <div className="jp-CodexUsageMetaRight">{sessionWindowLabel}</div>
+                  </div>
+                </div>
+
+                <div className="jp-CodexMenuDivider" role="separator" />
+
+                <div className="jp-CodexUsageSection">
+                  <div className="jp-CodexUsageSectionTop">
+                    <div className="jp-CodexUsageSectionTitle">Weekly</div>
+                    <div className="jp-CodexUsageSectionReset">Resets in {weeklyResetsIn}</div>
+                  </div>
+                  <div className="jp-CodexUsageBar">
+                    <div
+                      className={`jp-CodexUsageBarFill${usageIsStale ? ' is-stale' : ''}`}
+                      style={{ width: `${weeklyLeftPercent ?? 0}%` }}
+                    />
+                  </div>
+                  <div className="jp-CodexUsageMeta">
+                    <div className="jp-CodexUsageMetaLeft">
+                      {weeklyLeftPercent == null ? '--% left' : `${weeklyLeftPercent}% left`}
+                    </div>
+                    <div className="jp-CodexUsageMetaRight">{weeklyWindowLabel}</div>
+                  </div>
+                </div>
+
+                <div className="jp-CodexUsageFooter">Last updated: {usageUpdatedAgo}</div>
+              </PortalMenu>
             </div>
 
             <div className="jp-CodexComposer-toolbarRight">
               <div className="jp-CodexComposer-hint">Enter to send, Shift+Enter for newline</div>
               <button
                 type="button"
-                className="jp-CodexSendBtn"
-                onClick={() => void sendMessage()}
-                disabled={!canSend || !input.trim()}
-                aria-label="Send"
+                className={`jp-CodexSendBtn${status === 'running' ? ' is-stop' : ''}`}
+                onClick={() => {
+                  if (status === 'running') {
+                    cancelRun();
+                    return;
+                  }
+                  void sendMessage();
+                }}
+                disabled={status === 'running' ? !canStop : !canSend || !input.trim()}
+                aria-label={status === 'running' ? 'Stop run' : 'Send'}
                 title={
                   status === 'running'
-                    ? 'Sending...'
+                    ? currentSession?.activeRunId
+                      ? `runId: ${currentSession.activeRunId}`
+                      : 'Waiting for run id...'
                     : status === 'disconnected'
                       ? 'Connecting...'
                       : 'Send'
                 }
               >
-                <ArrowUpIcon width={18} height={18} />
+                {status === 'running' ? (
+                  <StopIcon width={18} height={18} />
+                ) : (
+                  <ArrowUpIcon width={18} height={18} />
+                )}
               </button>
             </div>
           </div>

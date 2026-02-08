@@ -52,24 +52,20 @@
 }
 
 .jp-CodexChat-header-top {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  grid-template-areas: "status notebook actions";
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.jp-CodexChat-header-left {
+  min-width: 0;
+  display: inline-flex;
   align-items: center;
   gap: 8px;
 }
 
-.jp-CodexChat-header-top .jp-CodexStatusPill {
-  grid-area: status;
-}
-
-.jp-CodexChat-header-top .jp-CodexChat-notebook {
-  grid-area: notebook;
-  min-width: 0;
-}
-
 .jp-CodexChat-header-actions {
-  grid-area: actions;
   justify-self: end;
   display: flex;
   align-items: center;
@@ -88,12 +84,7 @@
   }
 
   .jp-CodexChat-header-top {
-    grid-template-columns: 1fr auto;
-    grid-template-areas:
-      "status actions"
-      "notebook notebook";
     gap: 8px;
-    align-items: start;
   }
 
   .jp-CodexChat-header-actions {
@@ -120,14 +111,14 @@
 }
 
 .jp-CodexChat-notebook {
-  flex: 1;
+  flex: 0 1 auto;
   min-width: 0;
-  height: 32px;
-  display: flex;
+  height: auto;
+  display: inline-flex;
   align-items: center;
-  padding: 0 10px;
-  border-radius: 10px;
-  border: 1px solid transparent;
+  padding: 0;
+  border-radius: 0;
+  border: none;
   background: transparent;
   font-size: 13px;
   font-weight: 650;
@@ -135,11 +126,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.jp-CodexChat-notebook:hover {
-  background: var(--cdx-surface-2);
-  border-color: var(--cdx-border);
 }
 
 .jp-CodexHeaderBtn {
@@ -317,16 +303,13 @@
 .jp-CodexStatusPill {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  height: 32px;
-  padding: 0 10px;
-  border-radius: 10px;
-  border: 1px solid var(--cdx-border);
-  background: var(--cdx-surface-2);
-  font-size: 12px;
-  font-weight: 650;
-  color: var(--cdx-muted);
-  white-space: nowrap;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border-radius: 999px;
+  border: none;
+  background: transparent;
 }
 
 .jp-CodexStatusPill-dot {
@@ -423,18 +406,6 @@
   letter-spacing: 0.02em;
   color: var(--cdx-muted);
   margin-bottom: 6px;
-}
-
-.jp-CodexChat-message-actions {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  opacity: 0;
-  transition: opacity 140ms ease;
-}
-
-.jp-CodexChat-message:hover .jp-CodexChat-message-actions {
-  opacity: 1;
 }
 
 .jp-CodexChat-text {
@@ -561,6 +532,18 @@
   color: var(--cdx-text);
 }
 
+.jp-CodexCodeBlockCopyBtn {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 140ms ease;
+}
+
+.jp-CodexCodeBlockWrap:hover .jp-CodexCodeBlockCopyBtn,
+.jp-CodexCodeBlockWrap:focus-within .jp-CodexCodeBlockCopyBtn {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 .jp-CodexChat-input {
   border-top: 1px solid var(--cdx-border);
   padding: 10px;
@@ -585,17 +568,19 @@
 
 .jp-CodexComposer textarea {
   width: 100%;
+  box-sizing: border-box;
   resize: none;
-  min-height: 72px;
-  max-height: 280px;
+  min-height: calc(1.55em + 12px);
+  max-height: calc(1.55em * 3 + 12px);
   border: 0;
   border-radius: 14px;
-  padding: 10px 10px 4px;
+  padding: 6px 10px;
   font-size: 13px;
   line-height: 1.55;
   background: transparent;
   color: var(--cdx-text);
   outline: none;
+  overflow-y: hidden;
 }
 
 .jp-CodexComposer textarea::placeholder {
@@ -883,6 +868,170 @@
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--cdx-accent) 18%, transparent);
 }
 
+.jp-CodexMenuPortal {
+  position: fixed;
+  bottom: auto;
+  right: auto;
+  z-index: 10000;
+  max-width: min(360px, calc(100vw - 24px));
+
+  /* Portal menus live outside `.jp-CodexPanel`, so they must re-declare these CSS vars. */
+  --cdx-bg: var(--jp-layout-color1, #ffffff);
+  --cdx-surface: var(--jp-layout-color0, #ffffff);
+  --cdx-surface-2: var(--jp-layout-color2, #f3f4f6);
+  --cdx-border: var(--jp-border-color2, rgba(148, 163, 184, 0.35));
+  --cdx-text: var(--jp-ui-font-color0, #0f172a);
+  --cdx-muted: var(--jp-ui-font-color2, #64748b);
+  --cdx-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+
+  --cdx-accent: var(--jupyterlab-codex-accent, #10a37f);
+  --cdx-good: var(--jp-success-color1, #22c55e);
+  --cdx-warn: var(--jp-warn-color1, #f97316);
+  --cdx-bad: var(--jp-error-color1, #ef4444);
+
+  --cdx-radius: 14px;
+  --cdx-radius-sm: 10px;
+
+  font-family: var(
+    --jp-ui-font-family,
+    system-ui,
+    -apple-system,
+    Segoe UI,
+    Roboto,
+    Helvetica,
+    Arial,
+    sans-serif
+  );
+  color: var(--cdx-text);
+}
+
+.jp-CodexUsageBtn {
+  position: relative;
+}
+
+.jp-CodexUsageBtn.is-stale:not(:disabled),
+.jp-CodexUsageBtn.is-stale:hover:not(:disabled),
+.jp-CodexUsageBtn.is-stale.is-open:not(:disabled) {
+  opacity: 0.72;
+  color: color-mix(in srgb, var(--cdx-muted) 85%, var(--cdx-border));
+}
+
+.jp-CodexUsageBtn.is-overdue:not(:disabled),
+.jp-CodexUsageBtn.is-overdue:hover:not(:disabled),
+.jp-CodexUsageBtn.is-overdue.is-open:not(:disabled) {
+  border-color: color-mix(in srgb, var(--cdx-warn) 40%, var(--cdx-border));
+}
+
+.jp-CodexUsagePopover {
+  min-width: 0;
+  width: min(300px, calc(100vw - 24px));
+  max-width: min(320px, calc(100vw - 24px));
+  padding: 8px;
+}
+
+.jp-CodexUsageNotice {
+  margin: 2px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--cdx-border) 85%, transparent);
+  background: color-mix(in srgb, var(--cdx-surface-2) 85%, transparent);
+  color: var(--cdx-muted);
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.jp-CodexUsageNotice.is-stale {
+  border-color: color-mix(in srgb, var(--cdx-warn) 25%, var(--cdx-border));
+}
+
+.jp-CodexUsageNotice.is-overdue {
+  border-color: color-mix(in srgb, var(--cdx-warn) 55%, var(--cdx-border));
+  background: color-mix(in srgb, var(--cdx-warn) 10%, var(--cdx-surface));
+  color: color-mix(in srgb, var(--cdx-warn) 75%, var(--cdx-text));
+}
+
+.jp-CodexUsageNoticeTitle {
+  font-weight: 800;
+  color: var(--cdx-text);
+}
+
+.jp-CodexUsageNotice.is-overdue .jp-CodexUsageNoticeTitle {
+  color: color-mix(in srgb, var(--cdx-warn) 85%, var(--cdx-text));
+}
+
+.jp-CodexUsageNoticeBody {
+  margin-top: 2px;
+}
+
+.jp-CodexUsageSection {
+  padding: 6px;
+  display: grid;
+  gap: 6px;
+}
+
+.jp-CodexUsageSectionTop {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.jp-CodexUsageSectionTitle {
+  font-size: 12px;
+  font-weight: 750;
+  color: var(--cdx-text);
+}
+
+.jp-CodexUsageSectionReset {
+  font-size: 11px;
+  color: var(--cdx-muted);
+  white-space: nowrap;
+}
+
+.jp-CodexUsageBar {
+  height: 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--cdx-border) 80%, transparent);
+  overflow: hidden;
+}
+
+.jp-CodexUsageBarFill {
+  height: 100%;
+  width: 0%;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--cdx-accent) 70%, var(--cdx-good));
+  transition: width 160ms ease;
+}
+
+.jp-CodexUsageBarFill.is-stale {
+  background: color-mix(in srgb, var(--cdx-muted) 65%, var(--cdx-border));
+}
+
+.jp-CodexUsageMeta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--cdx-muted);
+  font-size: 11px;
+}
+
+.jp-CodexUsageMetaLeft {
+  font-weight: 750;
+}
+
+.jp-CodexUsageMetaRight {
+  opacity: 0.9;
+  white-space: nowrap;
+}
+
+.jp-CodexUsageFooter {
+  padding: 4px 10px 2px;
+  font-size: 11px;
+  color: var(--cdx-muted);
+}
+
 .jp-CodexComposerSelectWrap {
   position: relative;
   display: inline-flex;
@@ -982,6 +1131,21 @@
 .jp-CodexSendBtn:disabled {
   cursor: not-allowed;
   opacity: 0.6;
+}
+
+.jp-CodexSendBtn.is-stop:not(:disabled) {
+  border-color: color-mix(in srgb, var(--cdx-bad) 70%, var(--cdx-border));
+  background: color-mix(in srgb, var(--cdx-bad) 92%, #000000);
+  color: #ffffff;
+}
+
+.jp-CodexSendBtn.is-stop:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--cdx-bad) 80%, var(--cdx-border));
+  background: color-mix(in srgb, var(--cdx-bad) 96%, #000000);
+}
+
+.jp-CodexSendBtn.is-stop:active:not(:disabled) {
+  background: color-mix(in srgb, var(--cdx-bad) 90%, #000000);
 }
 
 .jp-CodexBtn {
