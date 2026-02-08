@@ -1476,6 +1476,22 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 
       const messages = session.messages;
 
+      // Avoid noisy duplicates like repeated "Reasoning step" lines.
+      if (entry.category === 'reasoning') {
+        const last = messages[messages.length - 1];
+        if (last && last.kind === 'activity') {
+          const previousItem = last.item;
+          if (
+            previousItem.category === entry.category &&
+            previousItem.phase === entry.phase &&
+            previousItem.title === entry.title &&
+            previousItem.detail === entry.detail
+          ) {
+            return prev;
+          }
+        }
+      }
+
       // If we have a corresponding "started" command, update it in place instead of appending.
       if (entry.category === 'command' && entry.phase === 'completed') {
         const key = extractCommandKey(entry.detail);
@@ -1760,7 +1776,10 @@ function CodexChat(props: CodexChatProps): JSX.Element {
           return;
         }
         const summary = summarizeCodexEvent(payload);
-        appendActivityItem(targetPath, summary.activity);
+        // "Reasoning" events are metadata-only and add noise; the loading indicator already conveys progress.
+        if (summary.activity.category !== 'reasoning') {
+          appendActivityItem(targetPath, summary.activity);
+        }
         setSessionProgress(targetPath, summary.progress, summary.progressKind);
         return;
       }
@@ -2193,29 +2212,57 @@ function CodexChat(props: CodexChatProps): JSX.Element {
             }
 
             const item = entry.item;
+            const trimmedDetail = (item.detail || '').trim();
+            const isExpandable = Boolean(trimmedDetail);
+            const activityClassName = `jp-CodexChat-message jp-CodexChat-activity${
+              isExpandable ? ' is-expandable' : ''
+            } is-${item.category}${item.phase ? ` is-${item.phase}` : ''}`;
+            const icon =
+              item.phase === 'completed' ? (
+                <CheckIcon width={14} height={14} />
+              ) : item.phase === 'started' ? (
+                <span className="jp-CodexActivityDot" />
+              ) : (
+                <span className="jp-CodexActivityDot is-idle" />
+              );
+
+            const summaryContent = (
+              <>
+                <span className="jp-CodexActivityLineIcon" aria-hidden="true">
+                  {icon}
+                </span>
+                <span className="jp-CodexActivityLineText">
+                  <span className="jp-CodexActivityLineTitle">{item.title}</span>
+                </span>
+              </>
+            );
+
+            if (isExpandable) {
+              return (
+                <details
+                  key={entry.id}
+                  className={activityClassName}
+                  role="status"
+                  aria-live="polite"
+                >
+                  <summary className="jp-CodexActivitySummary">{summaryContent}</summary>
+                  <div className="jp-CodexActivityBody">
+                    <pre className="jp-CodexActivityCode">
+                      <code>{trimmedDetail}</code>
+                    </pre>
+                  </div>
+                </details>
+              );
+            }
             return (
               <div
                 key={entry.id}
-                className={`jp-CodexChat-message jp-CodexChat-activity is-${item.category}${
-                  item.phase ? ` is-${item.phase}` : ''
-                }`}
+                className={activityClassName}
                 role="status"
                 aria-live="polite"
               >
-                <div className="jp-CodexActivityLine">
-                  <span className="jp-CodexActivityLineIcon" aria-hidden="true">
-                    {item.phase === 'completed' ? (
-                      <CheckIcon width={14} height={14} />
-                    ) : item.phase === 'started' ? (
-                      <span className="jp-CodexActivityDot" />
-                    ) : (
-                      <span className="jp-CodexActivityDot is-idle" />
-                    )}
-                  </span>
-                  <span className="jp-CodexActivityLineText">
-                    <span className="jp-CodexActivityLineTitle">{item.title}</span>
-                    {item.detail && <span className="jp-CodexActivityLineDetail">: {item.detail}</span>}
-                  </span>
+                <div className="jp-CodexActivitySummary jp-CodexActivitySummaryStatic">
+                  {summaryContent}
                 </div>
               </div>
             );
