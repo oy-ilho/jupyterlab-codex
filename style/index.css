@@ -46,9 +46,24 @@
   top: 0;
   z-index: 2;
   padding: 10px 10px 8px;
-  border-bottom: 1px solid var(--cdx-border);
+  border-bottom: none;
   background: var(--cdx-bg);
   container-type: inline-size;
+}
+
+.jp-CodexChat-header::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -24px;
+  height: 24px;
+  background: linear-gradient(
+    to bottom,
+    var(--cdx-bg),
+    color-mix(in srgb, var(--cdx-bg) 0%, transparent)
+  );
+  pointer-events: none;
 }
 
 .jp-CodexChat-header-top {
