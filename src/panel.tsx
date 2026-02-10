@@ -344,48 +344,15 @@ function XIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
 
 export class CodexPanel extends ReactWidget {
   private _notebooks: INotebookTracker;
-  private _currentContext: DocumentRegistry.IContext<DocumentRegistry.IModel> | null = null;
 
   constructor(notebooks: INotebookTracker) {
     super();
     this._notebooks = notebooks;
     this.addClass('jp-CodexPanel');
-
-    this._notebooks.currentChanged.connect(this._onNotebookChanged, this);
-    this._onNotebookChanged();
   }
 
   render(): JSX.Element {
     return <CodexChat notebooks={this._notebooks} />;
-  }
-
-  private _onNotebookChanged(): void {
-    if (this._currentContext) {
-      this._currentContext.fileChanged.disconnect(this._onFileChanged, this);
-    }
-
-    const widget = this._notebooks.currentWidget;
-    this._currentContext = widget ? widget.context : null;
-
-    if (this._currentContext) {
-      this._currentContext.fileChanged.connect(this._onFileChanged, this);
-    }
-  }
-
-  private async _onFileChanged(): Promise<void> {
-    if (!this._currentContext) {
-      return;
-    }
-
-    const result = await showDialog({
-      title: 'File changed on disk',
-      body: 'This notebook file was modified on disk. Reload this notebook?\n(Unsaved changes will be lost.)',
-      buttons: [Dialog.cancelButton(), Dialog.okButton({ label: 'Reload' })]
-    });
-
-    if (result.button.accept) {
-      await this._currentContext.revert();
-    }
   }
 }
 
