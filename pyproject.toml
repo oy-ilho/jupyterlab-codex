@@ -13,7 +13,7 @@ dependencies = [
   "jupyter_server>=2,<3",
 ]
 license = {text = "BSD-3-Clause"}
-authors = [{name = "Your Name", email = "you@example.com"}]
+authors = [{name = "ILHO AHN"}]
 classifiers = [
   "Framework :: Jupyter",
   "Framework :: Jupyter :: JupyterLab",
@@ -21,6 +21,11 @@ classifiers = [
   "Framework :: Jupyter :: JupyterLab :: Extensions :: Prebuilt",
   "Programming Language :: Python :: 3",
 ]
+
+[project.urls]
+Homepage = "https://github.com/oy-ilho/jupyterlab-codex"
+Repository = "https://github.com/oy-ilho/jupyterlab-codex"
+Issues = "https://github.com/oy-ilho/jupyterlab-codex/issues"
 
 [project.entry-points."jupyter_server.extension"]
 jupyterlab_codex = "jupyterlab_codex.server_extension"

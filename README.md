@@ -1,5 +1,161 @@
 # JupyterLab Codex Sidebar
 
+## English
+
+A JupyterLab 4 sidebar extension that connects to Codex CLI (`codex exec --json`) and provides a chat-style assistant UI.
+
+The extension has two parts:
+- Frontend: JupyterLab prebuilt extension (React)
+- Backend: Jupyter Server extension (WebSocket at `/codex/ws`)
+
+The backend runs `codex` as a local subprocess per request, streams JSONL events, and renders them in the UI.
+
+## Features
+- Threaded sessions by notebook path
+- Model / Reasoning Effort / Sandbox selection in the UI
+- Optional inclusion of active cell text
+- Designed for a Jupytext paired workflow (`.ipynb` <-> `.py`)
+  - execution is disabled if the paired `.py` file is missing
+- Conversation/session logs: `~/.jupyter/codex-sessions/`
+- Optional usage snapshot: best-effort scan of recent `~/.codex/sessions/`
+
+## Requirements
+- Python 3.9+
+- JupyterLab 4 and Jupyter Server
+- Codex CLI installed and authenticated (`codex exec` works in terminal)
+- Node.js + `jlpm` + `jupyter labextension` for source build
+
+## Install / Run
+
+### Quick start (recommended for local development)
+Run:
+
+```bash
+bash scripts/run_jupyterlab_codex.sh
+```
+
+The script will:
+1. install JS dependencies (`jlpm install`)
+2. build frontend (`jlpm build`)
+3. install Python package editable (`python -m pip install -e .`)
+4. install server config snippet and enable extension
+5. link labextension in `share/jupyter/labextensions/`
+6. launch `jupyter lab`
+
+You can pass JupyterLab options directly:
+
+```bash
+bash scripts/run_jupyterlab_codex.sh --ServerApp.port=8888
+```
+
+### Manual local install
+1. Build frontend
+
+```bash
+jlpm install
+jlpm build
+```
+
+2. Install Python package
+
+```bash
+python -m pip install -e .
+```
+
+3. Enable server extension
+
+```bash
+PREFIX="${CONDA_PREFIX:-$(python -c 'import sys; print(sys.prefix)')}"
+mkdir -p "$PREFIX/etc/jupyter/jupyter_server_config.d"
+cp jupyter-config/jupyter_server_config.d/jupyterlab_codex.json \
+  "$PREFIX/etc/jupyter/jupyter_server_config.d/jupyterlab_codex.json"
+
+jupyter server extension enable jupyterlab_codex --sys-prefix || true
+jupyter server extension list | sed -n '1,120p' || true
+```
+
+4. Link labextension in editable mode
+
+```bash
+PREFIX="${CONDA_PREFIX:-$(python -c 'import sys; print(sys.prefix)')}"
+mkdir -p "$PREFIX/share/jupyter/labextensions"
+ln -sfn "$(pwd)/jupyterlab_codex/labextension" "$PREFIX/share/jupyter/labextensions/jupyterlab-codex"
+jupyter labextension list
+```
+
+5. Start JupyterLab
+
+```bash
+jupyter lab
+```
+
+## Usage
+1. Open a notebook in JupyterLab.
+2. The `Codex` panel appears in the right sidebar.
+3. Send messages and the server runs `codex exec --json ...` and streams output.
+4. Settings controls:
+- Auto-save before send
+- Include active cell
+- Include active cell output
+- Model / Reasoning Effort / Permission
+
+## Configuration
+Server-side defaults can also be set via environment variables:
+- `JUPYTERLAB_CODEX_MODEL`: default model when unset in UI/command
+- `JUPYTERLAB_CODEX_SANDBOX`: default sandbox (default: `workspace-write`)
+- `JUPYTERLAB_CODEX_SESSION_LOGGING`: `0`/`1` to disable/enable local session logging (default: `1`)
+- `JUPYTERLAB_CODEX_SESSION_RETENTION_DAYS`: retention period for local session logs in days (default: `30`; set `0` to disable pruning)
+- `JUPYTERLAB_CODEX_SESSION_MAX_MESSAGE_CHARS`: max length per stored message, used for local logs (default: `12000`)
+
+Notes:
+- Session logs are stored under `~/.jupyter/codex-sessions/` as JSONL+meta JSON.
+- Before writing each message, obvious secret-like values are redacted (e.g., API keys, bearer tokens, JWT-like strings).
+- You can disable logs entirely by setting `JUPYTERLAB_CODEX_SESSION_LOGGING=0`.
+
+Selected UI values are passed as CLI args.
+
+## Paths
+- WebSocket endpoint: `/codex/ws`
+- Session logs: `~/.jupyter/codex-sessions/*.jsonl` and `*.meta.json`
+- Usage snapshot: best-effort scan of recent `~/.codex/sessions/**/*.jsonl`
+
+## Troubleshooting
+- Sidebar missing:
+  - Check `jupyter labextension list` includes `jupyterlab-codex`
+  - In editable install, confirm symlink is created
+- WebSocket stays `disconnected`:
+  - Check `jupyter server extension list` shows `jupyterlab_codex` enabled
+  - Inspect server logs for errors
+- `codex` command not found:
+  - Verify `codex exec --help` works in terminal
+  - Recheck PATH/virtualenv and restart JupyterLab
+
+## Development notes
+- `jlpm watch` enables auto rebuild
+- Main files:
+  - UI: `src/panel.tsx`
+  - Server: `jupyterlab_codex/handlers.py`, `jupyterlab_codex/runner.py`
+
+## Architecture
+```
+[UI (JupyterLab Sidebar)]
+   |
+   | WebSocket: /codex/ws
+   v
+[CodexWSHandler (Jupyter Server)]
+   |
+   v
+[CodexRunner]
+  - subprocess: codex exec --json --color never --skip-git-repo-check ...
+   |
+   v
+[UI rendering]
+```
+
+## Korean
+
+# JupyterLab Codex 사이드바
+
 JupyterLab 4 우측 사이드바에서 Codex CLI(`codex exec --json`)를 채팅 UI로 사용할 수 있게 해주는 확장입니다.
 
 구성은 아래 2개로 나뉩니다.
@@ -98,6 +254,14 @@ jupyter lab
 서버 측 기본값은 환경 변수로도 지정할 수 있습니다.
 - `JUPYTERLAB_CODEX_MODEL`: 모델을 명시하지 않았을 때 기본 모델로 사용
 - `JUPYTERLAB_CODEX_SANDBOX`: 샌드박스 기본값(기본: `workspace-write`)
+- `JUPYTERLAB_CODEX_SESSION_LOGGING`: `0`/`1`로 세션 로그 저장 비활성/활성화 (기본: `1`)
+- `JUPYTERLAB_CODEX_SESSION_RETENTION_DAYS`: 로컬 세션 로그 보관 기간(일 단위, 기본: `30`; `0`으로 두면 보존 정리 비활성)
+- `JUPYTERLAB_CODEX_SESSION_MAX_MESSAGE_CHARS`: 저장되는 메시지 최대 길이(기본: `12000`)
+
+안내:
+- 세션 로그는 `~/.jupyter/codex-sessions/*.jsonl` 및 `*.meta.json`에 저장됩니다.
+- 로그 저장 전 메시지 내 민감해 보이는 값(토큰/키/암호류)을 마스킹합니다.
+- 로그가 불필요하다면 `JUPYTERLAB_CODEX_SESSION_LOGGING=0`으로 끌 수 있습니다.
 
 참고: UI에서 모델/권한을 명시적으로 선택하면, 해당 값이 요청에 포함되어 CLI 인자로 전달됩니다.
 

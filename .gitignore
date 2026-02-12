@@ -49,3 +49,18 @@ Untitled*.py
 .env
 .env.*
 .direnv/
+
+# ---- Secrets / local credentials ----
+*.pem
+*.key
+*.p12
+id_rsa
+id_rsa.*
+id_ecdsa
+id_ecdsa.*
+id_ed25519
+id_ed25519.*
+
+# ---- Local app/session state (often contains local paths and logs) ----
+.jupyter/
+.codex/

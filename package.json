@@ -2,10 +2,24 @@
   "name": "jupyterlab-codex",
   "version": "0.1.0",
   "private": true,
+  "author": "ILHO AHN",
   "description": "Codex sidebar for JupyterLab",
   "license": "BSD-3-Clause",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/oy-ilho/jupyterlab-codex.git"
+  },
+  "homepage": "https://github.com/oy-ilho/jupyterlab-codex#readme",
+  "bugs": {
+    "url": "https://github.com/oy-ilho/jupyterlab-codex/issues"
+  },
+  "keywords": [
+    "jupyterlab",
+    "jupyterlab-extension",
+    "jupyter"
+  ],
   "scripts": {
     "build": "jlpm run build:lib && jlpm run build:labextension",
     "build:lib": "tsc -p tsconfig.json",
