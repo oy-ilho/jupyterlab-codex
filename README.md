@@ -31,7 +31,7 @@ The backend runs `codex` as a local subprocess per request, streams JSONL events
 Run:
 
 ```bash
-bash scripts/run_jupyterlab_codex.sh
+bash run_jupyterlab_codex.sh
 ```
 
 The script will:
@@ -45,7 +45,7 @@ The script will:
 You can pass JupyterLab options directly:
 
 ```bash
-bash scripts/run_jupyterlab_codex.sh --ServerApp.port=8888
+bash run_jupyterlab_codex.sh --ServerApp.port=8888
 ```
 
 ### Manual local install
@@ -183,7 +183,7 @@ JupyterLab 4 우측 사이드바에서 Codex CLI(`codex exec --json`)를 채팅 
 아래 스크립트는 “개발/로컬 실행”에 필요한 과정을 한 번에 수행합니다.
 
 ```bash
-bash scripts/run_jupyterlab_codex.sh
+bash run_jupyterlab_codex.sh
 ```
 
 스크립트가 하는 일(요약):
@@ -196,7 +196,7 @@ bash scripts/run_jupyterlab_codex.sh
 추가로 JupyterLab 옵션을 넘기고 싶다면, 스크립트 뒤에 그대로 붙이면 됩니다.
 
 ```bash
-bash scripts/run_jupyterlab_codex.sh --ServerApp.port=8888
+bash run_jupyterlab_codex.sh --ServerApp.port=8888
 ```
 
 ### 수동 설치(개발/로컬)
