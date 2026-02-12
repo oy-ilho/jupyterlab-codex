@@ -578,6 +578,9 @@
 
 .jp-CodexChat-assistant {
   align-self: flex-start;
+  border: 0;
+  padding-left: 0;
+  padding-right: 0;
 }
 
 .jp-CodexChat-system {
@@ -817,6 +820,11 @@
 }
 
 .jp-CodexComposer {
+  /* Keep composer controls a touch smaller than the header toolbar. */
+  --cdx-composer-btn-size: 30px;
+  --cdx-composer-btn-radius: 9px;
+  --cdx-composer-btn-pad-x: 9px;
+
   border: 1px solid var(--cdx-border);
   border-radius: 16px;
   padding: 10px;
@@ -916,7 +924,7 @@
 .jp-CodexComposer-toolbarLeft {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 2px;
   flex-wrap: wrap;
   min-width: 0;
   flex: 1;
@@ -949,22 +957,22 @@
 
 .jp-CodexIconBtn {
   appearance: none;
-  width: 32px;
-  height: 32px;
-  border-radius: 10px;
-  border: 1px solid var(--cdx-border);
-  background: var(--cdx-surface-2);
+  width: var(--cdx-composer-btn-size, 30px);
+  height: var(--cdx-composer-btn-size, 30px);
+  border-radius: var(--cdx-composer-btn-radius, 9px);
+  border: 1px solid transparent;
+  background: transparent;
   color: var(--cdx-muted);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease, color 120ms ease;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
 }
 
 .jp-CodexIconBtn:hover:not(:disabled) {
-  background: var(--cdx-surface);
-  border-color: color-mix(in srgb, var(--cdx-accent) 20%, var(--cdx-border));
+  background: var(--cdx-surface-2);
+  border-color: var(--cdx-border);
   color: var(--cdx-text);
 }
 
@@ -974,8 +982,10 @@
 
 .jp-CodexIconBtn:focus-visible {
   outline: none;
-  border-color: color-mix(in srgb, var(--cdx-accent) 50%, var(--cdx-border));
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--cdx-accent) 22%, transparent);
+  background: var(--cdx-surface-2);
+  border-color: var(--cdx-border);
+  color: var(--cdx-text);
+  box-shadow: none;
 }
 
 .jp-CodexIconBtn:disabled {
@@ -984,14 +994,14 @@
 }
 
 .jp-CodexIconBtn.is-active {
-  background: color-mix(in srgb, var(--cdx-accent) 14%, var(--cdx-surface));
-  border-color: color-mix(in srgb, var(--cdx-accent) 45%, var(--cdx-border));
-  color: color-mix(in srgb, var(--cdx-accent) 78%, var(--cdx-text));
+  background: var(--cdx-surface-2);
+  border-color: var(--cdx-border);
+  color: var(--cdx-text);
 }
 
 .jp-CodexIconBtn.is-open {
-  background: var(--cdx-surface);
-  border-color: color-mix(in srgb, var(--cdx-accent) 35%, var(--cdx-border));
+  background: var(--cdx-surface-2);
+  border-color: var(--cdx-border);
   color: var(--cdx-text);
 }
 
@@ -1009,14 +1019,14 @@
 
 .jp-CodexModelBtn {
   appearance: none;
-  height: 32px;
+  height: var(--cdx-composer-btn-size, 30px);
   width: auto;
   max-width: 240px;
   min-width: 0;
-  padding: 0 10px;
-  border-radius: 10px;
-  border: 1px solid var(--cdx-border);
-  background: var(--cdx-surface-2);
+  padding: 0 var(--cdx-composer-btn-pad-x, 9px);
+  border-radius: var(--cdx-composer-btn-radius, 9px);
+  border: 1px solid transparent;
+  background: transparent;
   color: var(--cdx-text);
   display: inline-flex;
   align-items: center;
@@ -1024,12 +1034,12 @@
   cursor: pointer;
   font-size: 12px;
   font-weight: 650;
-  transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease, color 120ms ease;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
 }
 
 .jp-CodexModelBtn:hover:not(:disabled) {
-  background: var(--cdx-surface);
-  border-color: color-mix(in srgb, var(--cdx-accent) 20%, var(--cdx-border));
+  background: var(--cdx-surface-2);
+  border-color: var(--cdx-border);
 }
 
 .jp-CodexModelBtn:active:not(:disabled) {
@@ -1038,8 +1048,9 @@
 
 .jp-CodexModelBtn:focus-visible {
   outline: none;
-  border-color: color-mix(in srgb, var(--cdx-accent) 50%, var(--cdx-border));
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--cdx-accent) 22%, transparent);
+  background: var(--cdx-surface-2);
+  border-color: var(--cdx-border);
+  box-shadow: none;
 }
 
 .jp-CodexModelBtn:disabled {
@@ -1048,8 +1059,8 @@
 }
 
 .jp-CodexModelBtn.is-open {
-  background: var(--cdx-surface);
-  border-color: color-mix(in srgb, var(--cdx-accent) 35%, var(--cdx-border));
+  background: var(--cdx-surface-2);
+  border-color: var(--cdx-border);
 }
 
 .jp-CodexModelBtn-label {
@@ -1218,8 +1229,8 @@
 }
 
 .jp-CodexPermissionBtn.is-danger:not(:disabled) {
-  border-color: color-mix(in srgb, var(--cdx-bad) 35%, var(--cdx-border));
-  background: color-mix(in srgb, var(--cdx-bad) 6%, var(--cdx-surface-2));
+  border-color: transparent;
+  background: transparent;
   color: color-mix(in srgb, var(--cdx-bad) 70%, var(--cdx-text));
 }
 
@@ -1416,9 +1427,9 @@
 .jp-CodexSendBtn {
   appearance: none;
   padding: 0;
-  width: 32px;
-  height: 32px;
-  border-radius: 10px;
+  width: var(--cdx-composer-btn-size, 30px);
+  height: var(--cdx-composer-btn-size, 30px);
+  border-radius: var(--cdx-composer-btn-radius, 9px);
   border: 1px solid var(--cdx-border);
   background: var(--cdx-surface-2);
   color: var(--cdx-muted);
