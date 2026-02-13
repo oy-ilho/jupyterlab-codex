@@ -1,6 +1,6 @@
 {
   "name": "jupyterlab-codex-sidebar",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "author": "ILHO AHN",
   "description": "Codex sidebar for JupyterLab",
   "license": "BSD-3-Clause",
