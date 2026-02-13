@@ -14,7 +14,7 @@ _DEFAULT_MAX_MESSAGE_CHARS = 12000
 _SENSITIVE_PATTERNS = [
     (
         re.compile(
-            r"(?i)(\b(?:api[_- ]?key|authorization|bearer|access[_- ]?token|secret|password)\b\s*[:=]\s*)([\"']?)[^\s\"';,]+"
+            r"(?i)(\b(?:api[\-_ ]?key|authorization|bearer|access[\-_ ]?token|secret|password)\b\s*[:=]\s*)([\"']?)[^\s\"';,]+"
         ),
         r"\1\2[REDACTED]\2",
     ),

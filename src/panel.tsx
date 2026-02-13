@@ -1875,11 +1875,15 @@ function CodexChat(props: CodexChatProps): JSX.Element {
           void refreshNotebook(targetPath);
         }
         if (!cancelled && exitCode !== null && exitCode !== 0) {
-          appendMessage(
-            targetPath,
-            'system',
-            `Codex 실행 실패 (exit ${exitCode}). Permission(방패) -> Full access로 바꾼 뒤 다시 실행해 보세요. (로그인이 필요하면 터미널에서 codex login을 먼저 실행)`
-          );
+          const explicitError =
+            (typeof msg.error === 'string' && msg.error.trim()) ||
+            (typeof msg.message === 'string' && msg.message.trim()) ||
+            '';
+          const trimmedError = explicitError ? truncateEnd(explicitError, 600) : '';
+          const failureMessage = trimmedError
+            ? `Codex 실행 실패 (exit ${exitCode}): ${trimmedError}`
+            : `Codex 실행 실패 (exit ${exitCode}). 위 로그의 실제 에러 메시지를 확인해 주세요.`;
+          appendMessage(targetPath, 'system', failureMessage);
         }
         if (targetPath) {
           setSessionRunState(targetPath, 'ready', null);
