@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ReactWidget, Dialog, showDialog } from '@jupyterlab/apputils';
 import { INotebookTracker } from '@jupyterlab/notebook';
@@ -7,6 +7,7 @@ import { URLExt } from '@jupyterlab/coreutils';
 import type { DocumentRegistry } from '@jupyterlab/docregistry';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
+import hljs from 'highlight.js/lib/common';
 
 function PlusIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
   return (
@@ -1075,6 +1076,51 @@ function escapeHtml(value: string): string {
     .replace(/'/g, '&#39;');
 }
 
+function normalizeHighlightLanguage(lang: string): string {
+  const normalized = lang.trim().toLowerCase();
+  if (!normalized) {
+    return '';
+  }
+  const aliasMap: Record<string, string> = {
+    js: 'javascript',
+    jsx: 'javascript',
+    mjs: 'javascript',
+    cjs: 'javascript',
+    ts: 'typescript',
+    tsx: 'typescript',
+    py: 'python',
+    sh: 'bash',
+    shell: 'bash',
+    zsh: 'bash',
+    yml: 'yaml',
+    'c++': 'cpp',
+    'c#': 'csharp',
+    'objective-c': 'objectivec',
+    objc: 'objectivec'
+  };
+  return aliasMap[normalized] ?? normalized;
+}
+
+function renderHighlightedCodeToSafeHtml(code: string, lang: string): string {
+  const fallback = escapeHtml(code);
+  let highlighted = fallback;
+  try {
+    const normalizedLang = normalizeHighlightLanguage(lang);
+    if (normalizedLang && hljs.getLanguage(normalizedLang)) {
+      highlighted = hljs.highlight(code, { language: normalizedLang, ignoreIllegals: true }).value;
+    } else {
+      highlighted = hljs.highlightAuto(code).value;
+    }
+  } catch {
+    highlighted = fallback;
+  }
+  try {
+    return DOMPurify.sanitize(highlighted, { USE_PROFILES: { html: true } });
+  } catch {
+    return highlighted;
+  }
+}
+
 function renderMarkdownToSafeHtml(markdown: string): string {
   if (!markdown) {
     return '';
@@ -1113,6 +1159,10 @@ function StatusPill(props: { status: PanelStatus }): JSX.Element {
 
 function CodeBlock(props: { lang: string; code: string; canCopy: boolean }): JSX.Element {
   const [copied, setCopied] = useState(false);
+  const highlightedCode = useMemo(
+    () => renderHighlightedCodeToSafeHtml(props.code, props.lang),
+    [props.code, props.lang]
+  );
 
   async function onCopy(): Promise<void> {
     const ok = await copyToClipboard(props.code);
@@ -1139,7 +1189,7 @@ function CodeBlock(props: { lang: string; code: string; canCopy: boolean }): JSX
         )}
       </div>
       <pre className="jp-CodexCodeBlock">
-        <code>{props.code}</code>
+        <code className="hljs" dangerouslySetInnerHTML={{ __html: highlightedCode }} />
       </pre>
     </div>
   );

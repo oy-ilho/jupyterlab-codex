@@ -17,6 +17,15 @@
   --cdx-good: var(--jp-success-color1, #22c55e);
   --cdx-warn: var(--jp-warn-color1, #f97316);
   --cdx-bad: var(--jp-error-color1, #ef4444);
+  --cdx-code-text: var(--cdx-text);
+  --cdx-code-comment: #6b7280;
+  --cdx-code-keyword: #7c3aed;
+  --cdx-code-string: #0f766e;
+  --cdx-code-number: #b45309;
+  --cdx-code-function: #0f766e;
+  --cdx-code-variable: #1d4ed8;
+  --cdx-code-operator: #334155;
+  --cdx-code-title: #0f172a;
 
   --cdx-radius: 14px;
   --cdx-radius-sm: 10px;
@@ -33,6 +42,30 @@
   );
   color: var(--cdx-text);
   background: var(--cdx-bg);
+}
+
+.jp-mod-theme-light .jp-CodexPanel {
+  --cdx-code-text: #0f172a;
+  --cdx-code-comment: #6b7280;
+  --cdx-code-keyword: #7c3aed;
+  --cdx-code-string: #0f766e;
+  --cdx-code-number: #b45309;
+  --cdx-code-function: #0f766e;
+  --cdx-code-variable: #1d4ed8;
+  --cdx-code-operator: #334155;
+  --cdx-code-title: #0f172a;
+}
+
+.jp-mod-theme-dark .jp-CodexPanel {
+  --cdx-code-text: #e2e8f0;
+  --cdx-code-comment: #94a3b8;
+  --cdx-code-keyword: #c084fc;
+  --cdx-code-string: #5eead4;
+  --cdx-code-number: #fbbf24;
+  --cdx-code-function: #4ade80;
+  --cdx-code-variable: #93c5fd;
+  --cdx-code-operator: #cbd5e1;
+  --cdx-code-title: #f8fafc;
 }
 
 .jp-CodexChat {
@@ -583,6 +616,19 @@
   padding-right: 0;
 }
 
+/* If assistant output is a single fenced code block, remove outer bubble fill/padding. */
+.jp-CodexChat-assistant:has(> .jp-CodexChat-text > .jp-CodexCodeBlockWrap:only-child) {
+  background: transparent;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.jp-CodexChat-assistant:has(> .jp-CodexChat-text > .jp-CodexCodeBlockWrap:only-child)
+  > .jp-CodexChat-text
+  > .jp-CodexCodeBlockWrap {
+  margin-top: 0;
+}
+
 .jp-CodexChat-system {
   align-self: center;
   box-shadow: none;
@@ -781,7 +827,70 @@
   font-family: var(--cdx-mono);
   font-size: 12px;
   line-height: 1.5;
-  color: var(--cdx-text);
+  color: var(--cdx-code-text);
+}
+
+.jp-CodexCodeBlock code.hljs {
+  display: block;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  color: var(--cdx-code-text);
+  font-family: inherit;
+  white-space: pre;
+}
+
+.jp-CodexCodeBlock .hljs-comment,
+.jp-CodexCodeBlock .hljs-quote {
+  color: var(--cdx-code-comment);
+  font-style: italic;
+}
+
+.jp-CodexCodeBlock .hljs-keyword,
+.jp-CodexCodeBlock .hljs-selector-tag,
+.jp-CodexCodeBlock .hljs-literal,
+.jp-CodexCodeBlock .hljs-operator {
+  color: var(--cdx-code-keyword);
+}
+
+.jp-CodexCodeBlock .hljs-string,
+.jp-CodexCodeBlock .hljs-symbol,
+.jp-CodexCodeBlock .hljs-regexp,
+.jp-CodexCodeBlock .hljs-template-tag,
+.jp-CodexCodeBlock .hljs-template-variable {
+  color: var(--cdx-code-string);
+}
+
+.jp-CodexCodeBlock .hljs-number,
+.jp-CodexCodeBlock .hljs-literal {
+  color: var(--cdx-code-number);
+}
+
+.jp-CodexCodeBlock .hljs-title,
+.jp-CodexCodeBlock .hljs-title.class_,
+.jp-CodexCodeBlock .hljs-title.class_.inherited__,
+.jp-CodexCodeBlock .hljs-section {
+  color: var(--cdx-code-title);
+}
+
+.jp-CodexCodeBlock .hljs-function .hljs-title,
+.jp-CodexCodeBlock .hljs-title.function_,
+.jp-CodexCodeBlock .hljs-built_in,
+.jp-CodexCodeBlock .hljs-builtin-name {
+  color: var(--cdx-code-function);
+}
+
+.jp-CodexCodeBlock .hljs-variable,
+.jp-CodexCodeBlock .hljs-attr,
+.jp-CodexCodeBlock .hljs-attribute,
+.jp-CodexCodeBlock .hljs-params {
+  color: var(--cdx-code-variable);
+}
+
+.jp-CodexCodeBlock .hljs-meta,
+.jp-CodexCodeBlock .hljs-punctuation {
+  color: var(--cdx-code-operator);
 }
 
 .jp-CodexCodeBlockCopyBtn {
