@@ -1279,6 +1279,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const usagePopoverRef = useRef<HTMLDivElement>(null);
   const permissionBtnRef = useRef<HTMLButtonElement>(null);
   const permissionPopoverRef = useRef<HTMLDivElement>(null);
+  const notebookLabelRef = useRef<HTMLSpanElement | null>(null);
+  const [isNotebookLabelTruncated, setIsNotebookLabelTruncated] = useState(false);
   const customModelInputRef = useRef<HTMLInputElement | null>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const selectedModel =
@@ -2354,14 +2356,52 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const weeklyWindowLabel =
     weeklyWindowMinutes == null ? '' : `Window: ${Math.round(weeklyWindowMinutes / (60 * 24))}d`;
 
+  useLayoutEffect(() => {
+    const target = notebookLabelRef.current;
+    if (!target) {
+      setIsNotebookLabelTruncated(false);
+      return;
+    }
+
+    const update = (): void => {
+      const next = target.scrollWidth - target.clientWidth > 1;
+      setIsNotebookLabelTruncated(prev => (prev === next ? prev : next));
+    };
+
+    update();
+
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', update);
+      return () => {
+        window.removeEventListener('resize', update);
+      };
+    }
+
+    const observer = new ResizeObserver(() => {
+      update();
+    });
+    observer.observe(target);
+    if (target.parentElement) {
+      observer.observe(target.parentElement);
+    }
+    window.addEventListener('resize', update);
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', update);
+    };
+  }, [currentNotebookPath]);
+
   return (
     <div className="jp-CodexChat">
       <div className="jp-CodexChat-header">
         <div className="jp-CodexChat-header-top">
           <div className="jp-CodexChat-header-left">
             <StatusPill status={status} />
-            <span className="jp-CodexChat-notebook" title={currentNotebookPath || ''}>
-              {displayPath}
+            <span className="jp-CodexChat-notebookWrap" data-full-name={isNotebookLabelTruncated ? displayPath : ''}>
+              <span className="jp-CodexChat-notebook" ref={notebookLabelRef} title={displayPath}>
+                {displayPath}
+              </span>
             </span>
           </div>
 	          <div className="jp-CodexChat-header-actions">
@@ -2374,7 +2414,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 	              title="New thread"
 	            >
 	              <PlusIcon width={16} height={16} />
-	              <span className="jp-CodexHeaderBtn-label">New</span>
 	            </button>
 	            <div
 	              className="jp-CodexMenuWrap"
