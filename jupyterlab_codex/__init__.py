@@ -2,7 +2,7 @@ from .server_extension import _jupyter_server_extension_points, load_jupyter_ser
 
 
 def _jupyter_labextension_paths():
-    return [{"src": "labextension", "dest": "jupyterlab-codex"}]
+    return [{"src": "labextension", "dest": "jupyterlab-codex-sidebar"}]
 
 
 __all__ = [

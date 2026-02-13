@@ -79,7 +79,7 @@ jupyter server extension list | sed -n '1,120p' || true
 ```bash
 PREFIX="${CONDA_PREFIX:-$(python -c 'import sys; print(sys.prefix)')}"
 mkdir -p "$PREFIX/share/jupyter/labextensions"
-ln -sfn "$(pwd)/jupyterlab_codex/labextension" "$PREFIX/share/jupyter/labextensions/jupyterlab-codex"
+ln -sfn "$(pwd)/jupyterlab_codex/labextension" "$PREFIX/share/jupyter/labextensions/jupyterlab-codex-sidebar"
 jupyter labextension list
 ```
 
@@ -121,7 +121,7 @@ Selected UI values are passed as CLI args.
 
 ## Troubleshooting
 - Sidebar missing:
-  - Check `jupyter labextension list` includes `jupyterlab-codex`
+  - Check `jupyter labextension list` includes `jupyterlab-codex-sidebar`
   - In editable install, confirm symlink is created
 - WebSocket stays `disconnected`:
   - Check `jupyter server extension list` shows `jupyterlab_codex` enabled
@@ -231,7 +231,7 @@ jupyter server extension list | sed -n '1,120p' || true
 ```bash
 PREFIX="${CONDA_PREFIX:-$(python -c 'import sys; print(sys.prefix)')}"
 mkdir -p "$PREFIX/share/jupyter/labextensions"
-ln -sfn "$(pwd)/jupyterlab_codex/labextension" "$PREFIX/share/jupyter/labextensions/jupyterlab-codex"
+ln -sfn "$(pwd)/jupyterlab_codex/labextension" "$PREFIX/share/jupyter/labextensions/jupyterlab-codex-sidebar"
 jupyter labextension list
 ```
 
@@ -272,7 +272,7 @@ jupyter lab
 
 ## 트러블슈팅
 - 사이드바가 보이지 않음:
-  - `jupyter labextension list` 에서 `jupyterlab-codex`가 잡히는지 확인
+  - `jupyter labextension list` 에서 `jupyterlab-codex-sidebar`가 잡히는지 확인
   - editable 설치라면 “labextension 링크” 단계가 빠졌는지 확인
 - WebSocket이 `disconnected`로만 표시됨:
   - `jupyter server extension list` 에서 `jupyterlab_codex`가 enabled인지 확인

@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import os
+import shutil
 import re
 import tempfile
 import time
@@ -27,6 +28,30 @@ _IMAGE_SUFFIX_BY_MIME = {
     "image/webp": ".webp",
     "image/gif": ".gif",
 }
+
+
+def _coerce_command_path(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.strip()
+
+
+def _build_command_not_found_hint(requested_path: str) -> dict[str, str]:
+    requested_label = requested_path or "codex"
+    detected = shutil.which("codex")
+    if detected:
+        return {
+            "message":
+                f"Cannot find executable '{requested_label}'. "
+                f"Detected server-side path: {detected}. "
+                "Set this path in settings and retry.",
+            "suggestedCommandPath": detected,
+        }
+    return {
+        "message":
+            f"Cannot find executable '{requested_label}'. "
+            "Run `which codex` in terminal and paste the output path into settings.",
+    }
 
 
 class CodexWSHandler(WebSocketHandler):
@@ -126,6 +151,7 @@ class CodexWSHandler(WebSocketHandler):
         requested_reasoning = _sanitize_reasoning_effort(requested_reasoning_raw)
         requested_sandbox_raw = payload.get("sandbox")
         requested_sandbox = _sanitize_sandbox_mode(requested_sandbox_raw)
+        requested_command_path = _coerce_command_path(payload.get("commandPath"))
         notebook_os_path = self._resolve_notebook_os_path(notebook_path)
         run_id = str(uuid.uuid4())
 
@@ -288,6 +314,7 @@ class CodexWSHandler(WebSocketHandler):
                     model=requested_model,
                     reasoning_effort=requested_reasoning,
                     sandbox=requested_sandbox,
+                    command=requested_command_path,
                     images=image_paths,
                 )
                 if assistant_buffer:
@@ -359,6 +386,37 @@ class CodexWSHandler(WebSocketHandler):
                     )
                 )
                 raise
+            except FileNotFoundError:
+                hint = _build_command_not_found_hint(requested_command_path)
+                error_payload = {
+                    "type": "error",
+                    "runId": run_id,
+                    "sessionId": session_id,
+                    "notebookPath": notebook_path,
+                    "message": hint["message"],
+                    "pairedOk": paired_ok,
+                    "pairedPath": paired_path,
+                    "pairedOsPath": paired_os_path,
+                    "pairedMessage": paired_message,
+                }
+                if suggested_command_path := hint.get("suggestedCommandPath"):
+                    error_payload["suggestedCommandPath"] = suggested_command_path
+                self.write_message(json.dumps(error_payload))
+                self.write_message(
+                    json.dumps(
+                        {
+                            "type": "status",
+                            "state": "ready",
+                            "runId": run_id,
+                            "sessionId": session_id,
+                            "notebookPath": notebook_path,
+                            "pairedOk": paired_ok,
+                            "pairedPath": paired_path,
+                            "pairedOsPath": paired_os_path,
+                            "pairedMessage": paired_message,
+                        }
+                    )
+                )
             except Exception as exc:  # pragma: no cover - defensive path
                 self.write_message(
                     json.dumps(

@@ -468,6 +468,7 @@ type SandboxMode = (typeof SANDBOX_OPTIONS)[number]['value'];
 const AUTO_SAVE_STORAGE_KEY = 'jupyterlab-codex:auto-save-before-send';
 const MODEL_STORAGE_KEY = 'jupyterlab-codex:model';
 const CUSTOM_MODEL_STORAGE_KEY = 'jupyterlab-codex:custom-model';
+const COMMAND_PATH_STORAGE_KEY = 'jupyterlab-codex:command-path';
 const REASONING_STORAGE_KEY = 'jupyterlab-codex:reasoning-effort';
 const SANDBOX_MODE_STORAGE_KEY = 'jupyterlab-codex:sandbox-mode';
 const SETTINGS_OPEN_STORAGE_KEY = 'jupyterlab-codex:settings-open';
@@ -606,6 +607,10 @@ function readStoredModel(): string {
   return safeLocalStorageGet(MODEL_STORAGE_KEY) ?? '';
 }
 
+function readStoredCommandPath(): string {
+  return safeLocalStorageGet(COMMAND_PATH_STORAGE_KEY) ?? '';
+}
+
 function readStoredCustomModel(): string {
   return safeLocalStorageGet(CUSTOM_MODEL_STORAGE_KEY) ?? '';
 }
@@ -644,6 +649,10 @@ function readStoredSandboxMode(): SandboxMode {
 function persistModel(model: string, customModel: string): void {
   safeLocalStorageSet(MODEL_STORAGE_KEY, model);
   safeLocalStorageSet(CUSTOM_MODEL_STORAGE_KEY, customModel);
+}
+
+function persistCommandPath(commandPath: string): void {
+  safeLocalStorageSet(COMMAND_PATH_STORAGE_KEY, commandPath);
 }
 
 function persistAutoSave(enabled: boolean): void {
@@ -1235,6 +1244,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     readStoredReasoningEffort()
   );
   const [sandboxMode, setSandboxMode] = useState<SandboxMode>(() => readStoredSandboxMode());
+  const [commandPath, setCommandPath] = useState<string>(() => readStoredCommandPath());
   const [autoSaveBeforeSend, setAutoSaveBeforeSend] = useState<boolean>(() => readStoredAutoSave());
   const [includeActiveCell, setIncludeActiveCell] = useState<boolean>(() => readStoredIncludeActiveCell());
   const [includeActiveCellOutput, setIncludeActiveCellOutput] = useState<boolean>(() =>
@@ -1320,6 +1330,10 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   useEffect(() => {
     persistIncludeActiveCellOutput(includeActiveCellOutput);
   }, [includeActiveCellOutput]);
+
+  useEffect(() => {
+    persistCommandPath(commandPath);
+  }, [commandPath]);
 
   useEffect(() => {
     persistReasoningEffort(reasoningEffort);
@@ -1888,6 +1902,15 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       }
 
       if (msg.type === 'error') {
+        const suggestedCommandPath = typeof msg.suggestedCommandPath === 'string' ? msg.suggestedCommandPath.trim() : '';
+        if (suggestedCommandPath && !commandPath) {
+          setCommandPath(suggestedCommandPath);
+          appendMessage(
+            targetPath,
+            'system',
+            `Suggested command path has been saved to settings: ${suggestedCommandPath}`
+          );
+        }
         appendMessage(targetPath, 'system', msg.message || 'Unknown error');
         if (targetPath) {
           const pairedOk = typeof msg.pairedOk === 'boolean' ? msg.pairedOk : null;
@@ -2243,6 +2266,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         selection,
         cellOutput,
         notebookPath,
+        commandPath: commandPath.trim() || undefined,
         model: selectedModel || undefined,
         reasoningEffort: selectedReasoningEffort || undefined,
         sandbox: sandboxMode,
@@ -2479,6 +2503,18 @@ function CodexChat(props: CodexChatProps): JSX.Element {
               </button>
             </div>
             <div className="jp-CodexChat-controls">
+              <label className="jp-CodexChat-model">
+                <span>Codex command path</span>
+                <input
+                  type="text"
+                  className="jp-CodexChat-model-input"
+                  placeholder="codex"
+                  value={commandPath}
+                  disabled={status === 'running'}
+                  onChange={e => setCommandPath(e.currentTarget.value.trimStart())}
+                  title="Leave empty to use PATH lookup."
+                />
+              </label>
               <label className="jp-CodexChat-toggle">
                 <input
                   type="checkbox"

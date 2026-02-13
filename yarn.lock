@@ -4203,9 +4203,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"jupyterlab-codex@workspace:.":
+"jupyterlab-codex-sidebar@workspace:.":
   version: 0.0.0-use.local
-  resolution: "jupyterlab-codex@workspace:."
+  resolution: "jupyterlab-codex-sidebar@workspace:."
   dependencies:
     "@jupyterlab/application": ^4.0.0
     "@jupyterlab/apputils": ^4.0.0

@@ -1,12 +1,15 @@
 import asyncio
 import json
 import os
+import shutil
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List
 
 
 class CodexRunner:
     def __init__(self, command: str = "codex", args: List[str] | None = None):
-        self._command = command
+        configured_command = os.environ.get("JUPYTERLAB_CODEX_COMMAND", "").strip()
+        self._command = self._resolve_command(configured_command or command)
         if args is not None:
             self._raw_args = list(args)
             self._common_args: List[str] = []
@@ -29,6 +32,34 @@ class CodexRunner:
             "--skip-git-repo-check",
         ]
 
+    @staticmethod
+    def _resolve_command(command: str) -> str:
+        if os.path.isabs(os.path.expanduser(command)) and os.access(os.path.expanduser(command), os.X_OK):
+            return os.path.expanduser(command)
+
+        if os.path.sep in command:
+            candidate = Path(command).expanduser()
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return str(candidate)
+
+        resolved = shutil.which(command)
+        if resolved is not None:
+            return resolved
+
+        home = Path.home()
+        for relative in (
+            ".npm-global/bin/codex",
+            ".local/bin/codex",
+            "bin/codex",
+            ".config/yarn/global/node_modules/.bin/codex",
+            "node_modules/.bin/codex",
+        ):
+            candidate = home / relative
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return str(candidate)
+
+        return command
+
     async def run(
         self,
         prompt: str,
@@ -38,13 +69,15 @@ class CodexRunner:
         reasoning_effort: str | None = None,
         sandbox: str | None = None,
         images: List[str] | None = None,
+        command: str | None = None,
     ) -> int:
+        command_to_run = self._resolve_command((command or "").strip() or self._command)
         args = self._args_for_options(
             model=model, reasoning_effort=reasoning_effort, sandbox=sandbox, images=images
         )
 
         proc = await asyncio.create_subprocess_exec(
-            self._command,
+            command_to_run,
             *args,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,

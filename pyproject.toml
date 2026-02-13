@@ -3,8 +3,8 @@ requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "jupyterlab-codex"
-version = "0.1.0"
+name = "jupyterlab-codex-sidebar"
+version = "0.1.1"
 description = "JupyterLab Codex sidebar with server extension"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -39,8 +39,7 @@ include-package-data = true
 
 [tool.setuptools.data-files]
 "etc/jupyter/jupyter_server_config.d" = ["jupyter-config/jupyter_server_config.d/jupyterlab_codex.json"]
-"share/jupyter/labextensions/jupyterlab-codex" = [
+"share/jupyter/labextensions/jupyterlab-codex-sidebar" = [
   "jupyterlab_codex/labextension/package.json",
-  "jupyterlab_codex/labextension/install.json",
 ]
-"share/jupyter/labextensions/jupyterlab-codex/static" = ["jupyterlab_codex/labextension/static/*"]
+"share/jupyter/labextensions/jupyterlab-codex-sidebar/static" = ["jupyterlab_codex/labextension/static/*"]

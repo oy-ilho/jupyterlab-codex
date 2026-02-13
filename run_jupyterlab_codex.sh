@@ -60,7 +60,7 @@ LABEXT_DIR="$PREFIX/share/jupyter/labextensions"
 mkdir -p "$LABEXT_DIR"
 
 echo "[5/6] Linking labextension into $LABEXT_DIR"
-ln -sfn "$ROOT_DIR/jupyterlab_codex/labextension" "$LABEXT_DIR/jupyterlab-codex"
+ln -sfn "$ROOT_DIR/jupyterlab_codex/labextension" "$LABEXT_DIR/jupyterlab-codex-sidebar"
 
 echo "[6/6] Current labextension status"
 jupyter labextension list

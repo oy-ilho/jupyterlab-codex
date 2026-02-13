@@ -1,7 +1,6 @@
 {
-  "name": "jupyterlab-codex",
-  "version": "0.1.0",
-  "private": true,
+  "name": "jupyterlab-codex-sidebar",
+  "version": "0.1.1",
   "author": "ILHO AHN",
   "description": "Codex sidebar for JupyterLab",
   "license": "BSD-3-Clause",
@@ -9,7 +8,7 @@
   "types": "lib/index.d.ts",
   "repository": {
     "type": "git",
-    "url": "https://github.com/oy-ilho/jupyterlab-codex.git"
+    "url": "git+https://github.com/oy-ilho/jupyterlab-codex.git"
   },
   "homepage": "https://github.com/oy-ilho/jupyterlab-codex#readme",
   "bugs": {
