@@ -1,0 +1,41 @@
+# Node / Yarn cache
+.yarn/
+.yarnrc.yml
+
+# Build artifacts
+*.tgz
+node_modules/
+dist/
+build/
+
+# Python cache / artifacts
+__pycache__/
+*.so
+*.pyd
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+
+# Local state / secrets / scratch
+.jupyterlab-codex/
+.jupyter/
+.codex/
+.DS_Store
+.ipynb_checkpoints/
+notebook_test/
+Untitled*.ipynb
+Untitled*.py
+*.swp
+*~
+
+# Env files
+.env
+.env.*
+.direnv/
+
+# Editor / local docs
+.vscode/
+.idea/

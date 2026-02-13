@@ -29,6 +29,24 @@ _IMAGE_SUFFIX_BY_MIME = {
     "image/gif": ".gif",
 }
 
+_NOISY_STDERR_PATTERNS = (
+    re.compile(
+        r"\bcodex_core::rollout::list:\s+state db (?:missing|returned stale) rollout path for thread\b",
+        re.IGNORECASE,
+    ),
+)
+
+
+def _strip_noisy_stderr_lines(text: str) -> str:
+    if not text:
+        return ""
+
+    lines = text.splitlines(keepends=True)
+    kept = [
+        line for line in lines if not any(pattern.search(line) for pattern in _NOISY_STDERR_PATTERNS)
+    ]
+    return "".join(kept)
+
 
 def _coerce_command_path(value: Any) -> str:
     if not isinstance(value, str):
@@ -277,6 +295,10 @@ class CodexWSHandler(WebSocketHandler):
                             }
                         )
                     )
+                elif event.get("type") == "stderr":
+                    # Ignore filtered/no-op stderr chunks to avoid rendering them
+                    # again via the generic "event" UI path.
+                    return
                 else:
                     self.write_message(
                         json.dumps(
@@ -711,6 +733,14 @@ def event_to_text(event: Dict[str, Any]) -> str:
     # Skip internal events that should not be shown to users
     if event_type in ("thread.started", "turn.started", "turn.completed"):
         return ""
+
+    # Codex may emit rollout index repair warnings on stderr. They are noisy and
+    # non-actionable for extension users, so filter only those specific lines.
+    if event_type == "stderr":
+        text = event.get("text", "")
+        if not isinstance(text, str):
+            return ""
+        return _strip_noisy_stderr_lines(text)
 
     # Handle item.completed events with nested item
     if event_type == "item.completed" and "item" in event:
