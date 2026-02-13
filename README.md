@@ -2,6 +2,42 @@
 
 ## English
 
+### Quick Guide (Discovery Install, Read First)
+Follow this order for the easiest setup.
+
+1) Prerequisites
+- Install the `Jupytext` JupyterLab extension first.
+- Ensure `codex` CLI is installed and logged in.
+  - Check in terminal: `codex exec --help` (or `codex exec`) works.
+
+2) Install from JupyterLab Discovery (Extension Manager)
+1. Open JupyterLab.
+2. Open `Extensions` (puzzle icon) in the left sidebar.
+3. Search `jupyterlab-codex-sidebar`.
+4. Click `Install`.
+
+3) Restart and verify
+1. In JupyterLab menu, run `File > Shut Down`.
+2. Start JupyterLab again.
+3. Confirm `Codex` appears in the right sidebar.
+
+4) Create Jupytext pairs (`.ipynb` <-> `.py`)
+- This extension requires a Jupytext paired workflow.
+
+### A. Start from `.ipynb`
+1. Open the notebook.
+2. In the `Jupytext` menu, choose `Pair Notebook with ...`.
+3. Select `.py`.
+4. Confirm a same-name `.py` file exists.
+
+### B. Start from `.py` (reverse direction)
+1. Open the `.py` file as a notebook (`Open With > Notebook`, etc.).
+2. In the `Jupytext` menu, choose `Pair Notebook with ...`.
+3. Select `.ipynb`.
+4. Confirm a same-name `.ipynb` file exists.
+
+Note: For Codex sidebar usage, the paired `.ipynb` and `.py` should both exist with the same base name.
+
 A JupyterLab 4 sidebar extension that connects to Codex CLI (`codex exec --json`) and provides a chat-style assistant UI.
 
 The extension has two parts:
@@ -155,6 +191,42 @@ Selected UI values are passed as CLI args.
 ## Korean
 
 # JupyterLab Codex 사이드바
+
+### 빠른 가이드 (Discovery 설치, 먼저 읽기)
+아래 순서대로 하면 가장 쉽게 설정할 수 있습니다.
+
+1) 사전 준비
+- `Jupytext` JupyterLab extension이 먼저 설치되어 있어야 합니다.
+- 터미널에서 `codex` CLI가 설치되어 있고, 로그인된 상태여야 합니다.
+  - 확인: `codex exec --help` (또는 `codex exec`) 가 정상 동작
+
+2) JupyterLab Discovery(Extension Manager)에서 설치
+1. JupyterLab 실행
+2. 왼쪽 사이드바 `Extensions`(퍼즐 아이콘) 열기
+3. `jupyterlab-codex-sidebar` 검색
+4. `Install` 클릭
+
+3) 재시작 후 확인
+1. JupyterLab 상단 메뉴에서 `File > Shut Down` 실행
+2. JupyterLab 재실행
+3. 우측 사이드바에 `Codex` 패널이 보이는지 확인
+
+4) Jupytext 페어링 만들기 (`.ipynb` <-> `.py`)
+- 이 확장은 Jupytext 페어링 워크플로우를 전제로 합니다.
+
+### A. `.ipynb` 파일에서 시작할 때
+1. 노트북(`.ipynb`) 열기
+2. 상단 `Jupytext` 메뉴에서 `Pair Notebook with ...` 선택
+3. `.py` 포맷으로 페어링
+4. 같은 이름의 `.py` 파일이 생성되었는지 확인
+
+### B. `.py` 파일에서 시작할 때 (반대 방향)
+1. `.py` 파일을 Notebook 형태로 열기(`Open With > Notebook` 등)
+2. 상단 `Jupytext` 메뉴에서 `Pair Notebook with ...` 선택
+3. `.ipynb` 포맷으로 페어링
+4. 같은 이름의 `.ipynb` 파일이 생성되었는지 확인
+
+참고: Codex 사이드바 사용 시에는 같은 이름의 `.ipynb`와 `.py` 페어가 모두 있어야 합니다.
 
 JupyterLab 4 우측 사이드바에서 Codex CLI(`codex exec --json`)를 채팅 UI로 사용할 수 있게 해주는 확장입니다.
 
