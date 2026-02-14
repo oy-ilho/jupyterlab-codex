@@ -50,6 +50,41 @@ function ArrowDownIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
   );
 }
 
+function RefreshIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" {...props}>
+      <path
+        d="M4 12a8 8 0 1 0 2-5.5"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M3 4v5h5"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M20 12a8 8 0 1 1-2 5.5"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M21 20v-5h-5"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function StopIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
   return (
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" {...props}>
@@ -1255,6 +1290,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const [pendingImages, setPendingImages] = useState<PendingImageAttachment[]>([]);
   const pendingImagesRef = useRef<PendingImageAttachment[]>([]);
   const [socketConnected, setSocketConnected] = useState(false);
+  const [isReconnecting, setIsReconnecting] = useState(false);
+  const [reconnectCounter, setReconnectCounter] = useState(0);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [reasoningMenuOpen, setReasoningMenuOpen] = useState(false);
@@ -1807,14 +1844,30 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     };
   }, [props.notebooks]);
 
+  function reconnectSocket(): void {
+    if (isReconnecting) {
+      return;
+    }
+    setReconnectCounter(value => value + 1);
+  }
+
   useEffect(() => {
+    setIsReconnecting(true);
     const settings = ServerConnection.makeSettings();
     const wsUrl = URLExt.join(settings.wsUrl, 'codex', 'ws');
-    const socket = new WebSocket(wsUrl);
+    let socket: WebSocket;
+    try {
+      socket = new WebSocket(wsUrl);
+    } catch {
+      setSocketConnected(false);
+      setIsReconnecting(false);
+      return;
+    }
     wsRef.current = socket;
 
     socket.onopen = () => {
       setSocketConnected(true);
+      setIsReconnecting(false);
 
       const notebookPath = currentNotebookPathRef.current || getNotebookPath(props.notebooks);
       if (!notebookPath) {
@@ -1827,7 +1880,13 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 
     socket.onclose = () => {
       setSocketConnected(false);
+      setIsReconnecting(false);
       runToPathRef.current = new Map();
+    };
+
+    socket.onerror = () => {
+      setSocketConnected(false);
+      setIsReconnecting(false);
     };
 
     socket.onmessage = event => {
@@ -1975,7 +2034,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       wsRef.current = null;
       runToPathRef.current = new Map();
     };
-  }, [props.notebooks]);
+  }, [props.notebooks, reconnectCounter]);
 
   useEffect(() => {
     if (!isAtBottom) {
@@ -2405,6 +2464,19 @@ function CodexChat(props: CodexChatProps): JSX.Element {
             </span>
           </div>
 	          <div className="jp-CodexChat-header-actions">
+            {status === 'disconnected' && (
+              <button
+                type="button"
+                className="jp-CodexHeaderBtn"
+                onClick={() => reconnectSocket()}
+                disabled={isReconnecting}
+                aria-label={isReconnecting ? 'Codex reconnecting' : 'Reconnect to Codex'}
+                title={isReconnecting ? 'Attempting to reconnect...' : 'Reconnect to Codex'}
+              >
+                <RefreshIcon width={16} height={16} />
+                <span className="jp-CodexHeaderBtn-label">{isReconnecting ? 'Connecting...' : 'Reconnect'}</span>
+              </button>
+            )}
 	            <button
 	              type="button"
 	              onClick={() => void startNewThread()}
