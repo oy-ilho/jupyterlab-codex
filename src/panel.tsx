@@ -770,11 +770,11 @@ function formatSessionStartedNotice(label: string, time: string | null): string 
 function normalizeSessionStartedNotice(text: string): string | null {
   const raw = text.trim();
 
-  // Korean
+  // Korean legacy messages (normalize to English UI text)
   if (raw.startsWith('세션 시작')) {
     const { rest, value } = extractTrailingParenValue(raw);
     if (rest.startsWith('세션 시작')) {
-      return formatSessionStartedNotice('세션 시작', value);
+      return formatSessionStartedNotice('Session started', value);
     }
   }
 
@@ -2084,9 +2084,9 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     }
 
     const result = await showDialog({
-      title: '모든 대화 삭제',
-      body: `저장된 대화 기록 ${count}개와 현재 메모리 대화를 모두 삭제합니다.`,
-      buttons: [Dialog.cancelButton(), Dialog.okButton({ label: '삭제' })]
+      title: 'Delete all conversations',
+      body: `This will delete ${count} saved conversation(s) and all in-memory messages in this panel.`,
+      buttons: [Dialog.cancelButton(), Dialog.okButton({ label: 'Delete' })]
     });
     if (!result.button.accept) {
       return;
@@ -2447,8 +2447,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
             '';
           const trimmedError = explicitError ? truncateEnd(explicitError, 600) : '';
           const failureMessage = trimmedError
-            ? `Codex 실행 실패 (exit ${exitCode}): ${trimmedError}`
-            : `Codex 실행 실패 (exit ${exitCode}). 위 로그의 실제 에러 메시지를 확인해 주세요.`;
+            ? `Codex run failed (exit ${exitCode}): ${trimmedError}`
+            : `Codex run failed (exit ${exitCode}). Check the logs above for the underlying error.`;
           appendMessage(targetSessionKey, 'system', failureMessage);
         }
         if (targetSessionKey) {
@@ -3045,15 +3045,21 @@ function CodexChat(props: CodexChatProps): JSX.Element {
               </button>
             </div>
             <div className="jp-CodexSettingsPanel-stats">
-              <span className="jp-CodexSettingsPanel-stat">저장된 대화: {storedThreadCount}개</span>
+              <span className="jp-CodexSettingsPanel-stat">
+                Saved conversations: {storedThreadCount}
+              </span>
               <button
                 type="button"
                 className="jp-CodexBtn jp-CodexBtn-xs jp-CodexBtn-danger"
                 onClick={() => void clearAllSessions()}
                 disabled={status === 'running' || (storedThreadCount === 0 && sessions.size === 0)}
-                title={status === 'running' ? '실행 중에는 삭제할 수 없습니다.' : '저장된 대화를 모두 삭제'}
+                title={
+                  status === 'running'
+                    ? 'Cannot delete while a run is in progress.'
+                    : 'Delete all saved conversations'
+                }
               >
-                전체 삭제
+                Delete all
               </button>
             </div>
             <div className="jp-CodexChat-controls">

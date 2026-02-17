@@ -863,9 +863,9 @@
 
 .jp-CodexMarkdown code {
   font-family: var(--cdx-mono);
-  font-size: 12px;
+  font-size: 11px;
   color: var(--cdx-code-text);
-  padding: 2px 8px;
+  padding: 2px 7px;
   border-radius: 10px;
   border: 0;
   background: color-mix(in srgb, var(--cdx-surface-2) 78%, transparent);
@@ -890,6 +890,8 @@
 }
 
 .jp-CodexMarkdown pre code {
+  font-size: inherit;
+  line-height: inherit;
   padding: 0;
   border: 0;
   background: transparent;
