@@ -1750,7 +1750,13 @@
   padding: 0;
   width: var(--cdx-composer-btn-size, 30px);
   height: var(--cdx-composer-btn-size, 30px);
-  border-radius: 50%;
+  min-width: var(--cdx-composer-btn-size, 30px);
+  min-height: var(--cdx-composer-btn-size, 30px);
+  max-width: var(--cdx-composer-btn-size, 30px);
+  max-height: var(--cdx-composer-btn-size, 30px);
+  flex: 0 0 var(--cdx-composer-btn-size, 30px);
+  border-radius: 9999px !important;
+  overflow: hidden;
   border: 1px solid var(--cdx-border);
   background: var(--cdx-surface-2);
   color: var(--cdx-muted);
