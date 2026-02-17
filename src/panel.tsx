@@ -516,6 +516,7 @@ const INCLUDE_ACTIVE_CELL_STORAGE_KEY = 'jupyterlab-codex:include-active-cell';
 const INCLUDE_ACTIVE_CELL_OUTPUT_STORAGE_KEY = 'jupyterlab-codex:include-active-cell-output';
 const SESSION_THREADS_STORAGE_KEY = 'jupyterlab-codex:session-threads';
 const SESSION_THREADS_EVENT_KEY = 'jupyterlab-codex:session-threads:event';
+const DELETE_ALL_PENDING_KEY = 'jupyterlab-codex:delete-all-pending';
 const SESSION_KEY_SEPARATOR = '\u0000';
 
 const MAX_IMAGE_ATTACHMENTS = 4;
@@ -970,6 +971,18 @@ function safeLocalStorageRemove(key: string): void {
   } catch {
     // Ignore storage errors; settings still work for current session.
   }
+}
+
+function markDeleteAllPending(): void {
+  safeLocalStorageSet(DELETE_ALL_PENDING_KEY, '1');
+}
+
+function clearDeleteAllPending(): void {
+  safeLocalStorageRemove(DELETE_ALL_PENDING_KEY);
+}
+
+function hasDeleteAllPending(): boolean {
+  return safeLocalStorageGet(DELETE_ALL_PENDING_KEY) === '1';
 }
 
 function readStoredModel(): string {
@@ -2101,6 +2114,19 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     );
   }
 
+  function deleteAllSessionsOnServer(): boolean {
+    const socket = wsRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+    try {
+      socket.send(JSON.stringify({ type: 'delete_all_sessions' }));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   function setSessionRunState(sessionKey: string, runState: RunState, runId: string | null): void {
     if (!sessionKey) {
       return;
@@ -2411,6 +2437,10 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     if (activeSessionKey) {
       clearRunMappingForSessionKey(activeSessionKey);
     }
+    markDeleteAllPending();
+    if (!deleteAllSessionsOnServer() && activeSessionKey) {
+      appendMessage(activeSessionKey, 'system', 'Delete request could not be sent now. It will be retried when you reconnect.');
+    }
     runToSessionKeyRef.current = new Map();
     activeSessionKeyByPathRef.current = new Map();
     safeLocalStorageRemove(SESSION_THREADS_STORAGE_KEY);
@@ -2574,6 +2604,10 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       setSocketConnected(true);
       setIsReconnecting(false);
 
+      if (hasDeleteAllPending()) {
+        deleteAllSessionsOnServer();
+      }
+
       const notebookPath = currentNotebookPathRef.current || getNotebookPath(props.notebooks);
       if (!notebookPath) {
         return;
@@ -2628,6 +2662,27 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 
       if (msg.type === 'rate_limits') {
         setRateLimits(coerceRateLimitsSnapshot(msg.snapshot));
+        return;
+      }
+
+      if (msg.type === 'delete_all_sessions') {
+        const ok = msg.ok === true;
+        if (ok) {
+          clearDeleteAllPending();
+        }
+        const deletedCount = Number.isFinite(Number(msg.deletedCount)) ? Number(msg.deletedCount) : 0;
+        const failedCount = Number.isFinite(Number(msg.failedCount)) ? Number(msg.failedCount) : 0;
+        const deletedSummary = deletedCount === 1 ? 'Deleted 1 conversation' : `Deleted ${deletedCount} conversations`;
+        const feedbackSession = currentNotebookSessionKeyRef.current;
+        const feedbackText = ok
+          ? `${deletedSummary} from the server.`
+          : `${deletedSummary} from the server. Failed to delete ${failedCount} conversations. ${typeof msg.message === 'string' ? msg.message : 'Server error'}. Retry after reconnect.`;
+        if (feedbackSession) {
+          appendMessage(feedbackSession, 'system', feedbackText);
+        }
+        if (!ok && !hasDeleteAllPending()) {
+          markDeleteAllPending();
+        }
         return;
       }
 

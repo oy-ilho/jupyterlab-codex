@@ -123,6 +123,10 @@ class CodexWSHandler(WebSocketHandler):
             self._handle_delete_session(payload)
             return
 
+        if msg_type == "delete_all_sessions":
+            self._handle_delete_all_sessions(payload)
+            return
+
         if msg_type == "cancel":
             await self._handle_cancel(payload)
             return
@@ -572,6 +576,33 @@ class CodexWSHandler(WebSocketHandler):
         session_id = session_id.strip()
         if session_id:
             self._store.delete_session(session_id)
+
+    def _handle_delete_all_sessions(self, payload: Dict[str, Any]) -> None:
+        del payload
+        response: Dict[str, Any] = {
+            "type": "delete_all_sessions",
+            "ok": False,
+            "deletedCount": 0,
+            "failedCount": 0,
+            "message": "Unknown error"
+        }
+        try:
+            deleted_count, failed_count = self._store.delete_all_sessions()
+            response["deletedCount"] = deleted_count
+            response["failedCount"] = failed_count
+            response["ok"] = failed_count == 0
+            response["message"] = (
+                f"Deleted {deleted_count} conversations" if deleted_count else "No conversations found to delete"
+            )
+            if failed_count:
+                response["message"] = f"Deleted {deleted_count} conversations, failed to delete {failed_count}"
+        except Exception as exc:  # pragma: no cover - defensive path
+            response["message"] = str(exc)
+
+        try:
+            self.write_message(json.dumps(response))
+        except Exception:
+            return
 
     def _send_rate_limits_snapshot(self, force: bool = False) -> None:
         try:

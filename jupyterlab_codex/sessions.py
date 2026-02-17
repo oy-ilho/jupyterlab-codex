@@ -233,6 +233,21 @@ class SessionStore:
 
         self._delete_session_files(normalized_session_id)
 
+    def delete_all_sessions(self) -> tuple[int, int]:
+        if not self._logging_enabled:
+            return (0, 0)
+
+        deleted_count = 0
+        failed_count = 0
+        for path in self._base.glob("*.meta.json"):
+            session_id = path.stem.removesuffix(".meta")
+            if self._delete_session_files(session_id):
+                deleted_count += 1
+            else:
+                failed_count += 1
+
+        return (deleted_count, failed_count)
+
     def update_notebook_path(
         self, session_id: str, notebook_path: str, notebook_os_path: str = ""
     ) -> None:
@@ -324,12 +339,18 @@ class SessionStore:
             if when < cutoff:
                 self._delete_session_files(session_id)
 
-    def _delete_session_files(self, session_id: str) -> None:
+    def _delete_session_files(self, session_id: str) -> bool:
+        deleted_any = False
+        failed = False
         for path in (self._jsonl_path(session_id), self._meta_path(session_id)):
             try:
-                path.unlink()
+                if path.exists():
+                    path.unlink()
+                    deleted_any = True
             except OSError:
+                failed = True
                 continue
+        return deleted_any and not failed
 
 
 def _derive_paired_paths(notebook_path: str, notebook_os_path: str) -> Tuple[str, str]:
