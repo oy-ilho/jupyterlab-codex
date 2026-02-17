@@ -1404,19 +1404,38 @@ function renderMarkdownToSafeHtml(markdown: string): string {
 }
 
 function normalizeMathDelimiters(markdown: string): string {
-  if (!markdown.includes('\\(') && !markdown.includes('\\[')) {
-    return markdown;
-  }
-
-  const normalizedBlock = markdown.replace(
+  const normalizedEscapedBlock = markdown.replace(
     /(^|[^\\])\\\[([\s\S]*?)\\\]/g,
     (_match, prefix: string, body: string) => `${prefix}\n$$\n${body}\n$$\n`
   );
 
-  return normalizedBlock.replace(
+  const normalizedEscapedInline = normalizedEscapedBlock.replace(
     /(^|[^\\])\\\((.+?)\\\)/g,
     (_match, prefix: string, body: string) => `${prefix}$${body}$`
   );
+
+  // Some model outputs arrive with bare bracket delimiters:
+  // [
+  //   ...latex...
+  // ]
+  // Promote those to $$...$$ when the body looks like math.
+  return normalizedEscapedInline.replace(
+    /(^|\n)[ \t]*\[\s*\n([\s\S]*?)\n[ \t]*\](?=\n|$)/g,
+    (_match, prefix: string, body: string) => {
+      const trimmed = body.trim();
+      if (!looksLikeLatexMath(trimmed)) {
+        return `${prefix}[\n${body}\n]`;
+      }
+      return `${prefix}\n$$\n${trimmed}\n$$\n`;
+    }
+  );
+}
+
+function looksLikeLatexMath(value: string): boolean {
+  if (!value) {
+    return false;
+  }
+  return /\\[A-Za-z]+/.test(value) || /[_^{}]/.test(value);
 }
 
 function StatusPill(props: { status: PanelStatus }): JSX.Element {
