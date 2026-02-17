@@ -824,10 +824,11 @@
 .jp-CodexMarkdown code {
   font-family: var(--cdx-mono);
   font-size: 12px;
-  padding: 1px 6px;
-  border-radius: 8px;
-  border: 1px solid color-mix(in srgb, var(--cdx-border) 70%, transparent);
-  background: color-mix(in srgb, var(--cdx-surface-2) 70%, transparent);
+  color: var(--cdx-code-text);
+  padding: 0 5px;
+  border-radius: 4px;
+  border: 0;
+  background: color-mix(in srgb, var(--cdx-surface-2) 78%, transparent);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
