@@ -2038,14 +2038,11 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       const session =
         next.get(targetSessionKey) ?? createSession('', `Session started`, { sessionKey: targetSessionKey });
       const messages = session.messages;
-      const last = messages[messages.length - 1];
-      let updatedMessages: ChatEntry[];
-      // Coalesce streaming assistant output into a single bubble until a non-assistant message arrives.
-      if (role === 'assistant' && last && last.kind === 'text' && last.role === 'assistant') {
-        updatedMessages = [...messages.slice(0, -1), { ...last, text: last.text + nextText }];
-      } else {
-        updatedMessages = [...messages, { kind: 'text', id: crypto.randomUUID(), role, text: nextText }];
-      }
+      // Keep each incoming message as a distinct bubble for readability.
+      const updatedMessages: ChatEntry[] = [
+        ...messages,
+        { kind: 'text', id: crypto.randomUUID(), role, text: nextText }
+      ];
 
       next.set(targetSessionKey, { ...session, messages: updatedMessages });
       return next;
