@@ -148,14 +148,16 @@ function GaugeIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
 }
 
 function ReasoningEffortIcon(
-  props: React.SVGProps<SVGSVGElement> & { effort: ReasoningOptionValue }
+  props: React.SVGProps<SVGSVGElement> & {
+    effort: ReasoningOptionValue;
+    effortOptions?: readonly ReasoningOption[];
+  }
 ): JSX.Element {
-  const { effort, ...svgProps } = props;
+  const { effort, effortOptions = [], ...svgProps } = props;
   if (effort === '__config__') {
     return <GaugeIcon {...svgProps} />;
   }
-  const activeBars =
-    effort === 'low' ? 1 : effort === 'medium' ? 2 : effort === 'high' ? 3 : effort === 'xhigh' ? 4 : 0;
+  const activeBars = getReasoningEffortBars(effort, effortOptions);
 
   const bars = [
     { x: 6, top: 14 },
@@ -443,13 +445,21 @@ type CodexRateLimitsSnapshot = {
   secondary: RateLimitWindowSnapshot | null;
 };
 
+type ModelCatalogEntry = {
+  model: string;
+  displayName: string;
+  reasoningEfforts?: string[];
+  defaultReasoningEffort?: string;
+};
+
 type CodexChatProps = {
   notebooks: INotebookTracker;
 };
 
 type CliDefaultsSnapshot = {
   model: string | null;
-  reasoningEffort: ReasoningMenuOptionValue | null;
+  reasoningEffort: string | null;
+  availableModels?: ModelCatalogEntry[];
 };
 
 type NotebookSession = {
@@ -478,34 +488,21 @@ type SessionThreadSyncEvent = {
 
 type ModelOptionValue =
   | '__config__'
-  | 'gpt-5.3-codex'
-  | 'gpt-5.2-codex'
-  | 'gpt-5.1-codex-max'
-  | 'gpt-5.2'
-  | 'gpt-5.1-codex-mini'
-  | '__custom__';
+  | '__custom__'
+  | string;
 type ModelOption = {
   label: string;
-  value: ModelOptionValue;
+  value: string;
 };
 
-const MODEL_OPTIONS: ModelOption[] = [
-  { label: 'GPT-5.3 Codex', value: 'gpt-5.3-codex' },
-  { label: 'GPT-5.2 Codex', value: 'gpt-5.2-codex' },
-  { label: 'GPT-5.1 Codex Max', value: 'gpt-5.1-codex-max' },
-  { label: 'GPT-5.2', value: 'gpt-5.2' },
-  { label: 'GPT-5.1 Codex Mini', value: 'gpt-5.1-codex-mini' },
-  { label: 'Custom', value: '__custom__' }
-];
+const FALLBACK_MODEL_OPTIONS: ModelOption[] = [];
 const DEFAULT_MODEL = '';
-const REASONING_MENU_OPTIONS = [
-  { label: 'Low', value: 'low' },
-  { label: 'Medium', value: 'medium' },
-  { label: 'High', value: 'high' },
-  { label: 'Extra high', value: 'xhigh' }
-] as const;
-type ReasoningMenuOptionValue = (typeof REASONING_MENU_OPTIONS)[number]['value'];
-type ReasoningOptionValue = '__config__' | ReasoningMenuOptionValue;
+type ReasoningOption = {
+  label: string;
+  value: string;
+};
+type ReasoningOptionValue = '__config__' | string;
+const MAX_REASONING_EFFORT_BARS = 4;
 const SANDBOX_OPTIONS = [
   { label: 'Default permission', value: 'workspace-write' },
   { label: 'Full access', value: 'danger-full-access' }
@@ -530,8 +527,135 @@ const MAX_IMAGE_ATTACHMENTS = 4;
 const MAX_IMAGE_ATTACHMENT_BYTES = 4 * 1024 * 1024; // Avoid huge WebSocket payloads.
 const MAX_IMAGE_ATTACHMENT_TOTAL_BYTES = 6 * 1024 * 1024;
 
-function isKnownModelOption(value: string): value is ModelOptionValue {
-  return MODEL_OPTIONS.some(option => option.value === value);
+function findModelLabel(model: string, options: readonly ModelOption[]): string {
+  const match = options.find(option => option.value === model);
+  return match ? match.label : truncateMiddle(model, 32);
+}
+
+function coerceReasoningEffort(value: unknown): string {
+  return typeof value === 'string' ? value.trim().toLowerCase() : '';
+}
+
+function coerceReasoningEffortEntry(value: unknown): string {
+  if (typeof value === 'string') {
+    return coerceReasoningEffort(value);
+  }
+  if (value && typeof value === 'object' && 'reasoningEffort' in (value as Record<string, unknown>)) {
+    return coerceReasoningEffort((value as { reasoningEffort?: unknown }).reasoningEffort);
+  }
+  return '';
+}
+
+function readModelCatalog(rawModels: unknown): ModelCatalogEntry[] {
+  if (!Array.isArray(rawModels)) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  const catalog: ModelCatalogEntry[] = [];
+  for (const item of rawModels) {
+    if (!item || typeof item !== 'object') {
+      continue;
+    }
+    const rawModel = (item as { model?: unknown }).model;
+    const rawDisplayName = (item as { displayName?: unknown }).displayName;
+    const rawDefaultReasoningEffort = (item as { defaultReasoningEffort?: unknown }).defaultReasoningEffort;
+    const rawReasoningEfforts =
+      (item as { reasoningEfforts?: unknown }).reasoningEfforts ??
+      (item as { supportedReasoningEfforts?: unknown }).supportedReasoningEfforts;
+    if (typeof rawModel !== 'string') {
+      continue;
+    }
+    const model = rawModel.trim();
+    if (!model || seen.has(model)) {
+      continue;
+    }
+    seen.add(model);
+
+    const displayName = typeof rawDisplayName === 'string' && rawDisplayName.trim() ? rawDisplayName.trim() : model;
+    const defaultReasoningEffort = coerceReasoningEffort(rawDefaultReasoningEffort);
+    const reasoningEfforts = Array.isArray(rawReasoningEfforts)
+      ? rawReasoningEfforts.reduce<string[]>((acc, effortCandidate: unknown) => {
+          const effort = coerceReasoningEffortEntry(effortCandidate);
+          if (!effort || acc.includes(effort)) {
+            return acc;
+          }
+          acc.push(effort);
+          return acc;
+        }, [])
+      : [];
+    catalog.push({
+      model,
+      displayName,
+      ...(reasoningEfforts.length > 0 ? { reasoningEfforts } : {}),
+      ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
+    });
+  }
+
+  return catalog;
+}
+
+function readModelOptions(rawModels: unknown): ModelOption[] {
+  const catalog = readModelCatalog(rawModels);
+  return catalog.map(entry => ({ label: entry.displayName, value: entry.model }));
+}
+
+function getReasoningEffortBars(
+  effort: string,
+  effortOptions: readonly ReasoningOption[]
+): number {
+  if (!effort || effort === '__config__') {
+    return 0;
+  }
+  if (effortOptions.length <= 0) {
+    return 0;
+  }
+  const index = effortOptions.findIndex(option => option.value === effort);
+  if (index < 0) {
+    return 0;
+  }
+  if (effortOptions.length === 1) {
+    return 1;
+  }
+  const ratio = index / (effortOptions.length - 1);
+  return Math.max(1, Math.min(MAX_REASONING_EFFORT_BARS, Math.round(ratio * MAX_REASONING_EFFORT_BARS) + 1));
+}
+
+function buildReasoningOptions(rawModels: unknown, selectedModel: string): ReasoningOption[] {
+  const catalog = readModelCatalog(rawModels);
+  const normalizedModel = selectedModel.trim();
+  const modelByName = catalog.find(item => item.model === normalizedModel);
+  const reasons =
+    modelByName?.reasoningEfforts && modelByName.reasoningEfforts.length > 0
+      ? modelByName.reasoningEfforts
+      : modelByName?.defaultReasoningEffort
+        ? [modelByName.defaultReasoningEffort]
+        : catalog.flatMap(item => item.reasoningEfforts ?? []);
+
+  const deduped = new Map<string, ReasoningOption>();
+  for (const reason of reasons) {
+    const normalized = coerceReasoningEffort(reason);
+    if (!normalized || deduped.has(normalized)) {
+      continue;
+    }
+    const upper =
+      normalized.charAt(0).toUpperCase() + normalized.slice(1).replace(/[_-]/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
+    deduped.set(normalized, { value: normalized, label: upper });
+  }
+
+  return Array.from(deduped.values());
+}
+
+function findReasoningLabel(value: string, options: readonly ReasoningOption[]): string {
+  const match = options.find(option => option.value === value);
+  if (match) {
+    return match.label;
+  }
+  const normalized = coerceReasoningEffort(value);
+  if (!normalized) {
+    return 'Reasoning';
+  }
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1).replace(/[_-]/g, ' ');
 }
 
 function isKnownSandboxMode(value: string): value is SandboxMode {
@@ -874,9 +998,8 @@ function readStoredReasoningEffort(): ReasoningOptionValue {
     if (stored === '__config__') {
       return '__config__';
     }
-    return REASONING_MENU_OPTIONS.some(option => option.value === stored)
-      ? (stored as ReasoningOptionValue)
-      : '__config__';
+    const normalized = stored.trim();
+    return normalized ? (normalized as ReasoningOptionValue) : '__config__';
   } catch {
     return '__config__';
   }
@@ -1545,17 +1668,18 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const [currentNotebookSessionKey, setCurrentNotebookSessionKey] = useState<string>('');
   const currentNotebookSessionKeyRef = useRef<string>('');
   const [cliDefaults, setCliDefaults] = useState<CliDefaultsSnapshot>({ model: null, reasoningEffort: null });
+  const [modelOptions, setModelOptions] = useState<ModelOption[]>(() => FALLBACK_MODEL_OPTIONS);
   const [modelOption, setModelOption] = useState<ModelOptionValue>(() => {
     const savedModel = readStoredModel();
-    if (isKnownModelOption(savedModel)) {
+    if (savedModel === '__config__' || savedModel === '__custom__') {
       return savedModel;
     }
-    // If we previously stored a custom model name, keep the UI in "Custom" mode.
+    // If a prior manual model name exists, keep the UI in manual mode.
     return savedModel ? '__custom__' : '__config__';
   });
   const [customModel, setCustomModel] = useState<string>(() => {
     const savedModel = readStoredModel();
-    if (savedModel && !isKnownModelOption(savedModel)) {
+    if (savedModel && savedModel !== '__config__' && savedModel !== '__custom__') {
       return savedModel;
     }
     return readStoredCustomModel();
@@ -1621,6 +1745,49 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const selectedReasoningEffort = reasoningEffort === '__config__' ? '' : reasoningEffort;
   const autoModel = cliDefaults.model;
   const autoReasoningEffort = cliDefaults.reasoningEffort;
+  const reasoningModel = modelOption === '__custom__' ? customModel.trim() : modelOption === '__config__' ? (autoModel || '') : modelOption;
+  const reasoningOptions = useMemo<ReasoningOption[]>(
+    () => buildReasoningOptions(cliDefaults.availableModels, reasoningModel),
+    [cliDefaults.availableModels, reasoningModel]
+  );
+
+  useEffect(() => {
+    const dynamicModelOptions = readModelOptions(cliDefaults.availableModels);
+    setModelOptions(dynamicModelOptions);
+  }, [cliDefaults.availableModels]);
+
+  useEffect(() => {
+    if (reasoningEffort === '__config__') {
+      return;
+    }
+    if (!reasoningOptions.some(option => option.value === reasoningEffort)) {
+      setReasoningEffort('__config__');
+    }
+  }, [reasoningEffort, reasoningOptions]);
+
+  useEffect(() => {
+    if (modelOption === '__config__' || modelOption === '__custom__') {
+      return;
+    }
+    if (!modelOptions.some(option => option.value === modelOption)) {
+      setModelOption('__custom__');
+      setCustomModel(modelOption);
+    }
+  }, [modelOption, modelOptions]);
+
+  useEffect(() => {
+    if (modelOption !== '__custom__') {
+      return;
+    }
+    const trimmed = customModel.trim();
+    if (!trimmed) {
+      return;
+    }
+    if (modelOptions.some(option => option.value === trimmed)) {
+      setModelOption(trimmed);
+      setCustomModel('');
+    }
+  }, [customModel, modelOptions, modelOption]);
 
   useEffect(() => {
     sessionsRef.current = sessions;
@@ -2482,13 +2649,21 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       const targetSessionKey = resolveMessageSessionKey(msg);
 
       if (msg.type === 'cli_defaults') {
-        const model = typeof msg.model === 'string' && msg.model.trim() ? msg.model.trim() : null;
-        const rawReasoning =
-          typeof msg.reasoningEffort === 'string' ? msg.reasoningEffort.trim().toLowerCase() : '';
-        const reasoningEffort = REASONING_MENU_OPTIONS.some(option => option.value === rawReasoning)
-          ? (rawReasoning as ReasoningMenuOptionValue)
+        const modelIsPresent = Object.prototype.hasOwnProperty.call(msg, 'model');
+        const reasoningIsPresent = Object.prototype.hasOwnProperty.call(msg, 'reasoningEffort');
+        const availableModelsIsPresent = Object.prototype.hasOwnProperty.call(msg, 'availableModels');
+        const model =
+          modelIsPresent && typeof msg.model === 'string' && msg.model.trim() ? msg.model.trim() : null;
+        const reasoningEffort = reasoningIsPresent
+          ? coerceReasoningEffort(typeof msg.reasoningEffort === 'string' ? msg.reasoningEffort : '')
           : null;
-        setCliDefaults({ model, reasoningEffort });
+        const availableModels = Array.isArray(msg.availableModels) ? msg.availableModels : undefined;
+        const normalizedAvailableModels = availableModels ? readModelCatalog(availableModels) : undefined;
+        setCliDefaults(prev => ({
+          model: modelIsPresent ? model : prev.model,
+          reasoningEffort: reasoningIsPresent ? reasoningEffort : prev.reasoningEffort,
+          availableModels: availableModelsIsPresent ? normalizedAvailableModels : prev.availableModels
+        }));
         return;
       }
 
@@ -3018,21 +3193,21 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     currentSession?.pairedOk !== false;
   const runningSummary = status === 'running' ? progress || 'Working...' : '';
   const autoModelLabel = autoModel
-    ? MODEL_OPTIONS.find(option => option.value === autoModel)?.label ?? truncateMiddle(autoModel, 32)
+    ? findModelLabel(autoModel, modelOptions)
     : 'Auto';
   const selectedModelLabel =
     modelOption === '__custom__'
-      ? customModel.trim() || 'Custom'
+      ? customModel.trim() || 'Model name'
       : modelOption === '__config__'
         ? autoModelLabel
-        : MODEL_OPTIONS.find(option => option.value === modelOption)?.label ?? 'Model';
+        : findModelLabel(modelOption, modelOptions);
   const autoReasoningLabel = autoReasoningEffort
-    ? REASONING_MENU_OPTIONS.find(option => option.value === autoReasoningEffort)?.label ?? 'Auto'
+    ? findReasoningLabel(autoReasoningEffort, reasoningOptions)
     : 'Auto';
   const selectedReasoningLabel =
     reasoningEffort === '__config__'
       ? autoReasoningLabel
-      : REASONING_MENU_OPTIONS.find(option => option.value === reasoningEffort)?.label ?? 'Reasoning';
+      : findReasoningLabel(reasoningEffort, reasoningOptions);
   const selectedSandboxLabel = SANDBOX_OPTIONS.find(option => option.value === sandboxMode)?.label ?? 'Permission';
   const notificationPermission = getBrowserNotificationPermission();
   const notificationsUnsupported = notificationPermission === 'unsupported';
@@ -3476,9 +3651,9 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                 ariaLabel="Model"
                 align="left"
               >
-                {MODEL_OPTIONS.map(option => {
+                {modelOptions.map(option => {
                   const inferred =
-                    modelOption === '__config__' && autoModel && isKnownModelOption(autoModel)
+                    modelOption === '__config__' && autoModel && modelOptions.some(option => option.value === autoModel)
                       ? (autoModel as ModelOptionValue)
                       : modelOption;
                   const isActive = inferred === option.value;
@@ -3501,29 +3676,40 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                     </button>
                   );
                 })}
-
+                <>
+                  <div className="jp-CodexMenuDivider" role="separator" />
+                  <button
+                    type="button"
+                    className={`jp-CodexMenuItem ${modelOption === '__custom__' ? 'is-active' : ''}`}
+                    onClick={() => {
+                      setModelOption('__custom__');
+                    }}
+                  >
+                    <span className="jp-CodexMenuItemLabel">Model name</span>
+                    {modelOption === '__custom__' && (
+                      <CheckIcon className="jp-CodexMenuCheck" width={16} height={16} />
+                    )}
+                  </button>
+                </>
                 {modelOption === '__custom__' && (
-                  <>
-                    <div className="jp-CodexMenuDivider" role="separator" />
-                    <div className="jp-CodexMenuCustom">
-                      <div className="jp-CodexMenuCustomLabel">Custom model</div>
-                      <input
-                        ref={customModelInputRef}
-                        className="jp-CodexMenuInput"
-                        value={customModel}
-                        onChange={e => setCustomModel(e.currentTarget.value)}
-                        placeholder={DEFAULT_MODEL || 'gpt-5.3-codex'}
-                        disabled={status === 'running'}
-                        aria-label="Custom model"
-                        onKeyDown={e => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            setModelMenuOpen(false);
-                          }
-                        }}
-                      />
-                    </div>
-                  </>
+                  <div className="jp-CodexMenuCustom">
+                    <div className="jp-CodexMenuCustomLabel">Model name</div>
+                    <input
+                      ref={customModelInputRef}
+                      className="jp-CodexMenuInput"
+                      value={customModel}
+                      onChange={e => setCustomModel(e.currentTarget.value)}
+                      placeholder={DEFAULT_MODEL || 'gpt-5.3-codex'}
+                      disabled={status === 'running'}
+                      aria-label="Model name"
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          setModelMenuOpen(false);
+                        }
+                      }}
+                    />
+                  </div>
                 )}
               </PortalMenu>
 
@@ -3550,12 +3736,13 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                         ? autoReasoningEffort
                         : reasoningEffort) as ReasoningOptionValue
                     }
+                    effortOptions={reasoningOptions}
                     width={18}
                     height={18}
                   />
                 </button>
               </div>
-              <PortalMenu
+                <PortalMenu
                 open={reasoningMenuOpen}
                 anchorRef={reasoningBtnRef}
                 popoverRef={reasoningPopoverRef}
@@ -3563,7 +3750,10 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                 ariaLabel="Reasoning"
                 align="left"
               >
-                {REASONING_MENU_OPTIONS.map(option => {
+                {reasoningOptions.length === 0 && (
+                  <div className="jp-CodexMenuItem">No reasoning options</div>
+                )}
+                {reasoningOptions.map(option => {
                   const inferred =
                     reasoningEffort === '__config__' && autoReasoningEffort ? autoReasoningEffort : reasoningEffort;
                   const isActive = inferred === option.value;

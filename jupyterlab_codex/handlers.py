@@ -99,6 +99,7 @@ class CodexWSHandler(WebSocketHandler):
     def open(self):
         self.write_message(json.dumps({"type": "status", "state": "ready"}))
         self._send_cli_defaults()
+        self._send_model_catalog()
         self._send_rate_limits_snapshot()
 
     async def on_message(self, message: str):
@@ -144,6 +145,21 @@ class CodexWSHandler(WebSocketHandler):
 
         try:
             self.write_message(json.dumps({"type": "cli_defaults", **defaults}))
+        except Exception:
+            return
+
+    def _send_model_catalog(self) -> None:
+        async def _send() -> None:
+            models = await self._runner.list_available_models()
+            if not models:
+                return
+            try:
+                self.write_message(json.dumps({"type": "cli_defaults", "availableModels": models}))
+            except Exception:
+                return
+
+        try:
+            asyncio.create_task(_send())
         except Exception:
             return
 
@@ -898,7 +914,7 @@ def _sanitize_reasoning_effort(value: Any) -> str | None:
     effort = value.strip().lower()
     if not effort:
         return None
-    if effort not in {"none", "minimal", "low", "medium", "high", "xhigh"}:
+    if not re.fullmatch(r"[a-z][a-z0-9._-]*", effort):
         return None
 
     return effort
