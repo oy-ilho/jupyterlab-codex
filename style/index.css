@@ -850,12 +850,22 @@
   margin-bottom: 6px;
 }
 
+.jp-CodexChat {
+  --jp-code-font-size: 13px;
+}
+
 .jp-CodexChat-text {
-  font-size: 13px;
+  font-size: var(--jp-code-font-size);
   line-height: 1.55;
   color: inherit;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.jp-CodexChat-text code,
+.jp-CodexChat-text pre,
+.jp-CodexChat-text pre code {
+  font-size: var(--jp-code-font-size);
 }
 
 .jp-CodexChat-attachments {
