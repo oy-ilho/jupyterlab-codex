@@ -925,7 +925,7 @@ function persistSettingsOpen(enabled: boolean): void {
 }
 
 function readStoredNotifyOnDone(): boolean {
-  return (safeLocalStorageGet(NOTIFY_ON_DONE_STORAGE_KEY) ?? 'false') === 'true';
+  return (safeLocalStorageGet(NOTIFY_ON_DONE_STORAGE_KEY) ?? 'true') === 'true';
 }
 
 function persistNotifyOnDone(enabled: boolean): void {
@@ -3735,6 +3735,12 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                     />
                     Include active cell output
                   </label>
+                </div>
+              </section>
+
+              <section className="jp-CodexSettingsSection" aria-label="Notification options">
+                <div className="jp-CodexSettingsSection-title">NOTIFICATION</div>
+                <div className="jp-CodexSettingsOptions">
                   <label className="jp-CodexChat-toggle">
                     <input
                       type="checkbox"
