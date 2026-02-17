@@ -608,6 +608,31 @@
   scroll-padding-bottom: calc(12px + var(--cdx-chat-bottom-fade) + env(safe-area-inset-bottom, 0px));
 }
 
+.jp-CodexRunDivider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 6px 2px 2px;
+  color: var(--cdx-muted);
+  font-size: 11px;
+  line-height: 1.2;
+  user-select: none;
+  animation: cdx-fade-up 160ms ease-out both;
+}
+
+.jp-CodexRunDivider::before,
+.jp-CodexRunDivider::after {
+  content: '';
+  flex: 1 1 auto;
+  height: 1px;
+  background: color-mix(in srgb, var(--cdx-border) 80%, transparent);
+}
+
+.jp-CodexRunDividerLabel {
+  white-space: nowrap;
+  color: color-mix(in srgb, var(--cdx-muted) 88%, var(--cdx-text));
+}
+
 .jp-CodexChat-user,
 .jp-CodexChat-assistant {
   /* Restore a roomier rhythm for the main chat bubbles without affecting activity lines. */
@@ -825,10 +850,13 @@
   font-family: var(--cdx-mono);
   font-size: 12px;
   color: var(--cdx-code-text);
-  padding: 0 5px;
-  border-radius: 4px;
+  padding: 2px 8px;
+  border-radius: 10px;
   border: 0;
   background: color-mix(in srgb, var(--cdx-surface-2) 78%, transparent);
+  line-height: 1.45;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;

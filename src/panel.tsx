@@ -393,6 +393,11 @@ type ChatEntry =
       attachments?: ChatAttachments;
     }
   | {
+      kind: 'run-divider';
+      id: string;
+      elapsedMs: number;
+    }
+  | {
       kind: 'activity';
       id: string;
       item: ActivityItem;
@@ -445,6 +450,7 @@ type NotebookSession = {
   messages: ChatEntry[];
   runState: RunState;
   activeRunId: string | null;
+  runStartedAt: number | null;
   progress: string;
   progressKind: ProgressKind;
   pairedOk: boolean | null;
@@ -517,6 +523,7 @@ function createSession(path: string, intro: string): NotebookSession {
     threadId: crypto.randomUUID(),
     runState: 'ready',
     activeRunId: null,
+    runStartedAt: null,
     progress: '',
     progressKind: '',
     messages: [
@@ -793,6 +800,19 @@ function formatDurationShort(ms: number): string {
     return `${hours}h ${minutes}m`;
   }
   return `${minutes}m`;
+}
+
+function formatRunDuration(ms: number): string {
+  if (!Number.isFinite(ms)) {
+    return '0s';
+  }
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes > 0) {
+    return `${minutes}m ${seconds}s`;
+  }
+  return `${seconds}s`;
 }
 
 function formatResetsIn(resetsAtSec: number | null, nowMs: number): string {
@@ -1519,12 +1539,28 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       return;
     }
 
+    const now = Date.now();
     updateSessions(prev => {
       const next = new Map(prev);
       const session = next.get(path) ?? createSession(path, `Session started`);
+      let messages = session.messages;
+      let runStartedAt = session.runStartedAt;
+
+      if (runState === 'running' && session.runState !== 'running') {
+        runStartedAt = now;
+      }
+      if (runState === 'ready' && session.runState === 'running') {
+        const startedAt = runStartedAt;
+        if (typeof startedAt === 'number' && Number.isFinite(startedAt)) {
+          const elapsedMs = Math.max(0, now - startedAt);
+          messages = [...messages, { kind: 'run-divider', id: crypto.randomUUID(), elapsedMs }];
+        }
+        runStartedAt = null;
+      }
+
       const progress = session.runState === runState ? session.progress : '';
       const progressKind = session.runState === runState ? session.progressKind : '';
-      next.set(path, { ...session, runState, activeRunId: runId, progress, progressKind });
+      next.set(path, { ...session, messages, runState, activeRunId: runId, runStartedAt, progress, progressKind });
       return next;
     });
   }
@@ -2338,16 +2374,17 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 	          attachments: imageCount > 0 ? { images: imageCount } : undefined
 	        }
 	      ];
-	      next.set(notebookPath, {
-	        ...existing,
-	        messages: updatedMessages,
-        runState: 'running',
-        activeRunId: null,
-        progress: '',
-        progressKind: '',
-      });
-      return next;
-    });
+		      next.set(notebookPath, {
+		        ...existing,
+		        messages: updatedMessages,
+	        runState: 'running',
+	        activeRunId: null,
+          runStartedAt: Date.now(),
+	        progress: '',
+	        progressKind: '',
+	      });
+	      return next;
+	    });
     setInput('');
     clearPendingImages();
   }
@@ -2657,8 +2694,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
               <div className="jp-CodexChat-text">Select a notebook, then start a conversation.</div>
             </div>
           )}
-	          {messages.map(entry => {
-	            if (entry.kind === 'text') {
+		          {messages.map(entry => {
+		            if (entry.kind === 'text') {
 	              const systemVariant =
 	                entry.role === 'system'
 	                  ? isSessionStartNotice(entry.text)
@@ -2686,10 +2723,17 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 	                    </div>
 	                  )}
 	                </div>
-	              );
-	            }
+		              );
+		            }
+              if (entry.kind === 'run-divider') {
+                return (
+                  <div key={entry.id} className="jp-CodexRunDivider" role="separator" aria-label="Run duration">
+                    <span className="jp-CodexRunDividerLabel">Worked for {formatRunDuration(entry.elapsedMs)}</span>
+                  </div>
+                );
+              }
 
-            const item = entry.item;
+	            const item = entry.item;
             const trimmedDetail = (item.detail || '').trim();
             const isExpandable = Boolean(trimmedDetail);
             const activityClassName = `jp-CodexChat-message jp-CodexChat-activity${
