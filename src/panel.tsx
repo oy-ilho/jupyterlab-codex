@@ -7,8 +7,15 @@ import { URLExt } from '@jupyterlab/coreutils';
 import type { DocumentRegistry } from '@jupyterlab/docregistry';
 import { Message } from '@lumino/messaging';
 import { marked } from 'marked';
+import markedKatex from 'marked-katex-extension';
 import DOMPurify from 'dompurify';
 import hljs from 'highlight.js/lib/common';
+
+marked.use(
+  markedKatex({
+    throwOnError: false
+  })
+);
 
 function PlusIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
   return (
@@ -1379,9 +1386,10 @@ function renderMarkdownToSafeHtml(markdown: string): string {
   if (!markdown) {
     return '';
   }
+  const normalizedMarkdown = normalizeMathDelimiters(markdown);
   let html = '';
   try {
-    html = marked.parse(markdown, {
+    html = marked.parse(normalizedMarkdown, {
       gfm: true,
       breaks: true
     }) as string;
@@ -1393,6 +1401,22 @@ function renderMarkdownToSafeHtml(markdown: string): string {
   } catch {
     return html;
   }
+}
+
+function normalizeMathDelimiters(markdown: string): string {
+  if (!markdown.includes('\\(') && !markdown.includes('\\[')) {
+    return markdown;
+  }
+
+  const normalizedBlock = markdown.replace(
+    /(^|[^\\])\\\[([\s\S]*?)\\\]/g,
+    (_match, prefix: string, body: string) => `${prefix}\n$$\n${body}\n$$\n`
+  );
+
+  return normalizedBlock.replace(
+    /(^|[^\\])\\\((.+?)\\\)/g,
+    (_match, prefix: string, body: string) => `${prefix}$${body}$`
+  );
 }
 
 function StatusPill(props: { status: PanelStatus }): JSX.Element {

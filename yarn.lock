@@ -4218,7 +4218,9 @@ __metadata:
     "@types/react-dom": ^18.2.0
     dompurify: ^3.3.1
     highlight.js: ^11.11.1
+    katex: ^0.16.28
     marked: ^16.4.2
+    marked-katex-extension: ^5.1.7
     react: ^18.2.0
     react-dom: ^18.2.0
     rimraf: ^5.0.0
@@ -4226,7 +4228,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"katex@npm:^0.16.22":
+"katex@npm:^0.16.22, katex@npm:^0.16.28":
   version: 0.16.28
   resolution: "katex@npm:0.16.28"
   dependencies:
@@ -4404,6 +4406,16 @@ __metadata:
   peerDependencies:
     marked: ">=13 <18"
   checksum: 61cccce4b5d8a75c9d5c4c1c9b6ee4896fa9c34747dd7efe37bb3ff100f0cb8bd93cc0f93eed4ead1c2e6b0d546b4886455e4655ada3c6f1051d122a456c507a
+  languageName: node
+  linkType: hard
+
+"marked-katex-extension@npm:^5.1.7":
+  version: 5.1.7
+  resolution: "marked-katex-extension@npm:5.1.7"
+  peerDependencies:
+    katex: ">=0.16 <0.17"
+    marked: ">=4 <18"
+  checksum: 65b8a4e0ccd49a927ba1cdf7adac760ea3bae25379ed87ca78ff09e10f2eace2c2d84c7ba8f34dbf172c0cea14f223b6e82266eeaf937f5b40b088adc376b254
   languageName: node
   linkType: hard
 
