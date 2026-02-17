@@ -486,17 +486,13 @@ type SessionThreadSyncEvent = {
   issuedAt: number;
 };
 
-type ModelOptionValue =
-  | '__config__'
-  | '__custom__'
-  | string;
+type ModelOptionValue = '__config__' | string;
 type ModelOption = {
   label: string;
   value: string;
 };
 
 const FALLBACK_MODEL_OPTIONS: ModelOption[] = [];
-const DEFAULT_MODEL = '';
 type ReasoningOption = {
   label: string;
   value: string;
@@ -510,7 +506,6 @@ const SANDBOX_OPTIONS = [
 type SandboxMode = (typeof SANDBOX_OPTIONS)[number]['value'];
 const AUTO_SAVE_STORAGE_KEY = 'jupyterlab-codex:auto-save-before-send';
 const MODEL_STORAGE_KEY = 'jupyterlab-codex:model';
-const CUSTOM_MODEL_STORAGE_KEY = 'jupyterlab-codex:custom-model';
 const COMMAND_PATH_STORAGE_KEY = 'jupyterlab-codex:command-path';
 const REASONING_STORAGE_KEY = 'jupyterlab-codex:reasoning-effort';
 const SANDBOX_MODE_STORAGE_KEY = 'jupyterlab-codex:sandbox-mode';
@@ -536,12 +531,16 @@ function coerceReasoningEffort(value: unknown): string {
   return typeof value === 'string' ? value.trim().toLowerCase() : '';
 }
 
+function coerceReasoningText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
 function coerceReasoningEffortEntry(value: unknown): string {
   if (typeof value === 'string') {
-    return coerceReasoningEffort(value);
+    return coerceReasoningText(value);
   }
   if (value && typeof value === 'object' && 'reasoningEffort' in (value as Record<string, unknown>)) {
-    return coerceReasoningEffort((value as { reasoningEffort?: unknown }).reasoningEffort);
+    return coerceReasoningText((value as { reasoningEffort?: unknown }).reasoningEffort);
   }
   return '';
 }
@@ -573,7 +572,7 @@ function readModelCatalog(rawModels: unknown): ModelCatalogEntry[] {
     seen.add(model);
 
     const displayName = typeof rawDisplayName === 'string' && rawDisplayName.trim() ? rawDisplayName.trim() : model;
-    const defaultReasoningEffort = coerceReasoningEffort(rawDefaultReasoningEffort);
+    const defaultReasoningEffort = coerceReasoningEffortEntry(rawDefaultReasoningEffort);
     const reasoningEfforts = Array.isArray(rawReasoningEfforts)
       ? rawReasoningEfforts.reduce<string[]>((acc, effortCandidate: unknown) => {
           const effort = coerceReasoningEffortEntry(effortCandidate);
@@ -634,13 +633,12 @@ function buildReasoningOptions(rawModels: unknown, selectedModel: string): Reaso
 
   const deduped = new Map<string, ReasoningOption>();
   for (const reason of reasons) {
-    const normalized = coerceReasoningEffort(reason);
+    const label = coerceReasoningEffortEntry(reason);
+    const normalized = coerceReasoningEffort(label);
     if (!normalized || deduped.has(normalized)) {
       continue;
     }
-    const upper =
-      normalized.charAt(0).toUpperCase() + normalized.slice(1).replace(/[_-]/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
-    deduped.set(normalized, { value: normalized, label: upper });
+    deduped.set(normalized, { value: normalized, label: label || normalized });
   }
 
   return Array.from(deduped.values());
@@ -651,11 +649,11 @@ function findReasoningLabel(value: string, options: readonly ReasoningOption[]):
   if (match) {
     return match.label;
   }
-  const normalized = coerceReasoningEffort(value);
-  if (!normalized) {
+  const raw = coerceReasoningText(value);
+  if (!raw) {
     return 'Reasoning';
   }
-  return normalized.charAt(0).toUpperCase() + normalized.slice(1).replace(/[_-]/g, ' ');
+  return raw;
 }
 
 function isKnownSandboxMode(value: string): value is SandboxMode {
@@ -976,10 +974,6 @@ function readStoredCommandPath(): string {
   return safeLocalStorageGet(COMMAND_PATH_STORAGE_KEY) ?? '';
 }
 
-function readStoredCustomModel(): string {
-  return safeLocalStorageGet(CUSTOM_MODEL_STORAGE_KEY) ?? '';
-}
-
 function readStoredAutoSave(): boolean {
   return (safeLocalStorageGet(AUTO_SAVE_STORAGE_KEY) ?? 'true') !== 'false';
 }
@@ -1010,9 +1004,8 @@ function readStoredSandboxMode(): SandboxMode {
   return isKnownSandboxMode(stored) ? stored : SANDBOX_OPTIONS[0].value;
 }
 
-function persistModel(model: string, customModel: string): void {
+function persistModel(model: string): void {
   safeLocalStorageSet(MODEL_STORAGE_KEY, model);
-  safeLocalStorageSet(CUSTOM_MODEL_STORAGE_KEY, customModel);
 }
 
 function persistCommandPath(commandPath: string): void {
@@ -1671,18 +1664,10 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const [modelOptions, setModelOptions] = useState<ModelOption[]>(() => FALLBACK_MODEL_OPTIONS);
   const [modelOption, setModelOption] = useState<ModelOptionValue>(() => {
     const savedModel = readStoredModel();
-    if (savedModel === '__config__' || savedModel === '__custom__') {
-      return savedModel;
-    }
-    // If a prior manual model name exists, keep the UI in manual mode.
-    return savedModel ? '__custom__' : '__config__';
-  });
-  const [customModel, setCustomModel] = useState<string>(() => {
-    const savedModel = readStoredModel();
     if (savedModel && savedModel !== '__config__' && savedModel !== '__custom__') {
       return savedModel;
     }
-    return readStoredCustomModel();
+    return '__config__';
   });
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningOptionValue>(() =>
     readStoredReasoningEffort()
@@ -1733,19 +1718,13 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const permissionPopoverRef = useRef<HTMLDivElement>(null);
   const notebookLabelRef = useRef<HTMLSpanElement | null>(null);
   const [isNotebookLabelTruncated, setIsNotebookLabelTruncated] = useState(false);
-  const customModelInputRef = useRef<HTMLInputElement | null>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const storedThreadCount = useMemo<number>(() => getStoredSessionThreadCount(), [sessions]);
-  const selectedModel =
-    modelOption === '__custom__'
-      ? customModel.trim()
-      : modelOption === '__config__'
-        ? ''
-        : modelOption;
+  const selectedModel = modelOption === '__config__' ? '' : modelOption;
   const selectedReasoningEffort = reasoningEffort === '__config__' ? '' : reasoningEffort;
   const autoModel = cliDefaults.model;
   const autoReasoningEffort = cliDefaults.reasoningEffort;
-  const reasoningModel = modelOption === '__custom__' ? customModel.trim() : modelOption === '__config__' ? (autoModel || '') : modelOption;
+  const reasoningModel = modelOption === '__config__' ? (autoModel || '') : modelOption;
   const reasoningOptions = useMemo<ReasoningOption[]>(
     () => buildReasoningOptions(cliDefaults.availableModels, reasoningModel),
     [cliDefaults.availableModels, reasoningModel]
@@ -1766,28 +1745,13 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   }, [reasoningEffort, reasoningOptions]);
 
   useEffect(() => {
-    if (modelOption === '__config__' || modelOption === '__custom__') {
+    if (modelOption === '__config__') {
       return;
     }
     if (!modelOptions.some(option => option.value === modelOption)) {
-      setModelOption('__custom__');
-      setCustomModel(modelOption);
+      setModelOption('__config__');
     }
   }, [modelOption, modelOptions]);
-
-  useEffect(() => {
-    if (modelOption !== '__custom__') {
-      return;
-    }
-    const trimmed = customModel.trim();
-    if (!trimmed) {
-      return;
-    }
-    if (modelOptions.some(option => option.value === trimmed)) {
-      setModelOption(trimmed);
-      setCustomModel('');
-    }
-  }, [customModel, modelOptions, modelOption]);
 
   useEffect(() => {
     sessionsRef.current = sessions;
@@ -1813,8 +1777,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   }, []);
 
   useEffect(() => {
-    persistModel(selectedModel, customModel.trim());
-  }, [selectedModel, customModel]);
+    persistModel(selectedModel);
+  }, [selectedModel]);
 
   useEffect(() => {
     persistAutoSave(autoSaveBeforeSend);
@@ -1861,17 +1825,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     notifyOnDoneMinSecondsRef.current = normalized;
     persistNotifyOnDoneMinSeconds(normalized);
   }, [notifyOnDoneMinSeconds]);
-
-  useEffect(() => {
-    if (!modelMenuOpen) {
-      return;
-    }
-    if (modelOption !== '__custom__') {
-      return;
-    }
-    const id = window.setTimeout(() => customModelInputRef.current?.focus(), 0);
-    return () => window.clearTimeout(id);
-  }, [modelMenuOpen, modelOption]);
 
   useEffect(() => {
     if (!modelMenuOpen && !reasoningMenuOpen && !usagePopoverOpen && !permissionMenuOpen) {
@@ -3092,10 +3045,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     if (!trimmed && !hasImages) {
       return;
     }
-    if (modelOption === '__custom__' && !selectedModel) {
-      appendMessage(sessionKey, 'system', 'Select a model before sending.');
-      return;
-    }
 
     const current = sessionKey ? sessionsRef.current.get(sessionKey) : null;
     if (current?.runState === 'running') {
@@ -3189,18 +3138,15 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const canSend =
     status === 'ready' &&
     currentNotebookPath.length > 0 &&
-    (modelOption !== '__custom__' || selectedModel.length > 0) &&
     currentSession?.pairedOk !== false;
   const runningSummary = status === 'running' ? progress || 'Working...' : '';
   const autoModelLabel = autoModel
     ? findModelLabel(autoModel, modelOptions)
     : 'Auto';
   const selectedModelLabel =
-    modelOption === '__custom__'
-      ? customModel.trim() || 'Model name'
-      : modelOption === '__config__'
-        ? autoModelLabel
-        : findModelLabel(modelOption, modelOptions);
+    modelOption === '__config__'
+      ? autoModelLabel
+      : findModelLabel(modelOption, modelOptions);
   const autoReasoningLabel = autoReasoningEffort
     ? findReasoningLabel(autoReasoningEffort, reasoningOptions)
     : 'Auto';
@@ -3651,6 +3597,9 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                 ariaLabel="Model"
                 align="left"
               >
+                {modelOptions.length === 0 && (
+                  <div className="jp-CodexMenuItem">No models available</div>
+                )}
                 {modelOptions.map(option => {
                   const inferred =
                     modelOption === '__config__' && autoModel && modelOptions.some(option => option.value === autoModel)
@@ -3664,9 +3613,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                       className={`jp-CodexMenuItem ${isActive ? 'is-active' : ''}`}
                       onClick={() => {
                         setModelOption(option.value);
-                        if (option.value !== '__custom__') {
-                          setModelMenuOpen(false);
-                        }
+                        setModelMenuOpen(false);
                       }}
                     >
                       <span className="jp-CodexMenuItemLabel">{option.label}</span>
@@ -3676,41 +3623,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                     </button>
                   );
                 })}
-                <>
-                  <div className="jp-CodexMenuDivider" role="separator" />
-                  <button
-                    type="button"
-                    className={`jp-CodexMenuItem ${modelOption === '__custom__' ? 'is-active' : ''}`}
-                    onClick={() => {
-                      setModelOption('__custom__');
-                    }}
-                  >
-                    <span className="jp-CodexMenuItemLabel">Model name</span>
-                    {modelOption === '__custom__' && (
-                      <CheckIcon className="jp-CodexMenuCheck" width={16} height={16} />
-                    )}
-                  </button>
-                </>
-                {modelOption === '__custom__' && (
-                  <div className="jp-CodexMenuCustom">
-                    <div className="jp-CodexMenuCustomLabel">Model name</div>
-                    <input
-                      ref={customModelInputRef}
-                      className="jp-CodexMenuInput"
-                      value={customModel}
-                      onChange={e => setCustomModel(e.currentTarget.value)}
-                      placeholder={DEFAULT_MODEL || 'gpt-5.3-codex'}
-                      disabled={status === 'running'}
-                      aria-label="Model name"
-                      onKeyDown={e => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          setModelMenuOpen(false);
-                        }
-                      }}
-                    />
-                  </div>
-                )}
               </PortalMenu>
 
               <div className="jp-CodexMenuWrap" ref={reasoningMenuWrapRef}>
