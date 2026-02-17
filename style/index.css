@@ -769,7 +769,7 @@
   border-radius: 0;
 }
 
-.jp-CodexChat-system.is-warning {
+.jp-CodexChat-reconnectNotice {
   align-self: stretch;
   border: 1px solid color-mix(in srgb, var(--cdx-warn) 35%, var(--cdx-border));
   background: color-mix(in srgb, var(--cdx-warn) 10%, var(--cdx-surface));
@@ -789,7 +789,7 @@
   gap: 6px;
 }
 
-.jp-CodexChat-system.is-warning .jp-CodexChat-text {
+.jp-CodexChat-reconnectNotice .jp-CodexChat-text {
   justify-content: flex-start;
 }
 

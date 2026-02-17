@@ -3131,7 +3131,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       <div className="jp-CodexChat-body">
         <div className="jp-CodexChat-messages" ref={scrollRef} onScroll={onScrollMessages}>
           {status === 'disconnected' && (
-            <div className="jp-CodexChat-message jp-CodexChat-system is-warning">
+            <div className="jp-CodexChat-message jp-CodexChat-system jp-CodexChat-reconnectNotice">
               <div className="jp-CodexChat-role">system</div>
               <div className="jp-CodexChat-text">Codex connection was lost. Reconnect to continue.</div>
               <button
@@ -3152,13 +3152,13 @@ function CodexChat(props: CodexChatProps): JSX.Element {
               <div className="jp-CodexChat-text">Select a notebook, then start a conversation.</div>
             </div>
           )}
-		          {messages.map(entry => {
+	          {messages.map(entry => {
 		            if (entry.kind === 'text') {
 	              const systemVariant =
 	                entry.role === 'system'
 	                  ? isSessionStartNotice(entry.text)
 	                    ? ' is-success'
-	                    : ' is-warning'
+	                    : ''
 	                  : '';
 	              const imageCount = entry.attachments?.images ?? 0;
 	              return (
