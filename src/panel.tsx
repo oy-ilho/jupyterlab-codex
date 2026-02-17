@@ -518,6 +518,8 @@ const COMMAND_PATH_STORAGE_KEY = 'jupyterlab-codex:command-path';
 const REASONING_STORAGE_KEY = 'jupyterlab-codex:reasoning-effort';
 const SANDBOX_MODE_STORAGE_KEY = 'jupyterlab-codex:sandbox-mode';
 const SETTINGS_OPEN_STORAGE_KEY = 'jupyterlab-codex:settings-open';
+const NOTIFY_ON_DONE_STORAGE_KEY = 'jupyterlab-codex:notify-on-done';
+const NOTIFY_ON_DONE_MIN_SECONDS_STORAGE_KEY = 'jupyterlab-codex:notify-on-done-min-seconds';
 const INCLUDE_ACTIVE_CELL_STORAGE_KEY = 'jupyterlab-codex:include-active-cell';
 const INCLUDE_ACTIVE_CELL_OUTPUT_STORAGE_KEY = 'jupyterlab-codex:include-active-cell-output';
 const SESSION_THREADS_STORAGE_KEY = 'jupyterlab-codex:session-threads';
@@ -920,6 +922,34 @@ function readStoredSettingsOpen(): boolean {
 
 function persistSettingsOpen(enabled: boolean): void {
   safeLocalStorageSet(SETTINGS_OPEN_STORAGE_KEY, enabled ? 'true' : 'false');
+}
+
+function readStoredNotifyOnDone(): boolean {
+  return (safeLocalStorageGet(NOTIFY_ON_DONE_STORAGE_KEY) ?? 'false') === 'true';
+}
+
+function persistNotifyOnDone(enabled: boolean): void {
+  safeLocalStorageSet(NOTIFY_ON_DONE_STORAGE_KEY, enabled ? 'true' : 'false');
+}
+
+function readStoredNotifyOnDoneMinSeconds(): number {
+  const raw = safeLocalStorageGet(NOTIFY_ON_DONE_MIN_SECONDS_STORAGE_KEY);
+  if (raw == null) {
+    return 30;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? Math.max(0, Math.trunc(parsed)) : 0;
+}
+
+function persistNotifyOnDoneMinSeconds(seconds: number): void {
+  safeLocalStorageSet(NOTIFY_ON_DONE_MIN_SECONDS_STORAGE_KEY, String(Math.max(0, Math.trunc(seconds))));
+}
+
+function getBrowserNotificationPermission(): NotificationPermission | 'unsupported' {
+  if (typeof window === 'undefined' || typeof window.Notification === 'undefined') {
+    return 'unsupported';
+  }
+  return window.Notification.permission;
 }
 
 function truncateMiddle(value: string, max: number): string {
@@ -1540,6 +1570,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const [includeActiveCellOutput, setIncludeActiveCellOutput] = useState<boolean>(() =>
     readStoredIncludeActiveCellOutput()
   );
+  const [notifyOnDone, setNotifyOnDone] = useState<boolean>(() => readStoredNotifyOnDone());
+  const [notifyOnDoneMinSeconds, setNotifyOnDoneMinSeconds] = useState<number>(() => readStoredNotifyOnDoneMinSeconds());
   const [settingsOpen, setSettingsOpen] = useState<boolean>(() => readStoredSettingsOpen());
   const [input, setInput] = useState('');
   const [pendingImages, setPendingImages] = useState<PendingImageAttachment[]>([]);
@@ -1559,6 +1591,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const sessionThreadSyncIdRef = useRef<string>(createSessionEventId());
   const lastRateLimitsRefreshRef = useRef<number>(0);
   const pendingRefreshPathsRef = useRef<Set<string>>(new Set());
+  const notifyOnDoneRef = useRef<boolean>(notifyOnDone);
+  const notifyOnDoneMinSecondsRef = useRef<number>(notifyOnDoneMinSeconds);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
   const modelMenuWrapRef = useRef<HTMLDivElement | null>(null);
@@ -1649,6 +1683,17 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   useEffect(() => {
     persistSettingsOpen(settingsOpen);
   }, [settingsOpen]);
+
+  useEffect(() => {
+    notifyOnDoneRef.current = notifyOnDone;
+    persistNotifyOnDone(notifyOnDone);
+  }, [notifyOnDone]);
+
+  useEffect(() => {
+    const normalized = Number.isFinite(notifyOnDoneMinSeconds) ? Math.max(0, Math.floor(notifyOnDoneMinSeconds)) : 0;
+    notifyOnDoneMinSecondsRef.current = normalized;
+    persistNotifyOnDoneMinSeconds(normalized);
+  }, [notifyOnDoneMinSeconds]);
 
   useEffect(() => {
     if (!modelMenuOpen) {
@@ -1784,6 +1829,110 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     setModelMenuOpen(false);
     setReasoningMenuOpen(false);
     setPermissionMenuOpen(false);
+  }
+
+  async function updateNotifyOnDone(enabled: boolean): Promise<void> {
+    if (!enabled) {
+      setNotifyOnDone(false);
+      return;
+    }
+
+    const permission = getBrowserNotificationPermission();
+    const systemSessionKey = currentNotebookSessionKeyRef.current || '';
+    if (permission === 'unsupported') {
+      appendMessage(systemSessionKey, 'system', 'Browser notifications are not supported in this environment.');
+      setNotifyOnDone(false);
+      return;
+    }
+    if (permission === 'granted') {
+      setNotifyOnDone(true);
+      return;
+    }
+    if (permission === 'denied') {
+      appendMessage(
+        systemSessionKey,
+        'system',
+        'Browser notifications are blocked for this site. Allow notifications in browser settings to enable this option.'
+      );
+      setNotifyOnDone(false);
+      return;
+    }
+
+    try {
+      const requested = await window.Notification.requestPermission();
+      if (requested === 'granted') {
+        setNotifyOnDone(true);
+        return;
+      }
+      if (requested === 'denied') {
+        appendMessage(
+          systemSessionKey,
+          'system',
+          'Browser notification permission was denied. Allow notifications in browser settings to enable this option.'
+        );
+      }
+      setNotifyOnDone(false);
+    } catch {
+      appendMessage(systemSessionKey, 'system', 'Failed to request browser notification permission.');
+      setNotifyOnDone(false);
+    }
+  }
+
+  function getRunDurationMs(sessionKey: string): number | null {
+    if (!sessionKey) {
+      return null;
+    }
+    const session = sessionsRef.current.get(sessionKey);
+    if (!session || typeof session.runStartedAt !== 'number' || !Number.isFinite(session.runStartedAt)) {
+      return null;
+    }
+    return Math.max(0, Date.now() - session.runStartedAt);
+  }
+
+  function formatElapsedForNotification(elapsedMs: number): string {
+    const totalSeconds = Math.round(Math.max(0, elapsedMs) / 1000);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    if (minutes === 0) {
+      return `${totalSeconds}s`;
+    }
+    return `${minutes}m ${seconds}s`;
+  }
+
+  function notifyRunDone(sessionKey: string, notebookPath: string, cancelled: boolean, exitCode: number | null): void {
+    if (!notifyOnDoneRef.current) {
+      return;
+    }
+    const permission = getBrowserNotificationPermission();
+    if (permission !== 'granted' || typeof window === 'undefined' || typeof window.Notification === 'undefined') {
+      return;
+    }
+
+    const elapsedMs = getRunDurationMs(sessionKey);
+    const minimumMs = notifyOnDoneMinSecondsRef.current * 1000;
+    if (minimumMs > 0 && (elapsedMs === null || elapsedMs < minimumMs)) {
+      return;
+    }
+
+    const parsed = parseSessionKey(sessionKey);
+    const pathLabel = parsed.path || notebookPath || currentNotebookPathRef.current || 'current notebook';
+    const pathSummary = truncateMiddle(pathLabel, 120);
+    const elapsedText = elapsedMs === null ? '' : ` (${formatElapsedForNotification(elapsedMs)} elapsed)`;
+    const body = cancelled
+      ? `Run cancelled in ${pathSummary}${elapsedText}`
+      : exitCode === null || exitCode === 0
+        ? `Run completed in ${pathSummary}${elapsedText}`
+        : `Run failed (exit ${exitCode}) in ${pathSummary}${elapsedText}`;
+
+    try {
+      const notification = new window.Notification('Codex run finished', {
+        body,
+        tag: sessionKey ? `codex-done-${sessionKey}` : undefined
+      });
+      window.setTimeout(() => notification.close(), 12000);
+    } catch {
+      // Ignore failures; completion is still shown in the panel.
+    }
   }
 
   function emitSessionThreadEvent(sessionKey: string, notebookPath: string, threadId: string): void {
@@ -2491,6 +2640,12 @@ function CodexChat(props: CodexChatProps): JSX.Element {
             : `Codex run failed (exit ${exitCode}). Check the logs above for the underlying error.`;
           appendMessage(targetSessionKey, 'system', failureMessage);
         }
+        notifyRunDone(
+          targetSessionKey,
+          typeof msg.notebookPath === 'string' ? msg.notebookPath : '',
+          cancelled,
+          exitCode
+        );
         if (targetSessionKey) {
           setSessionRunState(targetSessionKey, 'ready', null);
           setSessionProgress(targetSessionKey, '', '');
@@ -2879,6 +3034,20 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       ? autoReasoningLabel
       : REASONING_MENU_OPTIONS.find(option => option.value === reasoningEffort)?.label ?? 'Reasoning';
   const selectedSandboxLabel = SANDBOX_OPTIONS.find(option => option.value === sandboxMode)?.label ?? 'Permission';
+  const notificationPermission = getBrowserNotificationPermission();
+  const notificationsUnsupported = notificationPermission === 'unsupported';
+  const minimumNotifyDurationLabel =
+    notifyOnDoneMinSeconds === 0
+      ? 'All completed runs'
+      : `Runs taking at least ${notifyOnDoneMinSeconds} second${notifyOnDoneMinSeconds === 1 ? '' : 's'}`;
+  const notificationHelpText =
+    notificationPermission === 'unsupported'
+      ? 'Browser notifications are not available in this environment.'
+      : notificationPermission === 'denied'
+        ? 'Notifications are blocked for this site. Allow them in browser settings.'
+        : notificationPermission === 'default'
+          ? 'Permission will be requested when enabling this option.'
+          : `Shows a browser notification for ${minimumNotifyDurationLabel}.`;
   const canStop = status === 'running' && Boolean(currentSession?.activeRunId);
   const nowMs = Date.now();
   const rateUpdatedAtMs = safeParseDateMs(rateLimits?.updatedAt ?? null);
@@ -3566,6 +3735,35 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                     />
                     Include active cell output
                   </label>
+                  <label className="jp-CodexChat-toggle">
+                    <input
+                      type="checkbox"
+                      checked={notifyOnDone}
+                      onChange={e => void updateNotifyOnDone(e.currentTarget.checked)}
+                      disabled={status === 'running' || notificationsUnsupported}
+                    />
+                    Notify when run finishes
+                  </label>
+                  <label className="jp-CodexSettingsField">
+                    <span className="jp-CodexSettingsField-label">Minimum runtime (seconds)</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      className="jp-CodexChat-model-input"
+                      value={notifyOnDoneMinSeconds}
+                      onChange={e =>
+                        setNotifyOnDoneMinSeconds(
+                          Number.isFinite(Number(e.currentTarget.value)) ? Math.max(0, Math.floor(Number(e.currentTarget.value))) : 0
+                        )
+                      }
+                      disabled={notificationsUnsupported}
+                    />
+                    <span className="jp-CodexSettingsField-help">
+                      0 means notify for every finished run. Enter only when you want delayed notifications.
+                    </span>
+                  </label>
+                  <span className="jp-CodexSettingsField-help">{notificationHelpText}</span>
                 </div>
               </section>
 
