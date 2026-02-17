@@ -2901,8 +2901,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         <div className="jp-CodexChat-header-top">
           <div className="jp-CodexChat-header-left">
             <StatusPill status={status} />
-            <span className="jp-CodexChat-notebookWrap" data-full-name={isNotebookLabelTruncated ? displayPath : ''}>
-              <span className="jp-CodexChat-notebook" ref={notebookLabelRef} title={displayPath}>
+            <span className="jp-CodexChat-notebookWrap" data-full-name={isNotebookLabelTruncated ? displayPath : undefined}>
+              <span className="jp-CodexChat-notebook" ref={notebookLabelRef} title={isNotebookLabelTruncated ? displayPath : undefined}>
                 {displayPath}
               </span>
             </span>

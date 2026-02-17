@@ -230,8 +230,8 @@
   pointer-events: none;
 }
 
-.jp-CodexChat-notebookWrap:hover::after,
-.jp-CodexChat-notebookWrap:focus-within::after {
+.jp-CodexChat-notebookWrap[data-full-name]:not([data-full-name='']):hover::after,
+.jp-CodexChat-notebookWrap[data-full-name]:not([data-full-name='']):focus-within::after {
   display: block;
 }
 
