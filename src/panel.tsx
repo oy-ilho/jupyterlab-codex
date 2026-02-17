@@ -3044,64 +3044,85 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                 <XIcon width={16} height={16} />
               </button>
             </div>
-            <div className="jp-CodexSettingsPanel-stats">
-              <span className="jp-CodexSettingsPanel-stat">
-                Saved conversations: {storedThreadCount}
-              </span>
-              <button
-                type="button"
-                className="jp-CodexBtn jp-CodexBtn-xs jp-CodexBtn-danger"
-                onClick={() => void clearAllSessions()}
-                disabled={status === 'running' || (storedThreadCount === 0 && sessions.size === 0)}
-                title={
-                  status === 'running'
-                    ? 'Cannot delete while a run is in progress.'
-                    : 'Delete all saved conversations'
-                }
-              >
-                Delete all
-              </button>
-            </div>
-            <div className="jp-CodexChat-controls">
-              <label className="jp-CodexChat-model">
-                <span>Codex command path</span>
-                <input
-                  type="text"
-                  className="jp-CodexChat-model-input"
-                  placeholder="codex"
-                  value={commandPath}
-                  disabled={status === 'running'}
-                  onChange={e => setCommandPath(e.currentTarget.value.trimStart())}
-                  title="Leave empty to use PATH lookup."
-                />
-              </label>
-              <label className="jp-CodexChat-toggle">
-                <input
-                  type="checkbox"
-                  checked={autoSaveBeforeSend}
-                  onChange={e => setAutoSaveBeforeSend(e.currentTarget.checked)}
-                  disabled={status === 'running'}
-                />
-                Auto-save before send
-              </label>
-              <label className="jp-CodexChat-toggle">
-                <input
-                  type="checkbox"
-                  checked={includeActiveCell}
-                  onChange={e => setIncludeActiveCell(e.currentTarget.checked)}
-                  disabled={status === 'running'}
-                />
-                Include active cell
-              </label>
-              <label className="jp-CodexChat-toggle">
-                <input
-                  type="checkbox"
-                  checked={includeActiveCellOutput}
-                  onChange={e => setIncludeActiveCellOutput(e.currentTarget.checked)}
-                  disabled={status === 'running' || !includeActiveCell}
-                />
-                Include active cell output
-              </label>
+            <div className="jp-CodexSettingsPanel-sections">
+              <section className="jp-CodexSettingsSection" aria-label="General settings">
+                <div className="jp-CodexSettingsSection-title">General</div>
+                <label className="jp-CodexSettingsField">
+                  <span className="jp-CodexSettingsField-label">Codex command path</span>
+                  <input
+                    type="text"
+                    className="jp-CodexChat-model-input"
+                    placeholder="codex"
+                    value={commandPath}
+                    disabled={status === 'running'}
+                    onChange={e => setCommandPath(e.currentTarget.value.trimStart())}
+                    title="Leave empty to use PATH lookup."
+                  />
+                  <span className="jp-CodexSettingsField-help">Leave empty to use PATH lookup.</span>
+                </label>
+              </section>
+
+              <section className="jp-CodexSettingsSection" aria-label="Message options">
+                <div className="jp-CodexSettingsSection-title">Message Options</div>
+                <div className="jp-CodexSettingsOptions">
+                  <label className="jp-CodexChat-toggle">
+                    <input
+                      type="checkbox"
+                      checked={autoSaveBeforeSend}
+                      onChange={e => setAutoSaveBeforeSend(e.currentTarget.checked)}
+                      disabled={status === 'running'}
+                    />
+                    Auto-save before send
+                  </label>
+                  <label className="jp-CodexChat-toggle">
+                    <input
+                      type="checkbox"
+                      checked={includeActiveCell}
+                      onChange={e => setIncludeActiveCell(e.currentTarget.checked)}
+                      disabled={status === 'running'}
+                    />
+                    Include active cell
+                  </label>
+                  <label className="jp-CodexChat-toggle">
+                    <input
+                      type="checkbox"
+                      checked={includeActiveCellOutput}
+                      onChange={e => setIncludeActiveCellOutput(e.currentTarget.checked)}
+                      disabled={status === 'running' || !includeActiveCell}
+                    />
+                    Include active cell output
+                  </label>
+                </div>
+              </section>
+
+              <section className="jp-CodexSettingsSection" aria-label="Data settings">
+                <div className="jp-CodexSettingsSection-title">Data</div>
+                <div className="jp-CodexSettingsPanel-stats">
+                  <span className="jp-CodexSettingsPanel-stat">
+                    Saved conversations: {storedThreadCount}
+                  </span>
+                </div>
+              </section>
+
+              <section className="jp-CodexSettingsSection jp-CodexSettingsSection-danger" aria-label="Danger zone">
+                <div className="jp-CodexSettingsSection-title jp-CodexSettingsSection-title-danger">Danger Zone</div>
+                <div className="jp-CodexSettingsDanger">
+                  <span className="jp-CodexSettingsDanger-label">Delete all saved conversations</span>
+                  <button
+                    type="button"
+                    className="jp-CodexBtn jp-CodexBtn-xs jp-CodexBtn-danger"
+                    onClick={() => void clearAllSessions()}
+                    disabled={status === 'running' || (storedThreadCount === 0 && sessions.size === 0)}
+                    title={
+                      status === 'running'
+                        ? 'Cannot delete while a run is in progress.'
+                        : 'Delete all saved conversations'
+                    }
+                  >
+                    Delete all
+                  </button>
+                </div>
+              </section>
             </div>
           </div>
         )}
