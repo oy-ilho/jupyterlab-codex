@@ -1240,7 +1240,6 @@
   justify-content: space-between;
   gap: 10px;
   padding-top: 8px;
-  border-top: 1px solid color-mix(in srgb, var(--cdx-border) 85%, transparent);
 }
 
 .jp-CodexComposer-toolbarLeft {
@@ -1751,7 +1750,7 @@
   padding: 0;
   width: var(--cdx-composer-btn-size, 30px);
   height: var(--cdx-composer-btn-size, 30px);
-  border-radius: var(--cdx-composer-btn-radius, 9px);
+  border-radius: 50%;
   border: 1px solid var(--cdx-border);
   background: var(--cdx-surface-2);
   color: var(--cdx-muted);
@@ -1763,18 +1762,18 @@
 }
 
 .jp-CodexSendBtn:not(:disabled) {
-  border-color: color-mix(in srgb, var(--cdx-accent) 80%, var(--cdx-border));
-  background: var(--cdx-accent);
+  border-color: color-mix(in srgb, #000000 80%, var(--cdx-border));
+  background: #000000;
   color: #ffffff;
 }
 
 .jp-CodexSendBtn:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--cdx-accent) 92%, var(--cdx-border));
-  background: color-mix(in srgb, var(--cdx-accent) 92%, #000000);
+  border-color: color-mix(in srgb, #000000 92%, var(--cdx-border));
+  background: color-mix(in srgb, #000000 92%, #222222);
 }
 
 .jp-CodexSendBtn:active:not(:disabled) {
-  background: color-mix(in srgb, var(--cdx-accent) 88%, #000000);
+  background: color-mix(in srgb, #000000 88%, #222222);
 }
 
 .jp-CodexSendBtn:focus-visible {
@@ -1788,18 +1787,18 @@
 }
 
 .jp-CodexSendBtn.is-stop:not(:disabled) {
-  border-color: color-mix(in srgb, var(--cdx-bad) 70%, var(--cdx-border));
-  background: color-mix(in srgb, var(--cdx-bad) 92%, #000000);
+  border-color: color-mix(in srgb, #000000 80%, var(--cdx-border));
+  background: #000000;
   color: #ffffff;
 }
 
 .jp-CodexSendBtn.is-stop:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--cdx-bad) 80%, var(--cdx-border));
-  background: color-mix(in srgb, var(--cdx-bad) 96%, #000000);
+  border-color: color-mix(in srgb, #000000 92%, var(--cdx-border));
+  background: color-mix(in srgb, #000000 92%, #222222);
 }
 
 .jp-CodexSendBtn.is-stop:active:not(:disabled) {
-  background: color-mix(in srgb, var(--cdx-bad) 90%, #000000);
+  background: color-mix(in srgb, #000000 88%, #222222);
 }
 
 .jp-CodexBtn {
