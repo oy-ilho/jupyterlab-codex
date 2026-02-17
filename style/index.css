@@ -301,6 +301,8 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+}
+
 .jp-CodexSettingsPanel-sections {
   margin-top: 12px;
   padding-top: 14px;
