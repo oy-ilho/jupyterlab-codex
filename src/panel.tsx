@@ -54,28 +54,14 @@ function RefreshIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
   return (
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" {...props}>
       <path
-        d="M4 12a8 8 0 1 0 2-5.5"
+        d="M21 12a9 9 0 1 1-9-9c2.5 0 4.8 1 6.5 2.6"
         stroke="currentColor"
         strokeWidth="2"
         strokeLinecap="round"
         strokeLinejoin="round"
       />
       <path
-        d="M3 4v5h5"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M20 12a8 8 0 1 1-2 5.5"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M21 20v-5h-5"
+        d="M21 3v6h-6"
         stroke="currentColor"
         strokeWidth="2"
         strokeLinecap="round"
@@ -2464,19 +2450,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
             </span>
           </div>
 	          <div className="jp-CodexChat-header-actions">
-            {status === 'disconnected' && (
-              <button
-                type="button"
-                className="jp-CodexHeaderBtn"
-                onClick={() => reconnectSocket()}
-                disabled={isReconnecting}
-                aria-label={isReconnecting ? 'Codex reconnecting' : 'Reconnect to Codex'}
-                title={isReconnecting ? 'Attempting to reconnect...' : 'Reconnect to Codex'}
-              >
-                <RefreshIcon width={16} height={16} />
-                <span className="jp-CodexHeaderBtn-label">{isReconnecting ? 'Connecting...' : 'Reconnect'}</span>
-              </button>
-            )}
 	            <button
 	              type="button"
 	              onClick={() => void startNewThread()}
@@ -2660,6 +2633,23 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 
       <div className="jp-CodexChat-body">
         <div className="jp-CodexChat-messages" ref={scrollRef} onScroll={onScrollMessages}>
+          {status === 'disconnected' && (
+            <div className="jp-CodexChat-message jp-CodexChat-system is-warning">
+              <div className="jp-CodexChat-role">system</div>
+              <div className="jp-CodexChat-text">Codex connection was lost. Reconnect to continue.</div>
+              <button
+                type="button"
+                className="jp-CodexHeaderBtn"
+                onClick={() => reconnectSocket()}
+                disabled={isReconnecting}
+                aria-label={isReconnecting ? 'Codex reconnecting' : 'Reconnect to Codex'}
+                title={isReconnecting ? 'Attempting to reconnect...' : 'Reconnect to Codex'}
+              >
+                <RefreshIcon width={16} height={16} />
+                <span className="jp-CodexHeaderBtn-label">{isReconnecting ? 'Connecting...' : 'Reconnect'}</span>
+              </button>
+            </div>
+          )}
           {messages.length === 0 && (
             <div className="jp-CodexChat-message jp-CodexChat-system">
               <div className="jp-CodexChat-role">system</div>
