@@ -1356,7 +1356,7 @@
   justify-content: flex-start;
   cursor: pointer;
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 400;
   transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
 }
 
@@ -1442,7 +1442,7 @@
   cursor: pointer;
   text-align: left;
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 400;
   transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
 }
 

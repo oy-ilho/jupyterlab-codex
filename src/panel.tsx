@@ -616,8 +616,14 @@ function getReasoningEffortBars(
   if (effortOptions.length === 1) {
     return 1;
   }
-  const ratio = index / (effortOptions.length - 1);
-  return Math.max(1, Math.min(MAX_REASONING_EFFORT_BARS, Math.round(ratio * MAX_REASONING_EFFORT_BARS) + 1));
+  const scale = MAX_REASONING_EFFORT_BARS - 1;
+  return Math.max(
+    1,
+    Math.min(
+      MAX_REASONING_EFFORT_BARS,
+      Math.floor((index * scale) / (effortOptions.length - 1)) + 1
+    )
+  );
 }
 
 function buildReasoningOptions(rawModels: unknown, selectedModel: string): ReasoningOption[] {
