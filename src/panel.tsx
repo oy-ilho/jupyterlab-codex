@@ -5,6 +5,7 @@ import { INotebookTracker } from '@jupyterlab/notebook';
 import { ServerConnection } from '@jupyterlab/services';
 import { URLExt } from '@jupyterlab/coreutils';
 import type { DocumentRegistry } from '@jupyterlab/docregistry';
+import { Message } from '@lumino/messaging';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import hljs from 'highlight.js/lib/common';
@@ -354,6 +355,28 @@ export class CodexPanel extends ReactWidget {
 
   render(): JSX.Element {
     return <CodexChat notebooks={this._notebooks} />;
+  }
+
+  protected onAfterAttach(msg: Message): void {
+    super.onAfterAttach(msg);
+    this.focusComposer();
+  }
+
+  protected onActivateRequest(msg: Message): void {
+    super.onActivateRequest(msg);
+    this.focusComposer();
+  }
+
+  private focusComposer(): void {
+    window.setTimeout(() => {
+      const textarea = this.node.querySelector<HTMLTextAreaElement>('.jp-CodexComposer textarea');
+      if (!textarea || textarea.disabled) {
+        return;
+      }
+      textarea.focus({ preventScroll: true });
+      const cursor = textarea.value.length;
+      textarea.setSelectionRange(cursor, cursor);
+    }, 0);
   }
 }
 
