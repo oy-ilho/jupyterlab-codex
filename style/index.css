@@ -69,6 +69,7 @@
 }
 
 .jp-CodexChat {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -288,8 +289,35 @@
   color: color-mix(in srgb, var(--cdx-bad) 85%, var(--cdx-text));
 }
 
+.jp-CodexSettingsOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 54px 10px 10px;
+}
+
+.jp-CodexSettingsBackdrop {
+  position: absolute;
+  inset: 0;
+  appearance: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: color-mix(in srgb, var(--cdx-bg) 58%, transparent);
+  -webkit-backdrop-filter: blur(5px);
+  backdrop-filter: blur(5px);
+  cursor: pointer;
+}
+
 .jp-CodexSettingsPanel {
-  margin-top: 8px;
+  position: relative;
+  z-index: 1;
+  width: min(100%, 680px);
+  max-height: calc(100% - 54px);
+  overflow: auto;
   border-radius: var(--cdx-radius);
   border: 1px solid var(--cdx-border);
   background: var(--cdx-surface);
@@ -340,7 +368,10 @@
 
 .jp-CodexSettingsField .jp-CodexChat-model-input {
   width: 100%;
+  max-width: 100%;
   min-width: 0;
+  display: block;
+  box-sizing: border-box;
 }
 
 .jp-CodexSettingsField-help {
@@ -382,13 +413,8 @@
 .jp-CodexSettingsDanger {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 10px;
-}
-
-.jp-CodexSettingsDanger-label {
-  font-size: 12px;
-  color: var(--cdx-muted);
 }
 
 .jp-CodexSettingsSection-danger {
