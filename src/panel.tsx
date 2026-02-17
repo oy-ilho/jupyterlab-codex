@@ -2624,7 +2624,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                 aria-label={isReconnecting ? 'Codex reconnecting' : 'Reconnect to Codex'}
                 title={isReconnecting ? 'Attempting to reconnect...' : 'Reconnect to Codex'}
               >
-                {isReconnecting ? '연결 중...' : '재접속'}
+                {isReconnecting ? 'Connecting...' : 'Reconnect'}
               </button>
             </div>
           )}
