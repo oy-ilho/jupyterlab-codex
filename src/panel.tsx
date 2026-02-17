@@ -459,6 +459,16 @@ type NotebookSession = {
   pairedMessage: string;
 };
 
+type SessionThreadSyncEvent = {
+  kind: 'new-thread';
+  sessionKey: string;
+  notebookPath: string;
+  threadId: string;
+  source: string;
+  id: string;
+  issuedAt: number;
+};
+
 type ModelOptionValue =
   | '__config__'
   | 'gpt-5.3-codex'
@@ -503,6 +513,9 @@ const SANDBOX_MODE_STORAGE_KEY = 'jupyterlab-codex:sandbox-mode';
 const SETTINGS_OPEN_STORAGE_KEY = 'jupyterlab-codex:settings-open';
 const INCLUDE_ACTIVE_CELL_STORAGE_KEY = 'jupyterlab-codex:include-active-cell';
 const INCLUDE_ACTIVE_CELL_OUTPUT_STORAGE_KEY = 'jupyterlab-codex:include-active-cell-output';
+const SESSION_THREADS_STORAGE_KEY = 'jupyterlab-codex:session-threads';
+const SESSION_THREADS_EVENT_KEY = 'jupyterlab-codex:session-threads:event';
+const SESSION_KEY_SEPARATOR = '\u0000';
 
 const MAX_IMAGE_ATTACHMENTS = 4;
 const MAX_IMAGE_ATTACHMENT_BYTES = 4 * 1024 * 1024; // Avoid huge WebSocket payloads.
@@ -516,11 +529,180 @@ function isKnownSandboxMode(value: string): value is SandboxMode {
   return SANDBOX_OPTIONS.some(option => option.value === value);
 }
 
-function createSession(path: string, intro: string): NotebookSession {
+function makeSessionKey(path: string): string {
+  const normalizedPath = (path || '').trim();
+  if (!normalizedPath) {
+    return '';
+  }
+  return normalizedPath;
+}
+
+function createSessionEventId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.floor(Math.random() * 0x100000000).toString(16)}`;
+}
+
+function parseSessionKey(sessionKey: string): { path: string } {
+  if (!sessionKey) {
+    return { path: '' };
+  }
+  const separatorIndex = sessionKey.indexOf(SESSION_KEY_SEPARATOR);
+  if (separatorIndex < 0) {
+    return { path: sessionKey };
+  }
+  return { path: sessionKey.slice(0, separatorIndex) };
+}
+
+function readStoredSessionThreads(): Record<string, string> {
+  const raw = safeLocalStorageGet(SESSION_THREADS_STORAGE_KEY);
+  if (!raw) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') {
+      return {};
+    }
+    const result: Record<string, string> = {};
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (!key || typeof value !== 'string') {
+        continue;
+      }
+      const threadId = value.trim();
+      if (!threadId) {
+        continue;
+      }
+      result[key] = threadId;
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+function getStoredSessionThreadCount(): number {
+  const mapping = readStoredSessionThreads();
+  const uniquePaths = new Set<string>();
+  for (const key of Object.keys(mapping)) {
+    const { path } = parseSessionKey(key);
+    if (path) {
+      uniquePaths.add(path);
+    }
+  }
+  return uniquePaths.size;
+}
+
+function readStoredThreadId(path: string, sessionKey: string): string {
+  const normalizedPath = path.trim();
+  const normalizedSessionKey = sessionKey || '';
+  if (!normalizedSessionKey) {
+    return '';
+  }
+  const mapping = readStoredSessionThreads();
+  const exactMatch = mapping[normalizedSessionKey];
+  if (exactMatch) {
+    return exactMatch;
+  }
+
+  if (!normalizedPath) {
+    return '';
+  }
+  for (const [key, threadId] of Object.entries(mapping)) {
+    if (!threadId) {
+      continue;
+    }
+    const parsed = parseSessionKey(key);
+    if (parsed.path === normalizedPath) {
+      return threadId;
+    }
+  }
+  return '';
+}
+
+function persistStoredSessionThreads(sessions: Map<string, NotebookSession>): void {
+  const mapping: Record<string, string> = {};
+  for (const [sessionKey, session] of sessions) {
+    if (!sessionKey || !session?.threadId) {
+      continue;
+    }
+    mapping[sessionKey] = session.threadId;
+  }
+  try {
+    safeLocalStorageSet(SESSION_THREADS_STORAGE_KEY, JSON.stringify(mapping));
+  } catch {
+    // Ignore storage failures; in-memory sessions still work.
+  }
+}
+
+function coerceSessionThreadSyncEvent(value: string): SessionThreadSyncEvent | null {
+  if (!value) {
+    return null;
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(value);
+  } catch {
+    return null;
+  }
+  if (!raw || typeof raw !== 'object') {
+    return null;
+  }
+
+  const event = raw as Record<string, unknown>;
+  const sessionKey = typeof event.sessionKey === 'string' ? event.sessionKey.trim() : '';
+  const notebookPath = typeof event.notebookPath === 'string' ? event.notebookPath.trim() : '';
+  const threadId = typeof event.threadId === 'string' ? event.threadId.trim() : '';
+  const source = typeof event.source === 'string' ? event.source.trim() : '';
+  const id = typeof event.id === 'string' ? event.id.trim() : '';
+  if (!sessionKey || !notebookPath || !threadId || !id || event.kind !== 'new-thread') {
+    return null;
+  }
+  const issuedAt = typeof event.issuedAt === 'number' && Number.isFinite(event.issuedAt) ? event.issuedAt : Date.now();
+  return { kind: 'new-thread', sessionKey, notebookPath, threadId, source, id, issuedAt };
+}
+
+function coerceSessionHistory(
+  raw: any
+): Array<{
+  role: TextRole;
+  content: string;
+}> {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const result: Array<{ role: TextRole; content: string }> = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') {
+      continue;
+    }
+    const role = (item as any).role;
+    const content = (item as any).content;
+    if ((role !== 'user' && role !== 'assistant' && role !== 'system') || typeof content !== 'string') {
+      continue;
+    }
+    result.push({ role, content });
+  }
+  return result;
+}
+
+function createSession(
+  path: string,
+  intro: string,
+  options?: {
+    threadId?: string;
+    reuseStoredThread?: boolean;
+    sessionKey?: string;
+  }
+): NotebookSession {
   const defaultIntro = 'Session started';
   const systemText = normalizeSystemText('system', intro || defaultIntro);
+  const requestedThreadId = (options?.threadId || '').trim();
+  const storedThreadId = options?.reuseStoredThread === false ? '' : readStoredThreadId(path, options?.sessionKey || '');
+  const threadId = requestedThreadId || storedThreadId || crypto.randomUUID();
   return {
-    threadId: crypto.randomUUID(),
+    threadId,
     runState: 'ready',
     activeRunId: null,
     runStartedAt: null,
@@ -539,6 +721,15 @@ function createSession(path: string, intro: string): NotebookSession {
     pairedOsPath: '',
     pairedMessage: '',
   };
+}
+
+function createThreadResetSession(path: string, sessionKey: string, threadId: string): NotebookSession {
+  const time = new Date().toLocaleTimeString();
+  return createSession(path, `Session started (${time})`, {
+    threadId,
+    reuseStoredThread: false,
+    sessionKey
+  });
 }
 
 function safeLocalStorageGet(key: string): string | null {
@@ -628,6 +819,17 @@ function safeLocalStorageSet(key: string, value: string): void {
   }
   try {
     window.localStorage.setItem(key, value);
+  } catch {
+    // Ignore storage errors; settings still work for current session.
+  }
+}
+
+function safeLocalStorageRemove(key: string): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  try {
+    window.localStorage.removeItem(key);
   } catch {
     // Ignore storage errors; settings still work for current session.
   }
@@ -1267,6 +1469,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const sessionsRef = useRef<Map<string, NotebookSession>>(new Map());
   const [currentNotebookPath, setCurrentNotebookPath] = useState<string>('');
   const currentNotebookPathRef = useRef<string>('');
+  const [currentNotebookSessionKey, setCurrentNotebookSessionKey] = useState<string>('');
+  const currentNotebookSessionKeyRef = useRef<string>('');
   const [cliDefaults, setCliDefaults] = useState<CliDefaultsSnapshot>({ model: null, reasoningEffort: null });
   const [modelOption, setModelOption] = useState<ModelOptionValue>(() => {
     const savedModel = readStoredModel();
@@ -1307,7 +1511,9 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const [permissionMenuOpen, setPermissionMenuOpen] = useState(false);
   const [rateLimits, setRateLimits] = useState<CodexRateLimitsSnapshot | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
-  const runToPathRef = useRef<Map<string, string>>(new Map());
+  const runToSessionKeyRef = useRef<Map<string, string>>(new Map());
+  const activeSessionKeyByPathRef = useRef<Map<string, string>>(new Map());
+  const sessionThreadSyncIdRef = useRef<string>(createSessionEventId());
   const lastRateLimitsRefreshRef = useRef<number>(0);
   const pendingRefreshPathsRef = useRef<Set<string>>(new Set());
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -1328,6 +1534,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const [isNotebookLabelTruncated, setIsNotebookLabelTruncated] = useState(false);
   const customModelInputRef = useRef<HTMLInputElement | null>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const storedThreadCount = useMemo<number>(() => getStoredSessionThreadCount(), [sessions]);
   const selectedModel =
     modelOption === '__custom__'
       ? customModel.trim()
@@ -1340,7 +1547,13 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 
   useEffect(() => {
     sessionsRef.current = sessions;
+    currentNotebookSessionKeyRef.current = currentNotebookSessionKey;
   }, [sessions]);
+
+  useEffect(() => {
+    currentNotebookSessionKeyRef.current = currentNotebookSessionKey;
+    persistStoredSessionThreads(sessions);
+  }, [sessions, currentNotebookSessionKey]);
 
   useEffect(() => {
     pendingImagesRef.current = pendingImages;
@@ -1477,16 +1690,27 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     });
   }
 
-  function ensureSession(path: string): NotebookSession {
+  function resolveSessionKey(path: string): string {
     const normalizedPath = path || '';
-    const existing = sessionsRef.current.get(normalizedPath);
+    return makeSessionKey(normalizedPath);
+  }
+
+  function resolveCurrentSessionKey(path: string): string {
+    return resolveSessionKey(path);
+  }
+
+  function ensureSession(path: string, sessionKey?: string): NotebookSession {
+    const normalizedPath = path || '';
+    const effectiveSessionKey = sessionKey || resolveCurrentSessionKey(normalizedPath);
+    const existing = sessionsRef.current.get(effectiveSessionKey);
     if (existing) {
       return existing;
     }
 
-    const created = createSession(normalizedPath, `Session started`);
+    const created = createSession(normalizedPath, `Session started`, { sessionKey: effectiveSessionKey });
     const next = new Map(sessionsRef.current);
-    next.set(normalizedPath, created);
+    next.set(effectiveSessionKey, created);
+    activeSessionKeyByPathRef.current.set(normalizedPath, effectiveSessionKey);
     replaceSessions(next);
     return created;
   }
@@ -1519,7 +1743,30 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     setPermissionMenuOpen(false);
   }
 
-  function sendStartSession(session: NotebookSession, notebookPath: string): void {
+  function emitSessionThreadEvent(sessionKey: string, notebookPath: string, threadId: string): void {
+    const source = sessionThreadSyncIdRef.current;
+    const payload: SessionThreadSyncEvent = {
+      kind: 'new-thread',
+      sessionKey,
+      notebookPath,
+      threadId,
+      source,
+      id: createSessionEventId(),
+      issuedAt: Date.now()
+    };
+    try {
+      window.localStorage.setItem(SESSION_THREADS_EVENT_KEY, JSON.stringify(payload));
+    } catch {
+      // Ignore sync write failures; local tab still updates immediately.
+    }
+  }
+
+  function sendStartSession(
+    session: NotebookSession,
+    notebookPath: string,
+    sessionKey: string,
+    options?: { forceNewThread?: boolean }
+  ): void {
     const socket = wsRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       return;
@@ -1529,20 +1776,23 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       JSON.stringify({
         type: 'start_session',
         sessionId: session.threadId,
-        notebookPath
+        notebookPath,
+        sessionContextKey: sessionKey,
+        forceNewThread: options?.forceNewThread === true
       })
     );
   }
 
-  function setSessionRunState(path: string, runState: RunState, runId: string | null): void {
-    if (!path) {
+  function setSessionRunState(sessionKey: string, runState: RunState, runId: string | null): void {
+    if (!sessionKey) {
       return;
     }
 
     const now = Date.now();
     updateSessions(prev => {
       const next = new Map(prev);
-      const session = next.get(path) ?? createSession(path, `Session started`);
+      const existing = next.get(sessionKey) ?? createSession('', `Session started`, { sessionKey });
+      const session = next.get(sessionKey) ?? existing;
       let messages = session.messages;
       let runStartedAt = session.runStartedAt;
 
@@ -1560,14 +1810,14 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 
       const progress = session.runState === runState ? session.progress : '';
       const progressKind = session.runState === runState ? session.progressKind : '';
-      next.set(path, { ...session, messages, runState, activeRunId: runId, runStartedAt, progress, progressKind });
+      next.set(sessionKey, { ...session, messages, runState, activeRunId: runId, runStartedAt, progress, progressKind });
       return next;
     });
   }
 
-  function setSessionProgress(path: string, progress: string, kind: ProgressKind = ''): void {
-    const targetPath = path || currentNotebookPathRef.current || '';
-    if (!targetPath) {
+  function setSessionProgress(sessionKey: string, progress: string, kind: ProgressKind = ''): void {
+    const targetSessionKey = sessionKey || currentNotebookSessionKeyRef.current || '';
+    if (!targetSessionKey) {
       return;
     }
 
@@ -1575,24 +1825,26 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     const nextKind: ProgressKind = nextProgress ? kind : '';
     updateSessions(prev => {
       const next = new Map(prev);
-      const session = next.get(targetPath) ?? createSession(targetPath, `Session started`);
+      const session =
+        next.get(targetSessionKey) ?? createSession('', `Session started`, { sessionKey: targetSessionKey });
       if (session.progress === nextProgress && session.progressKind === nextKind) {
         return prev;
       }
-      next.set(targetPath, { ...session, progress: nextProgress, progressKind: nextKind });
+      next.set(targetSessionKey, { ...session, progress: nextProgress, progressKind: nextKind });
       return next;
     });
   }
 
-  function appendActivityItem(path: string, item: Omit<ActivityItem, 'id' | 'ts'>): void {
-    const targetPath = path || currentNotebookPathRef.current || '';
-    if (!targetPath) {
+  function appendActivityItem(sessionKey: string, item: Omit<ActivityItem, 'id' | 'ts'>): void {
+    const targetSessionKey = sessionKey || currentNotebookSessionKeyRef.current || '';
+    if (!targetSessionKey) {
       return;
     }
 
     updateSessions(prev => {
       const next = new Map(prev);
-      const session = next.get(targetPath) ?? createSession(targetPath, `Session started`);
+      const session =
+        next.get(targetSessionKey) ?? createSession('', `Session started`, { sessionKey: targetSessionKey });
       const entry: ActivityItem = { id: crypto.randomUUID(), ts: Date.now(), ...item };
       const extractCommandKey = (detail: string): string => {
         const raw = (detail || '').trim();
@@ -1661,7 +1913,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
               { ...msg, item: updated },
               ...messages.slice(idx + 1),
             ];
-            next.set(targetPath, { ...session, messages: updatedMessages });
+            next.set(targetSessionKey, { ...session, messages: updatedMessages });
             return next;
           }
         }
@@ -1696,20 +1948,20 @@ function CodexChat(props: CodexChatProps): JSX.Element {
               { ...msg, item: updated },
               ...messages.slice(idx + 1),
             ];
-            next.set(targetPath, { ...session, messages: updatedMessages });
+            next.set(targetSessionKey, { ...session, messages: updatedMessages });
             return next;
           }
         }
       }
 
       const updatedMessages: ChatEntry[] = [...messages, { kind: 'activity', id: entry.id, item: entry }];
-      next.set(targetPath, { ...session, messages: updatedMessages });
+      next.set(targetSessionKey, { ...session, messages: updatedMessages });
       return next;
     });
   }
 
   function setSessionPairing(
-    path: string,
+    sessionKey: string,
     pairing: {
       pairedOk: boolean | null;
       pairedPath: string;
@@ -1717,53 +1969,74 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       pairedMessage: string;
     }
   ): void {
-    const targetPath = path || currentNotebookPathRef.current || '';
-    if (!targetPath) {
+    const targetSessionKey = sessionKey || currentNotebookSessionKeyRef.current || '';
+    if (!targetSessionKey) {
       return;
     }
 
     updateSessions(prev => {
       const next = new Map(prev);
-      const session = next.get(targetPath) ?? createSession(targetPath, `Session started`);
-      next.set(targetPath, { ...session, ...pairing });
+      const session =
+        next.get(targetSessionKey) ?? createSession('', `Session started`, { sessionKey: targetSessionKey });
+      next.set(targetSessionKey, { ...session, ...pairing });
       return next;
     });
   }
 
-  function resolveMessagePath(msg: any): string {
+  function resolveMessageSessionKey(msg: any): string {
     const messagePath = typeof msg.notebookPath === 'string' ? msg.notebookPath : '';
-    const runId = typeof msg.runId === 'string' ? msg.runId : '';
-
-    if (messagePath) {
-      if (runId) {
-        runToPathRef.current.set(runId, messagePath);
-      }
-      return messagePath;
+    const sessionContextKey = typeof msg.sessionContextKey === 'string' ? msg.sessionContextKey : '';
+    if (sessionContextKey) {
+      return sessionContextKey;
     }
 
+    const runId = typeof msg.runId === 'string' ? msg.runId : '';
     if (runId) {
-      const mapped = runToPathRef.current.get(runId);
+      const mapped = runToSessionKeyRef.current.get(runId);
       if (mapped) {
         return mapped;
       }
     }
 
-    return currentNotebookPathRef.current || '';
+    if (messagePath) {
+      if (runId) {
+        const activeSessionKey = activeSessionKeyByPathRef.current.get(messagePath);
+        if (activeSessionKey) {
+          runToSessionKeyRef.current.set(runId, activeSessionKey);
+          return activeSessionKey;
+        }
+      }
+      const activeSessionKey = activeSessionKeyByPathRef.current.get(messagePath);
+      if (activeSessionKey) {
+        return activeSessionKey;
+      }
+      return makeSessionKey(messagePath);
+    }
+
+    if (runId) {
+      const mapped = runToSessionKeyRef.current.get(runId);
+      if (mapped) {
+        return mapped;
+      }
+    }
+
+    return currentNotebookSessionKeyRef.current || '';
   }
 
-  function appendMessage(path: string, role: TextRole, text: string): void {
+  function appendMessage(sessionKey: string, role: TextRole, text: string): void {
     if (!text) {
       return;
     }
-    const targetPath = path || currentNotebookPathRef.current || '';
-    if (!targetPath) {
+    const targetSessionKey = sessionKey || currentNotebookSessionKeyRef.current || '';
+    if (!targetSessionKey) {
       return;
     }
     const nextText = normalizeSystemText(role, text);
 
     updateSessions(prev => {
       const next = new Map(prev);
-      const session = next.get(targetPath) ?? createSession(targetPath, `Session started`);
+      const session =
+        next.get(targetSessionKey) ?? createSession('', `Session started`, { sessionKey: targetSessionKey });
       const messages = session.messages;
       const last = messages[messages.length - 1];
       let updatedMessages: ChatEntry[];
@@ -1774,7 +2047,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         updatedMessages = [...messages, { kind: 'text', id: crypto.randomUUID(), role, text: nextText }];
       }
 
-      next.set(targetPath, { ...session, messages: updatedMessages });
+      next.set(targetSessionKey, { ...session, messages: updatedMessages });
       return next;
     });
   }
@@ -1793,21 +2066,53 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     setIsAtBottom(atBottom);
   }
 
-  function clearRunMappingForPath(path: string): void {
-    const runToPath = runToPathRef.current;
-    const next = new Map(runToPath);
-    for (const [runId, mappedPath] of runToPath) {
-      if (mappedPath === path) {
+  function clearRunMappingForSessionKey(targetSessionKey: string): void {
+    const runToSessionKey = runToSessionKeyRef.current;
+    const next = new Map(runToSessionKey);
+    for (const [runId, mappedSessionKey] of runToSessionKey) {
+      if (mappedSessionKey === targetSessionKey) {
         next.delete(runId);
       }
     }
-    runToPathRef.current = next;
+    runToSessionKeyRef.current = next;
   }
 
-  async function refreshNotebook(path: string): Promise<void> {
+  async function clearAllSessions(): Promise<void> {
+    const count = getStoredSessionThreadCount();
+    if (!count && sessions.size === 0) {
+      return;
+    }
+
+    const result = await showDialog({
+      title: '모든 대화 삭제',
+      body: `저장된 대화 기록 ${count}개와 현재 메모리 대화를 모두 삭제합니다.`,
+      buttons: [Dialog.cancelButton(), Dialog.okButton({ label: '삭제' })]
+    });
+    if (!result.button.accept) {
+      return;
+    }
+
+    const activeSessionKey = currentNotebookSessionKeyRef.current || '';
+    if (activeSessionKey) {
+      clearRunMappingForSessionKey(activeSessionKey);
+    }
+    runToSessionKeyRef.current = new Map();
+    activeSessionKeyByPathRef.current = new Map();
+    safeLocalStorageRemove(SESSION_THREADS_STORAGE_KEY);
+    replaceSessions(new Map());
+    setInput('');
+    clearPendingImages();
+  }
+
+  async function refreshNotebook(sessionKey: string): Promise<void> {
+    const { path } = parseSessionKey(sessionKey);
+    if (!path) {
+      return;
+    }
+
     const widget = props.notebooks.currentWidget;
     if (!widget || widget.context.path !== path) {
-      pendingRefreshPathsRef.current.add(path);
+      pendingRefreshPathsRef.current.add(sessionKey);
       return;
     }
 
@@ -1819,32 +2124,34 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         buttons: [Dialog.cancelButton(), Dialog.okButton({ label: 'Reload' })]
       });
       if (!result.button.accept) {
-        pendingRefreshPathsRef.current.add(path);
+        pendingRefreshPathsRef.current.add(sessionKey);
         return;
       }
     }
 
     try {
       await context.revert();
-      appendMessage(path, 'system', 'Notebook was refreshed after Codex file updates.');
-      pendingRefreshPathsRef.current.delete(path);
+      appendMessage(sessionKey, 'system', 'Notebook was refreshed after Codex file updates.');
+      pendingRefreshPathsRef.current.delete(sessionKey);
     } catch (err) {
-      appendMessage(path, 'system', `Failed to refresh notebook: ${String(err)}`);
-      pendingRefreshPathsRef.current.add(path);
+      appendMessage(sessionKey, 'system', `Failed to refresh notebook: ${String(err)}`);
+      pendingRefreshPathsRef.current.add(sessionKey);
     }
   }
 
   useEffect(() => {
     const updateNotebook = () => {
       const path = getNotebookPath(props.notebooks);
-      const previous = currentNotebookPathRef.current;
-
-      if (path === previous) {
+      const sessionKey = resolveSessionKey(path);
+      const previousKey = currentNotebookSessionKeyRef.current;
+      if (sessionKey && sessionKey === previousKey) {
         return;
       }
 
       currentNotebookPathRef.current = path;
       setCurrentNotebookPath(path);
+      setCurrentNotebookSessionKey(sessionKey);
+      currentNotebookSessionKeyRef.current = sessionKey;
       setInput('');
       clearPendingImages();
       setIsAtBottom(true);
@@ -1853,10 +2160,12 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         return;
       }
 
-      const session = ensureSession(path);
-      sendStartSession(session, path);
-      if (pendingRefreshPathsRef.current.has(path)) {
-        void refreshNotebook(path);
+      const session = ensureSession(path, sessionKey);
+      activeSessionKeyByPathRef.current.set(path, sessionKey);
+      sendStartSession(session, path, sessionKey);
+      if (pendingRefreshPathsRef.current.has(sessionKey)) {
+        void refreshNotebook(sessionKey);
+        return;
       }
     };
 
@@ -1867,6 +2176,63 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       props.notebooks.currentChanged.disconnect(updateNotebook);
     };
   }, [props.notebooks]);
+
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== SESSION_THREADS_EVENT_KEY || !event.newValue) {
+        return;
+      }
+
+      const syncEvent = coerceSessionThreadSyncEvent(event.newValue);
+      if (!syncEvent) {
+        return;
+      }
+      if (syncEvent.source === sessionThreadSyncIdRef.current) {
+        return;
+      }
+
+      const notebookPath = syncEvent.notebookPath;
+      const sessionKey = syncEvent.sessionKey;
+      const threadId = syncEvent.threadId;
+      if (!notebookPath || !sessionKey || !threadId) {
+        return;
+      }
+
+      const resolvedSessionKey = resolveSessionKey(notebookPath);
+      if (!resolvedSessionKey || resolvedSessionKey !== sessionKey) {
+        return;
+      }
+
+      const resetSession = createThreadResetSession(notebookPath, sessionKey, threadId);
+      const currentPath = currentNotebookPathRef.current;
+
+      updateSessions(prev => {
+        const next = new Map(prev);
+        const existing = next.get(sessionKey);
+        if (existing && existing.threadId === threadId) {
+          return prev;
+        }
+        next.set(sessionKey, resetSession);
+        return next;
+      });
+      activeSessionKeyByPathRef.current.set(notebookPath, sessionKey);
+      clearRunMappingForSessionKey(sessionKey);
+
+      if (currentPath === notebookPath && currentNotebookSessionKeyRef.current !== sessionKey) {
+        setCurrentNotebookSessionKey(sessionKey);
+      }
+      if (currentPath === notebookPath) {
+        setInput('');
+        clearPendingImages();
+      }
+      sendStartSession(resetSession, notebookPath, sessionKey);
+    };
+
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener('storage', onStorage);
+    };
+  }, []);
 
   function reconnectSocket(): void {
     if (isReconnecting) {
@@ -1898,14 +2264,15 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         return;
       }
 
-      const session = ensureSession(notebookPath);
-      sendStartSession(session, notebookPath);
+      const currentSessionKey = resolveCurrentSessionKey(notebookPath);
+      const session = ensureSession(notebookPath, currentSessionKey);
+      sendStartSession(session, notebookPath, currentSessionKey);
     };
 
     socket.onclose = () => {
       setSocketConnected(false);
       setIsReconnecting(false);
-      runToPathRef.current = new Map();
+      runToSessionKeyRef.current = new Map();
     };
 
     socket.onerror = () => {
@@ -1918,12 +2285,12 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       try {
         msg = JSON.parse(event.data);
       } catch (err) {
-        appendMessage(currentNotebookPathRef.current, 'system', `Invalid message: ${String(event.data)}`);
+        appendMessage(currentNotebookSessionKeyRef.current || '', 'system', `Invalid message: ${String(event.data)}`);
         return;
       }
 
       const runId = typeof msg.runId === 'string' ? msg.runId : '';
-      const targetPath = resolveMessagePath(msg);
+      const targetSessionKey = resolveMessageSessionKey(msg);
 
       if (msg.type === 'cli_defaults') {
         const model = typeof msg.model === 'string' && msg.model.trim() ? msg.model.trim() : null;
@@ -1942,33 +2309,74 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       }
 
       if (msg.type === 'status') {
-        if (targetPath) {
+        const sessionId = typeof msg.sessionId === 'string' && msg.sessionId.trim() ? msg.sessionId.trim() : '';
+        const history = coerceSessionHistory(msg.history);
+        if (targetSessionKey && (sessionId || history.length > 0)) {
+          updateSessions(prev => {
+            const next = new Map(prev);
+            const existing =
+              next.get(targetSessionKey) ?? createSession('', `Session started`, { sessionKey: targetSessionKey });
+            const nextThreadId = sessionId || existing.threadId;
+            let nextMessages = existing.messages;
+
+            const hasConversation = existing.messages.some(
+              entry => entry.kind === 'text' && (entry.role === 'user' || entry.role === 'assistant')
+            );
+            if (!hasConversation && history.length > 0) {
+              const introEntry =
+                existing.messages.find(
+                  entry => entry.kind === 'text' && entry.role === 'system' && isSessionStartNotice(entry.text)
+                ) ??
+                ({
+                  kind: 'text',
+                  id: crypto.randomUUID(),
+                  role: 'system',
+                  text: normalizeSystemText('system', 'Session started')
+                } as ChatEntry);
+              const restoredEntries: ChatEntry[] = history.map(item => ({
+                kind: 'text',
+                id: crypto.randomUUID(),
+                role: item.role,
+                text: normalizeSystemText(item.role, item.content)
+              }));
+              nextMessages = [introEntry, ...restoredEntries];
+            }
+
+            if (nextThreadId === existing.threadId && nextMessages === existing.messages) {
+              return prev;
+            }
+            next.set(targetSessionKey, { ...existing, threadId: nextThreadId, messages: nextMessages });
+            return next;
+          });
+        }
+
+        if (targetSessionKey) {
           const pairedOk = typeof msg.pairedOk === 'boolean' ? msg.pairedOk : null;
           const pairedPath = typeof msg.pairedPath === 'string' ? msg.pairedPath : '';
           const pairedOsPath = typeof msg.pairedOsPath === 'string' ? msg.pairedOsPath : '';
           const pairedMessage = typeof msg.pairedMessage === 'string' ? msg.pairedMessage : '';
           if (pairedOk !== null || pairedPath || pairedOsPath || pairedMessage) {
-            setSessionPairing(targetPath, { pairedOk, pairedPath, pairedOsPath, pairedMessage });
+            setSessionPairing(targetSessionKey, { pairedOk, pairedPath, pairedOsPath, pairedMessage });
           }
         }
-        if (msg.state === 'running' && targetPath) {
-          setSessionRunState(targetPath, 'running', runId || null);
-          setSessionProgress(targetPath, '', '');
-        } else if (msg.state === 'ready' && targetPath) {
+        if (msg.state === 'running' && targetSessionKey) {
+          setSessionRunState(targetSessionKey, 'running', runId || null);
+          setSessionProgress(targetSessionKey, '', '');
+        } else if (msg.state === 'ready' && targetSessionKey) {
           // The server emits "ready" in a few contexts that are *not* run lifecycle events
           // (e.g. socket open, start_session responses). Those payloads don't include a
           // runId and must not clobber an in-progress run state when users switch tabs.
           if (runId) {
-            setSessionRunState(targetPath, 'ready', null);
-            setSessionProgress(targetPath, '', '');
-            runToPathRef.current.delete(runId);
+            setSessionRunState(targetSessionKey, 'ready', null);
+            setSessionProgress(targetSessionKey, '', '');
+            runToSessionKeyRef.current.delete(runId);
           }
         }
         return;
       }
 
       if (msg.type === 'output') {
-        appendMessage(targetPath, 'assistant', msg.text || '');
+        appendMessage(targetSessionKey, 'assistant', msg.text || '');
         return;
       }
 
@@ -1980,9 +2388,9 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         const summary = summarizeCodexEvent(payload);
         // "Reasoning" events are metadata-only and add noise; the loading indicator already conveys progress.
         if (summary.activity.category !== 'reasoning') {
-          appendActivityItem(targetPath, summary.activity);
+          appendActivityItem(targetSessionKey, summary.activity);
         }
-        setSessionProgress(targetPath, summary.progress, summary.progressKind);
+        setSessionProgress(targetSessionKey, summary.progress, summary.progressKind);
         return;
       }
 
@@ -1991,46 +2399,46 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         if (suggestedCommandPath && !commandPath) {
           setCommandPath(suggestedCommandPath);
           appendMessage(
-            targetPath,
+            targetSessionKey,
             'system',
             `Suggested command path has been saved to settings: ${suggestedCommandPath}`
           );
         }
-        appendMessage(targetPath, 'system', msg.message || 'Unknown error');
-        if (targetPath) {
+        appendMessage(targetSessionKey, 'system', msg.message || 'Unknown error');
+        if (targetSessionKey) {
           const pairedOk = typeof msg.pairedOk === 'boolean' ? msg.pairedOk : null;
           const pairedPath = typeof msg.pairedPath === 'string' ? msg.pairedPath : '';
           const pairedOsPath = typeof msg.pairedOsPath === 'string' ? msg.pairedOsPath : '';
           const pairedMessage = typeof msg.pairedMessage === 'string' ? msg.pairedMessage : '';
           if (pairedOk !== null || pairedPath || pairedOsPath || pairedMessage) {
-            setSessionPairing(targetPath, { pairedOk, pairedPath, pairedOsPath, pairedMessage });
+            setSessionPairing(targetSessionKey, { pairedOk, pairedPath, pairedOsPath, pairedMessage });
           }
         }
-        if (targetPath) {
-          setSessionRunState(targetPath, 'ready', null);
-          setSessionProgress(targetPath, '', '');
+        if (targetSessionKey) {
+          setSessionRunState(targetSessionKey, 'ready', null);
+          setSessionProgress(targetSessionKey, '', '');
         }
         if (runId) {
-          runToPathRef.current.delete(runId);
+          runToSessionKeyRef.current.delete(runId);
         }
         return;
       }
 
       if (msg.type === 'done') {
-        if (targetPath) {
+        if (targetSessionKey) {
           const pairedOk = typeof msg.pairedOk === 'boolean' ? msg.pairedOk : null;
           const pairedPath = typeof msg.pairedPath === 'string' ? msg.pairedPath : '';
           const pairedOsPath = typeof msg.pairedOsPath === 'string' ? msg.pairedOsPath : '';
           const pairedMessage = typeof msg.pairedMessage === 'string' ? msg.pairedMessage : '';
           if (pairedOk !== null || pairedPath || pairedOsPath || pairedMessage) {
-            setSessionPairing(targetPath, { pairedOk, pairedPath, pairedOsPath, pairedMessage });
+            setSessionPairing(targetSessionKey, { pairedOk, pairedPath, pairedOsPath, pairedMessage });
           }
         }
         const exitCode = typeof msg.exitCode === 'number' ? msg.exitCode : null;
         const cancelled = Boolean(msg.cancelled);
         const fileChanged = Boolean(msg.fileChanged);
-        if (fileChanged && targetPath) {
-          void refreshNotebook(targetPath);
+        if (fileChanged && targetSessionKey) {
+          void refreshNotebook(targetSessionKey);
         }
         if (!cancelled && exitCode !== null && exitCode !== 0) {
           const explicitError =
@@ -2041,14 +2449,14 @@ function CodexChat(props: CodexChatProps): JSX.Element {
           const failureMessage = trimmedError
             ? `Codex 실행 실패 (exit ${exitCode}): ${trimmedError}`
             : `Codex 실행 실패 (exit ${exitCode}). 위 로그의 실제 에러 메시지를 확인해 주세요.`;
-          appendMessage(targetPath, 'system', failureMessage);
+          appendMessage(targetSessionKey, 'system', failureMessage);
         }
-        if (targetPath) {
-          setSessionRunState(targetPath, 'ready', null);
-          setSessionProgress(targetPath, '', '');
+        if (targetSessionKey) {
+          setSessionRunState(targetSessionKey, 'ready', null);
+          setSessionProgress(targetSessionKey, '', '');
         }
         if (runId) {
-          runToPathRef.current.delete(runId);
+          runToSessionKeyRef.current.delete(runId);
         }
       }
     };
@@ -2056,7 +2464,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     return () => {
       socket.close();
       wsRef.current = null;
-      runToPathRef.current = new Map();
+      runToSessionKeyRef.current = new Map();
     };
   }, [props.notebooks, reconnectCounter]);
 
@@ -2125,11 +2533,15 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 
   async function startNewThread(): Promise<void> {
     const path = currentNotebookPathRef.current || '';
+    const sessionKey = currentNotebookSessionKeyRef.current || '';
     if (!path) {
       return;
     }
+    if (!sessionKey) {
+      return;
+    }
 
-    const existing = sessionsRef.current.get(path);
+    const existing = sessionsRef.current.get(sessionKey);
     const hasConversation =
       existing?.messages.some(
         msg => msg.kind === 'text' && (msg.role === 'user' || msg.role === 'assistant')
@@ -2146,35 +2558,38 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       }
     }
 
-    const time = new Date().toLocaleTimeString();
-    const newSession = createSession(path, `Session started (${time})`);
+    const newSession = createThreadResetSession(path, sessionKey, createSessionEventId());
     updateSessions(prev => {
       const next = new Map(prev);
-      next.set(path, newSession);
+      next.set(sessionKey, newSession);
       return next;
     });
-    clearRunMappingForPath(path);
+    clearRunMappingForSessionKey(sessionKey);
     setInput('');
     clearPendingImages();
-    sendStartSession(newSession, path);
+    sendStartSession(newSession, path, sessionKey, { forceNewThread: true });
+    emitSessionThreadEvent(sessionKey, path, newSession.threadId);
   }
 
   function cancelRun(): void {
     const socket = wsRef.current;
-    const notebookPath = currentNotebookPathRef.current || '';
-    const session = notebookPath ? sessionsRef.current.get(notebookPath) : null;
+    const sessionKey = currentNotebookSessionKeyRef.current || '';
+    if (!sessionKey) {
+      return;
+    }
+    const session = sessionKey ? sessionsRef.current.get(sessionKey) : null;
     const runId = session?.activeRunId ?? null;
 
     if (!socket || socket.readyState !== WebSocket.OPEN) {
-      appendMessage(notebookPath, 'system', 'Cancel failed: WebSocket is not connected.');
+      appendMessage(sessionKey, 'system', 'Cancel failed: WebSocket is not connected.');
       return;
     }
     if (!runId) {
-      appendMessage(notebookPath, 'system', 'Cancel not available yet (waiting for run id).');
+      appendMessage(sessionKey, 'system', 'Cancel not available yet (waiting for run id).');
       return;
     }
 
-    setSessionProgress(notebookPath, 'Cancelling...');
+    setSessionProgress(sessionKey, 'Cancelling...');
     socket.send(JSON.stringify({ type: 'cancel', runId }));
   }
 
@@ -2223,7 +2638,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     const existingCount = pendingImagesRef.current.length;
     if (existingCount >= MAX_IMAGE_ATTACHMENTS) {
       appendMessage(
-        currentNotebookPathRef.current || '',
+        currentNotebookSessionKeyRef.current || '',
         'system',
         `Too many images attached (max ${MAX_IMAGE_ATTACHMENTS}).`
       );
@@ -2250,14 +2665,14 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 
     if (skippedLarge > 0) {
       appendMessage(
-        currentNotebookPathRef.current || '',
+        currentNotebookSessionKeyRef.current || '',
         'system',
         `Skipped ${skippedLarge} image(s): each must be <= ${Math.round(MAX_IMAGE_ATTACHMENT_BYTES / (1024 * 1024))}MB.`
       );
     }
     if (skippedTotal > 0) {
       appendMessage(
-        currentNotebookPathRef.current || '',
+        currentNotebookSessionKeyRef.current || '',
         'system',
         `Skipped ${skippedTotal} image(s): total attachments must be <= ${Math.round(MAX_IMAGE_ATTACHMENT_TOTAL_BYTES / (1024 * 1024))}MB.`
       );
@@ -2277,20 +2692,24 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   async function sendMessage(): Promise<void> {
     const socket = wsRef.current;
     const notebookPath = currentNotebookPathRef.current || '';
+    const sessionKey = currentNotebookSessionKeyRef.current || '';
 
     if (!notebookPath) {
       return;
     }
-
-    if (!socket || socket.readyState !== WebSocket.OPEN) {
-      appendMessage(notebookPath, 'system', 'WebSocket is not connected.');
+    if (!sessionKey) {
       return;
     }
 
-    const existing = sessionsRef.current.get(notebookPath);
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      appendMessage(sessionKey, 'system', 'WebSocket is not connected.');
+      return;
+    }
+
+    const existing = sessionKey ? sessionsRef.current.get(sessionKey) : null;
     if (existing?.pairedOk === false) {
       appendMessage(
-        notebookPath,
+        sessionKey,
         'system',
         existing.pairedMessage ||
           `Jupytext paired file not found. Expected: ${existing.pairedOsPath || existing.pairedPath || '<notebook>.py'}`
@@ -2304,11 +2723,11 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       return;
     }
     if (modelOption === '__custom__' && !selectedModel) {
-      appendMessage(notebookPath, 'system', 'Select a model before sending.');
+      appendMessage(sessionKey, 'system', 'Select a model before sending.');
       return;
     }
 
-    const current = sessionsRef.current.get(notebookPath);
+    const current = sessionKey ? sessionsRef.current.get(sessionKey) : null;
     if (current?.runState === 'running') {
       return;
     }
@@ -2318,7 +2737,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       try {
         await widget.context.save();
       } catch (err) {
-        appendMessage(notebookPath, 'system', `Auto-save failed: ${String(err)}`);
+        appendMessage(sessionKey, 'system', `Auto-save failed: ${String(err)}`);
         return;
       }
     }
@@ -2326,7 +2745,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     const selection = includeActiveCell ? getActiveCellText(props.notebooks) : '';
     const cellOutput =
       includeActiveCell && includeActiveCellOutput ? getActiveCellOutput(props.notebooks) : '';
-    const session = ensureSession(notebookPath);
+    const session = ensureSession(notebookPath, sessionKey);
 
     const content = trimmed || (hasImages ? 'Please analyze the attached image(s).' : '');
     let images: { name: string; dataUrl: string }[] | undefined;
@@ -2338,7 +2757,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
           images.push({ name: image.file.name || 'clipboard-image', dataUrl });
         }
       } catch (err) {
-        appendMessage(notebookPath, 'system', `Failed to attach image(s): ${String(err)}`);
+        appendMessage(sessionKey, 'system', `Failed to attach image(s): ${String(err)}`);
         return;
       }
     }
@@ -2347,6 +2766,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       JSON.stringify({
         type: 'send',
         sessionId: session.threadId,
+        sessionContextKey: sessionKey,
         content,
         selection,
         cellOutput,
@@ -2359,37 +2779,36 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       })
     );
 
-	    const imageCount = pendingImagesRef.current.length;
-	    updateSessions(prev => {
-	      const next = new Map(prev);
-	      const existing =
-	        next.get(notebookPath) ?? createSession(notebookPath, `Session started`);
-	      const updatedMessages: ChatEntry[] = [
-	        ...existing.messages,
-	        {
-	          kind: 'text',
-	          id: crypto.randomUUID(),
-	          role: 'user',
-	          text: content,
-	          attachments: imageCount > 0 ? { images: imageCount } : undefined
-	        }
-	      ];
-		      next.set(notebookPath, {
-		        ...existing,
-		        messages: updatedMessages,
-	        runState: 'running',
-	        activeRunId: null,
-          runStartedAt: Date.now(),
-	        progress: '',
-	        progressKind: '',
-	      });
-	      return next;
-	    });
+    const imageCount = pendingImagesRef.current.length;
+    updateSessions(prev => {
+      const next = new Map(prev);
+      const existing = next.get(sessionKey) ?? createSession('', `Session started`, { sessionKey });
+      const updatedMessages: ChatEntry[] = [
+        ...existing.messages,
+        {
+          kind: 'text',
+          id: crypto.randomUUID(),
+          role: 'user',
+          text: content,
+          attachments: imageCount > 0 ? { images: imageCount } : undefined
+        }
+      ];
+      next.set(sessionKey, {
+        ...existing,
+        messages: updatedMessages,
+        runState: 'running',
+        activeRunId: null,
+        runStartedAt: Date.now(),
+        progress: '',
+        progressKind: '',
+      });
+      return next;
+    });
     setInput('');
     clearPendingImages();
   }
 
-  const currentSession = currentNotebookPath ? sessions.get(currentNotebookPath) : null;
+  const currentSession = currentNotebookSessionKey ? sessions.get(currentNotebookSessionKey) : null;
   const messages = currentSession?.messages ?? [];
   const progress = currentSession?.progress ?? '';
   const progressKind = currentSession?.progressKind ?? '';
@@ -2623,6 +3042,18 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                 title="Close"
               >
                 <XIcon width={16} height={16} />
+              </button>
+            </div>
+            <div className="jp-CodexSettingsPanel-stats">
+              <span className="jp-CodexSettingsPanel-stat">저장된 대화: {storedThreadCount}개</span>
+              <button
+                type="button"
+                className="jp-CodexBtn jp-CodexBtn-xs jp-CodexBtn-danger"
+                onClick={() => void clearAllSessions()}
+                disabled={status === 'running' || (storedThreadCount === 0 && sessions.size === 0)}
+                title={status === 'running' ? '실행 중에는 삭제할 수 없습니다.' : '저장된 대화를 모두 삭제'}
+              >
+                전체 삭제
               </button>
             </div>
             <div className="jp-CodexChat-controls">

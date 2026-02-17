@@ -182,6 +182,57 @@ class SessionStore:
         meta = self._load_meta(session_id)
         return meta.get("notebook_path", "")
 
+    def resolve_session_for_notebook(self, notebook_path: str, notebook_os_path: str = "") -> str:
+        if not self._logging_enabled:
+            return ""
+
+        normalized_notebook_path = (notebook_path or "").strip()
+        normalized_notebook_os_path = (notebook_os_path or "").strip()
+        if not normalized_notebook_path and not normalized_notebook_os_path:
+            return ""
+
+        latest_session_id = ""
+        latest_updated_at = None
+
+        for path in self._base.glob("*.meta.json"):
+            session_id = path.stem.removesuffix(".meta")
+            try:
+                meta = json.loads(path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, IOError):
+                continue
+            if not isinstance(meta, dict):
+                continue
+
+            matched = False
+            path_match = (meta.get("notebook_path") or "").strip()
+            os_path_match = (meta.get("notebook_os_path") or "").strip()
+            if normalized_notebook_path and path_match == normalized_notebook_path:
+                matched = True
+            if not matched and normalized_notebook_os_path and os_path_match == normalized_notebook_os_path:
+                matched = True
+            if not matched:
+                continue
+
+            updated_at = meta.get("updated_at") or meta.get("created_at")
+            parsed_updated_at = _parse_iso_datetime(updated_at)
+            if parsed_updated_at is None:
+                continue
+            if latest_updated_at is None or parsed_updated_at > latest_updated_at:
+                latest_updated_at = parsed_updated_at
+                latest_session_id = session_id
+
+        return latest_session_id
+
+    def delete_session(self, session_id: str) -> None:
+        if not self._logging_enabled:
+            return
+
+        normalized_session_id = (session_id or "").strip()
+        if not normalized_session_id:
+            return
+
+        self._delete_session_files(normalized_session_id)
+
     def update_notebook_path(
         self, session_id: str, notebook_path: str, notebook_os_path: str = ""
     ) -> None:
