@@ -5,6 +5,7 @@ labextension/
 *.tsbuildinfo
 .DS_Store
 jupyterlab_codex/labextension/
+.yarn/install-state.gz
 
 # ---- Python / packaging ----
 __pycache__/
