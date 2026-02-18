@@ -54,6 +54,20 @@ def _coerce_command_path(value: Any) -> str:
     return value.strip()
 
 
+def _coerce_session_context_key(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.strip()
+
+
+def _coerce_bool_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "y", "yes", "on"}
+    return False
+
+
 def _build_command_not_found_hint(requested_path: str) -> dict[str, str]:
     requested_label = requested_path or "codex"
     detected = shutil.which("codex")
@@ -85,6 +99,7 @@ class CodexWSHandler(WebSocketHandler):
     def open(self):
         self.write_message(json.dumps({"type": "status", "state": "ready"}))
         self._send_cli_defaults()
+        self._send_model_catalog()
         self._send_rate_limits_snapshot()
 
     async def on_message(self, message: str):
@@ -102,6 +117,14 @@ class CodexWSHandler(WebSocketHandler):
 
         if msg_type == "send":
             await self._handle_send(payload)
+            return
+
+        if msg_type == "delete_session":
+            self._handle_delete_session(payload)
+            return
+
+        if msg_type == "delete_all_sessions":
+            self._handle_delete_all_sessions(payload)
             return
 
         if msg_type == "cancel":
@@ -129,14 +152,60 @@ class CodexWSHandler(WebSocketHandler):
         except Exception:
             return
 
+    def _send_model_catalog(self) -> None:
+        async def _send() -> None:
+            models = await self._runner.list_available_models()
+            if not models:
+                return
+            try:
+                self.write_message(json.dumps({"type": "cli_defaults", "availableModels": models}))
+            except Exception:
+                return
+
+        try:
+            asyncio.create_task(_send())
+        except Exception:
+            return
+
     async def _handle_start_session(self, payload: Dict[str, Any]):
-        session_id = payload.get("sessionId") or str(uuid.uuid4())
+        requested_session_id = payload.get("sessionId") or ""
+        if not isinstance(requested_session_id, str):
+            requested_session_id = str(requested_session_id)
+        requested_session_id = requested_session_id.strip()
+        force_new_thread = _coerce_bool_flag(payload.get("forceNewThread"))
         notebook_path = payload.get("notebookPath", "")
+        if not isinstance(notebook_path, str):
+            notebook_path = str(notebook_path)
+        notebook_path = notebook_path.strip()
+        session_context_key = _coerce_session_context_key(payload.get("sessionContextKey"))
         notebook_os_path = self._resolve_notebook_os_path(notebook_path)
 
-        self._store.ensure_session(session_id, notebook_path, notebook_os_path)
+        resolved_session_id = requested_session_id
+        if force_new_thread:
+            previous_session_id = self._store.resolve_session_for_notebook(notebook_path, notebook_os_path)
+            if previous_session_id and previous_session_id != resolved_session_id:
+                self._store.delete_session(previous_session_id)
+            if not resolved_session_id:
+                resolved_session_id = str(uuid.uuid4())
+        else:
+            resolved_session_id = self._store.resolve_session_for_notebook(notebook_path, notebook_os_path) or resolved_session_id
+            if not resolved_session_id:
+                resolved_session_id = str(uuid.uuid4())
+
+        self._store.ensure_session(resolved_session_id, notebook_path, notebook_os_path)
         if notebook_path:
-            self._store.update_notebook_path(session_id, notebook_path, notebook_os_path)
+            self._store.update_notebook_path(resolved_session_id, notebook_path, notebook_os_path)
+
+        raw_history = self._store.load_messages(resolved_session_id)
+        history = []
+        for item in raw_history:
+            role = item.get("role")
+            content = item.get("content")
+            if role not in {"user", "assistant", "system"}:
+                continue
+            if not isinstance(content, str):
+                continue
+            history.append({"role": role, "content": content})
 
         paired_ok, paired_path, paired_os_path, paired_message = _compute_pairing_status(
             notebook_path, notebook_os_path
@@ -146,8 +215,10 @@ class CodexWSHandler(WebSocketHandler):
                 {
                     "type": "status",
                     "state": "ready",
-                    "sessionId": session_id,
+                    "sessionId": resolved_session_id,
                     "notebookPath": notebook_path,
+                    "sessionContextKey": session_context_key,
+                    "history": history,
                     "pairedOk": paired_ok,
                     "pairedPath": paired_path,
                     "pairedOsPath": paired_os_path,
@@ -157,8 +228,12 @@ class CodexWSHandler(WebSocketHandler):
         )
 
     async def _handle_send(self, payload: Dict[str, Any]):
-        session_id = payload.get("sessionId") or str(uuid.uuid4())
+        session_id = payload.get("sessionId") or ""
+        if not isinstance(session_id, str):
+            session_id = str(session_id)
+        session_id = session_id.strip() or str(uuid.uuid4())
         content = payload.get("content", "")
+        session_context_key = _coerce_session_context_key(payload.get("sessionContextKey"))
         selection = payload.get("selection", "")
         cell_output = payload.get("cellOutput", "")
         images_payload = payload.get("images")
@@ -217,9 +292,9 @@ class CodexWSHandler(WebSocketHandler):
                         "type": "error",
                         "runId": run_id,
                         "sessionId": session_id,
+                        "sessionContextKey": session_context_key,
                         "notebookPath": notebook_path,
-                        "message": paired_message
-                        or "Jupytext paired file is required for this extension.",
+                        "message": paired_message or "Jupytext paired file is required for this extension.",
                         "pairedOk": paired_ok,
                         "pairedPath": paired_path,
                         "pairedOsPath": paired_os_path,
@@ -234,6 +309,7 @@ class CodexWSHandler(WebSocketHandler):
                         "state": "ready",
                         "runId": run_id,
                         "sessionId": session_id,
+                        "sessionContextKey": session_context_key,
                         "notebookPath": notebook_path,
                         "pairedOk": paired_ok,
                         "pairedPath": paired_path,
@@ -267,6 +343,7 @@ class CodexWSHandler(WebSocketHandler):
                         "state": "running",
                         "runId": run_id,
                         "sessionId": session_id,
+                        "sessionContextKey": session_context_key,
                         "notebookPath": notebook_path,
                         "pairedOk": paired_ok,
                         "pairedPath": paired_path,
@@ -290,6 +367,7 @@ class CodexWSHandler(WebSocketHandler):
                                 "type": "output",
                                 "runId": run_id,
                                 "sessionId": session_id,
+                                "sessionContextKey": session_context_key,
                                 "notebookPath": notebook_path,
                                 "text": text,
                             }
@@ -306,6 +384,7 @@ class CodexWSHandler(WebSocketHandler):
                                 "type": "event",
                                 "runId": run_id,
                                 "sessionId": session_id,
+                                "sessionContextKey": session_context_key,
                                 "notebookPath": notebook_path,
                                 "payload": event,
                             }
@@ -348,6 +427,7 @@ class CodexWSHandler(WebSocketHandler):
                             "type": "done",
                             "runId": run_id,
                             "sessionId": session_id,
+                            "sessionContextKey": session_context_key,
                             "notebookPath": notebook_path,
                             "exitCode": exit_code,
                             "fileChanged": file_changed,
@@ -365,6 +445,7 @@ class CodexWSHandler(WebSocketHandler):
                             "state": "ready",
                             "runId": run_id,
                             "sessionId": session_id,
+                            "sessionContextKey": session_context_key,
                             "notebookPath": notebook_path,
                             "pairedOk": paired_ok,
                             "pairedPath": paired_path,
@@ -381,6 +462,7 @@ class CodexWSHandler(WebSocketHandler):
                             "type": "done",
                             "runId": run_id,
                             "sessionId": session_id,
+                            "sessionContextKey": session_context_key,
                             "notebookPath": notebook_path,
                             "exitCode": None,
                             "cancelled": True,
@@ -399,6 +481,7 @@ class CodexWSHandler(WebSocketHandler):
                             "state": "ready",
                             "runId": run_id,
                             "sessionId": session_id,
+                            "sessionContextKey": session_context_key,
                             "notebookPath": notebook_path,
                             "pairedOk": paired_ok,
                             "pairedPath": paired_path,
@@ -414,6 +497,7 @@ class CodexWSHandler(WebSocketHandler):
                     "type": "error",
                     "runId": run_id,
                     "sessionId": session_id,
+                    "sessionContextKey": session_context_key,
                     "notebookPath": notebook_path,
                     "message": hint["message"],
                     "pairedOk": paired_ok,
@@ -431,6 +515,7 @@ class CodexWSHandler(WebSocketHandler):
                             "state": "ready",
                             "runId": run_id,
                             "sessionId": session_id,
+                            "sessionContextKey": session_context_key,
                             "notebookPath": notebook_path,
                             "pairedOk": paired_ok,
                             "pairedPath": paired_path,
@@ -446,6 +531,7 @@ class CodexWSHandler(WebSocketHandler):
                             "type": "error",
                             "runId": run_id,
                             "sessionId": session_id,
+                            "sessionContextKey": session_context_key,
                             "notebookPath": notebook_path,
                             "message": str(exc),
                         }
@@ -458,6 +544,7 @@ class CodexWSHandler(WebSocketHandler):
                             "state": "ready",
                             "runId": run_id,
                             "sessionId": session_id,
+                            "sessionContextKey": session_context_key,
                             "notebookPath": notebook_path,
                             "pairedOk": paired_ok,
                             "pairedPath": paired_path,
@@ -479,7 +566,43 @@ class CodexWSHandler(WebSocketHandler):
             "task": task,
             "sessionId": session_id,
             "notebookPath": notebook_path,
+            "sessionContextKey": session_context_key,
         }
+
+    def _handle_delete_session(self, payload: Dict[str, Any]) -> None:
+        session_id = payload.get("sessionId")
+        if not isinstance(session_id, str):
+            session_id = str(session_id) if session_id else ""
+        session_id = session_id.strip()
+        if session_id:
+            self._store.delete_session(session_id)
+
+    def _handle_delete_all_sessions(self, payload: Dict[str, Any]) -> None:
+        del payload
+        response: Dict[str, Any] = {
+            "type": "delete_all_sessions",
+            "ok": False,
+            "deletedCount": 0,
+            "failedCount": 0,
+            "message": "Unknown error"
+        }
+        try:
+            deleted_count, failed_count = self._store.delete_all_sessions()
+            response["deletedCount"] = deleted_count
+            response["failedCount"] = failed_count
+            response["ok"] = failed_count == 0
+            response["message"] = (
+                f"Deleted {deleted_count} conversations" if deleted_count else "No conversations found to delete"
+            )
+            if failed_count:
+                response["message"] = f"Deleted {deleted_count} conversations, failed to delete {failed_count}"
+        except Exception as exc:  # pragma: no cover - defensive path
+            response["message"] = str(exc)
+
+        try:
+            self.write_message(json.dumps(response))
+        except Exception:
+            return
 
     def _send_rate_limits_snapshot(self, force: bool = False) -> None:
         try:
@@ -503,6 +626,7 @@ class CodexWSHandler(WebSocketHandler):
 
         task = run_context["task"]
         task.cancel()
+        session_context_key = _coerce_session_context_key(run_context.get("sessionContextKey"))
         self.write_message(
             json.dumps(
                 {
@@ -510,6 +634,7 @@ class CodexWSHandler(WebSocketHandler):
                     "state": "ready",
                     "runId": run_id,
                     "sessionId": run_context["sessionId"],
+                    "sessionContextKey": session_context_key,
                     "notebookPath": run_context["notebookPath"],
                 }
             )
@@ -820,7 +945,7 @@ def _sanitize_reasoning_effort(value: Any) -> str | None:
     effort = value.strip().lower()
     if not effort:
         return None
-    if effort not in {"none", "minimal", "low", "medium", "high", "xhigh"}:
+    if not re.fullmatch(r"[a-z][a-z0-9._-]*", effort):
         return None
 
     return effort

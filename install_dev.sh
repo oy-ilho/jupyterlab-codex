@@ -9,10 +9,22 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
-echo "[0/6] Checking Python/Jupyter prerequisites"
+PYTHON_BIN="${PYTHON_BIN:-}"
+if [ -z "$PYTHON_BIN" ]; then
+  if command -v python >/dev/null 2>&1; then
+    PYTHON_BIN="python"
+  elif command -v python3 >/dev/null 2>&1; then
+    PYTHON_BIN="python3"
+  else
+    echo "ERROR: python not found on PATH (also tried python3)."
+    exit 1
+  fi
+fi
 
-if ! command -v python >/dev/null 2>&1; then
-  echo "ERROR: python not found on PATH"
+echo "[1/5] Checking Python/Jupyter prerequisites"
+
+if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+  echo "ERROR: $PYTHON_BIN not found on PATH"
   exit 1
 fi
 
@@ -21,9 +33,9 @@ if ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! python -c 'import jupyterlab' >/dev/null 2>&1; then
+if ! "$PYTHON_BIN" -c 'import jupyterlab' >/dev/null 2>&1; then
   echo "JupyterLab not found in this Python environment. Installing (jupyterlab>=4,<5; jupyter_server>=2,<3)..."
-  python -m pip install -q "jupyterlab>=4,<5" "jupyter_server>=2,<3"
+  "$PYTHON_BIN" -m pip install -q "jupyterlab>=4,<5" "jupyter_server>=2,<3"
 fi
 
 JLPM="jlpm"
@@ -33,21 +45,22 @@ fi
 
 if ! command -v jupyter >/dev/null 2>&1; then
   echo "ERROR: jupyter command not found (expected after installing jupyterlab)."
-  echo "Try: python -m pip install \"jupyterlab>=4,<5\""
+  echo "Try: $PYTHON_BIN -m pip install \"jupyterlab>=4,<5\""
   exit 1
 fi
 
-echo "[1/6] Installing JS dependencies"
+echo "[2/5] Installing JS dependencies"
 $JLPM install
 
-echo "[2/6] Building JupyterLab extension"
+echo "[3/5] Building JupyterLab extension"
 $JLPM run build
 
-echo "[3/6] Installing Python package (editable)"
-python -m pip install -e "$ROOT_DIR" --no-deps
+echo "[4/5] Installing Python package (editable)"
+"$PYTHON_BIN" -m pip install -e "$ROOT_DIR" --no-deps
 
-echo "[4/6] Enabling server extension"
-PREFIX="${CONDA_PREFIX:-$(python -c 'import sys; print(sys.prefix)')}"
+echo "[5/5] Enabling server extension and linking labextension"
+
+PREFIX="${CONDA_PREFIX:-$("$PYTHON_BIN" -c 'import sys; print(sys.prefix)')}"
 
 JUPYTER_CFG_DIR="$PREFIX/etc/jupyter/jupyter_server_config.d"
 mkdir -p "$JUPYTER_CFG_DIR"
@@ -58,12 +71,5 @@ jupyter server extension list | sed -n '1,120p' || true
 
 LABEXT_DIR="$PREFIX/share/jupyter/labextensions"
 mkdir -p "$LABEXT_DIR"
-
-echo "[5/6] Linking labextension into $LABEXT_DIR"
 ln -sfn "$ROOT_DIR/jupyterlab_codex/labextension" "$LABEXT_DIR/jupyterlab-codex-sidebar"
-
-echo "[6/6] Current labextension status"
 jupyter labextension list
-
-echo "Starting JupyterLab..."
-exec jupyter lab --no-browser --ServerApp.open_browser=False "$@"

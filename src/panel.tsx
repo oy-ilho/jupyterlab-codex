@@ -5,9 +5,17 @@ import { INotebookTracker } from '@jupyterlab/notebook';
 import { ServerConnection } from '@jupyterlab/services';
 import { URLExt } from '@jupyterlab/coreutils';
 import type { DocumentRegistry } from '@jupyterlab/docregistry';
+import { Message } from '@lumino/messaging';
 import { marked } from 'marked';
+import markedKatex from 'marked-katex-extension';
 import DOMPurify from 'dompurify';
 import hljs from 'highlight.js/lib/common';
+
+marked.use(
+  markedKatex({
+    throwOnError: false
+  })
+);
 
 function PlusIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
   return (
@@ -140,14 +148,16 @@ function GaugeIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
 }
 
 function ReasoningEffortIcon(
-  props: React.SVGProps<SVGSVGElement> & { effort: ReasoningOptionValue }
+  props: React.SVGProps<SVGSVGElement> & {
+    effort: ReasoningOptionValue;
+    effortOptions?: readonly ReasoningOption[];
+  }
 ): JSX.Element {
-  const { effort, ...svgProps } = props;
+  const { effort, effortOptions = [], ...svgProps } = props;
   if (effort === '__config__') {
     return <GaugeIcon {...svgProps} />;
   }
-  const activeBars =
-    effort === 'low' ? 1 : effort === 'medium' ? 2 : effort === 'high' ? 3 : effort === 'xhigh' ? 4 : 0;
+  const activeBars = getReasoningEffortBars(effort, effortOptions);
 
   const bars = [
     { x: 6, top: 14 },
@@ -355,6 +365,28 @@ export class CodexPanel extends ReactWidget {
   render(): JSX.Element {
     return <CodexChat notebooks={this._notebooks} />;
   }
+
+  protected onAfterAttach(msg: Message): void {
+    super.onAfterAttach(msg);
+    this.focusComposer();
+  }
+
+  protected onActivateRequest(msg: Message): void {
+    super.onActivateRequest(msg);
+    this.focusComposer();
+  }
+
+  private focusComposer(): void {
+    window.setTimeout(() => {
+      const textarea = this.node.querySelector<HTMLTextAreaElement>('.jp-CodexComposer textarea');
+      if (!textarea || textarea.disabled) {
+        return;
+      }
+      textarea.focus({ preventScroll: true });
+      const cursor = textarea.value.length;
+      textarea.setSelectionRange(cursor, cursor);
+    }, 0);
+  }
 }
 
 type TextRole = 'user' | 'assistant' | 'system';
@@ -368,6 +400,11 @@ type ChatEntry =
       role: TextRole;
       text: string;
       attachments?: ChatAttachments;
+    }
+  | {
+      kind: 'run-divider';
+      id: string;
+      elapsedMs: number;
     }
   | {
       kind: 'activity';
@@ -408,13 +445,21 @@ type CodexRateLimitsSnapshot = {
   secondary: RateLimitWindowSnapshot | null;
 };
 
+type ModelCatalogEntry = {
+  model: string;
+  displayName: string;
+  reasoningEfforts?: string[];
+  defaultReasoningEffort?: string;
+};
+
 type CodexChatProps = {
   notebooks: INotebookTracker;
 };
 
 type CliDefaultsSnapshot = {
   model: string | null;
-  reasoningEffort: ReasoningMenuOptionValue | null;
+  reasoningEffort: string | null;
+  availableModels?: ModelCatalogEntry[];
 };
 
 type NotebookSession = {
@@ -422,6 +467,7 @@ type NotebookSession = {
   messages: ChatEntry[];
   runState: RunState;
   activeRunId: string | null;
+  runStartedAt: number | null;
   progress: string;
   progressKind: ProgressKind;
   pairedOk: boolean | null;
@@ -430,36 +476,29 @@ type NotebookSession = {
   pairedMessage: string;
 };
 
-type ModelOptionValue =
-  | '__config__'
-  | 'gpt-5.3-codex'
-  | 'gpt-5.2-codex'
-  | 'gpt-5.1-codex-max'
-  | 'gpt-5.2'
-  | 'gpt-5.1-codex-mini'
-  | '__custom__';
-type ModelOption = {
-  label: string;
-  value: ModelOptionValue;
+type SessionThreadSyncEvent = {
+  kind: 'new-thread';
+  sessionKey: string;
+  notebookPath: string;
+  threadId: string;
+  source: string;
+  id: string;
+  issuedAt: number;
 };
 
-const MODEL_OPTIONS: ModelOption[] = [
-  { label: 'GPT-5.3 Codex', value: 'gpt-5.3-codex' },
-  { label: 'GPT-5.2 Codex', value: 'gpt-5.2-codex' },
-  { label: 'GPT-5.1 Codex Max', value: 'gpt-5.1-codex-max' },
-  { label: 'GPT-5.2', value: 'gpt-5.2' },
-  { label: 'GPT-5.1 Codex Mini', value: 'gpt-5.1-codex-mini' },
-  { label: 'Custom', value: '__custom__' }
-];
-const DEFAULT_MODEL = '';
-const REASONING_MENU_OPTIONS = [
-  { label: 'Low', value: 'low' },
-  { label: 'Medium', value: 'medium' },
-  { label: 'High', value: 'high' },
-  { label: 'Extra high', value: 'xhigh' }
-] as const;
-type ReasoningMenuOptionValue = (typeof REASONING_MENU_OPTIONS)[number]['value'];
-type ReasoningOptionValue = '__config__' | ReasoningMenuOptionValue;
+type ModelOptionValue = '__config__' | string;
+type ModelOption = {
+  label: string;
+  value: string;
+};
+
+const FALLBACK_MODEL_OPTIONS: ModelOption[] = [];
+type ReasoningOption = {
+  label: string;
+  value: string;
+};
+type ReasoningOptionValue = '__config__' | string;
+const MAX_REASONING_EFFORT_BARS = 4;
 const SANDBOX_OPTIONS = [
   { label: 'Default permission', value: 'workspace-write' },
   { label: 'Full access', value: 'danger-full-access' }
@@ -467,33 +506,344 @@ const SANDBOX_OPTIONS = [
 type SandboxMode = (typeof SANDBOX_OPTIONS)[number]['value'];
 const AUTO_SAVE_STORAGE_KEY = 'jupyterlab-codex:auto-save-before-send';
 const MODEL_STORAGE_KEY = 'jupyterlab-codex:model';
-const CUSTOM_MODEL_STORAGE_KEY = 'jupyterlab-codex:custom-model';
 const COMMAND_PATH_STORAGE_KEY = 'jupyterlab-codex:command-path';
 const REASONING_STORAGE_KEY = 'jupyterlab-codex:reasoning-effort';
 const SANDBOX_MODE_STORAGE_KEY = 'jupyterlab-codex:sandbox-mode';
 const SETTINGS_OPEN_STORAGE_KEY = 'jupyterlab-codex:settings-open';
+const NOTIFY_ON_DONE_STORAGE_KEY = 'jupyterlab-codex:notify-on-done';
+const NOTIFY_ON_DONE_MIN_SECONDS_STORAGE_KEY = 'jupyterlab-codex:notify-on-done-min-seconds';
 const INCLUDE_ACTIVE_CELL_STORAGE_KEY = 'jupyterlab-codex:include-active-cell';
 const INCLUDE_ACTIVE_CELL_OUTPUT_STORAGE_KEY = 'jupyterlab-codex:include-active-cell-output';
+const SESSION_THREADS_STORAGE_KEY = 'jupyterlab-codex:session-threads';
+const SESSION_THREADS_EVENT_KEY = 'jupyterlab-codex:session-threads:event';
+const DELETE_ALL_PENDING_KEY = 'jupyterlab-codex:delete-all-pending';
+const SESSION_KEY_SEPARATOR = '\u0000';
 
 const MAX_IMAGE_ATTACHMENTS = 4;
 const MAX_IMAGE_ATTACHMENT_BYTES = 4 * 1024 * 1024; // Avoid huge WebSocket payloads.
 const MAX_IMAGE_ATTACHMENT_TOTAL_BYTES = 6 * 1024 * 1024;
 
-function isKnownModelOption(value: string): value is ModelOptionValue {
-  return MODEL_OPTIONS.some(option => option.value === value);
+function findModelLabel(model: string, options: readonly ModelOption[]): string {
+  const match = options.find(option => option.value === model);
+  return match ? match.label : truncateMiddle(model, 32);
+}
+
+function coerceReasoningEffort(value: unknown): string {
+  return typeof value === 'string' ? value.trim().toLowerCase() : '';
+}
+
+function coerceReasoningText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function coerceReasoningEffortEntry(value: unknown): string {
+  if (typeof value === 'string') {
+    return coerceReasoningText(value);
+  }
+  if (value && typeof value === 'object' && 'reasoningEffort' in (value as Record<string, unknown>)) {
+    return coerceReasoningText((value as { reasoningEffort?: unknown }).reasoningEffort);
+  }
+  return '';
+}
+
+function readModelCatalog(rawModels: unknown): ModelCatalogEntry[] {
+  if (!Array.isArray(rawModels)) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  const catalog: ModelCatalogEntry[] = [];
+  for (const item of rawModels) {
+    if (!item || typeof item !== 'object') {
+      continue;
+    }
+    const rawModel = (item as { model?: unknown }).model;
+    const rawDisplayName = (item as { displayName?: unknown }).displayName;
+    const rawDefaultReasoningEffort = (item as { defaultReasoningEffort?: unknown }).defaultReasoningEffort;
+    const rawReasoningEfforts =
+      (item as { reasoningEfforts?: unknown }).reasoningEfforts ??
+      (item as { supportedReasoningEfforts?: unknown }).supportedReasoningEfforts;
+    if (typeof rawModel !== 'string') {
+      continue;
+    }
+    const model = rawModel.trim();
+    if (!model || seen.has(model)) {
+      continue;
+    }
+    seen.add(model);
+
+    const displayName = typeof rawDisplayName === 'string' && rawDisplayName.trim() ? rawDisplayName.trim() : model;
+    const defaultReasoningEffort = coerceReasoningEffortEntry(rawDefaultReasoningEffort);
+    const reasoningEfforts = Array.isArray(rawReasoningEfforts)
+      ? rawReasoningEfforts.reduce<string[]>((acc, effortCandidate: unknown) => {
+          const effort = coerceReasoningEffortEntry(effortCandidate);
+          if (!effort || acc.includes(effort)) {
+            return acc;
+          }
+          acc.push(effort);
+          return acc;
+        }, [])
+      : [];
+    catalog.push({
+      model,
+      displayName,
+      ...(reasoningEfforts.length > 0 ? { reasoningEfforts } : {}),
+      ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
+    });
+  }
+
+  return catalog;
+}
+
+function readModelOptions(rawModels: unknown): ModelOption[] {
+  const catalog = readModelCatalog(rawModels);
+  return catalog.map(entry => ({ label: entry.displayName, value: entry.model }));
+}
+
+function getReasoningEffortBars(
+  effort: string,
+  effortOptions: readonly ReasoningOption[]
+): number {
+  if (!effort || effort === '__config__') {
+    return 0;
+  }
+  if (effortOptions.length <= 0) {
+    return 0;
+  }
+  const index = effortOptions.findIndex(option => option.value === effort);
+  if (index < 0) {
+    return 0;
+  }
+  if (effortOptions.length === 1) {
+    return 1;
+  }
+  const scale = MAX_REASONING_EFFORT_BARS - 1;
+  return Math.max(
+    1,
+    Math.min(
+      MAX_REASONING_EFFORT_BARS,
+      Math.floor((index * scale) / (effortOptions.length - 1)) + 1
+    )
+  );
+}
+
+function buildReasoningOptions(rawModels: unknown, selectedModel: string): ReasoningOption[] {
+  const catalog = readModelCatalog(rawModels);
+  const normalizedModel = selectedModel.trim();
+  const modelByName = catalog.find(item => item.model === normalizedModel);
+  const reasons =
+    modelByName?.reasoningEfforts && modelByName.reasoningEfforts.length > 0
+      ? modelByName.reasoningEfforts
+      : modelByName?.defaultReasoningEffort
+        ? [modelByName.defaultReasoningEffort]
+        : catalog.flatMap(item => item.reasoningEfforts ?? []);
+
+  const deduped = new Map<string, ReasoningOption>();
+  for (const reason of reasons) {
+    const label = coerceReasoningEffortEntry(reason);
+    const normalized = coerceReasoningEffort(label);
+    if (!normalized || deduped.has(normalized)) {
+      continue;
+    }
+    deduped.set(normalized, { value: normalized, label: label || normalized });
+  }
+
+  return Array.from(deduped.values());
+}
+
+function findReasoningLabel(value: string, options: readonly ReasoningOption[]): string {
+  const match = options.find(option => option.value === value);
+  if (match) {
+    return match.label;
+  }
+  const raw = coerceReasoningText(value);
+  if (!raw) {
+    return 'Reasoning';
+  }
+  return raw;
 }
 
 function isKnownSandboxMode(value: string): value is SandboxMode {
   return SANDBOX_OPTIONS.some(option => option.value === value);
 }
 
-function createSession(path: string, intro: string): NotebookSession {
+function makeSessionKey(path: string): string {
+  const normalizedPath = (path || '').trim();
+  if (!normalizedPath) {
+    return '';
+  }
+  return normalizedPath;
+}
+
+function createSessionEventId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.floor(Math.random() * 0x100000000).toString(16)}`;
+}
+
+function parseSessionKey(sessionKey: string): { path: string } {
+  if (!sessionKey) {
+    return { path: '' };
+  }
+  const separatorIndex = sessionKey.indexOf(SESSION_KEY_SEPARATOR);
+  if (separatorIndex < 0) {
+    return { path: sessionKey };
+  }
+  return { path: sessionKey.slice(0, separatorIndex) };
+}
+
+function readStoredSessionThreads(): Record<string, string> {
+  const raw = safeLocalStorageGet(SESSION_THREADS_STORAGE_KEY);
+  if (!raw) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') {
+      return {};
+    }
+    const result: Record<string, string> = {};
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (!key || typeof value !== 'string') {
+        continue;
+      }
+      const threadId = value.trim();
+      if (!threadId) {
+        continue;
+      }
+      result[key] = threadId;
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+function getStoredSessionThreadCount(): number {
+  const mapping = readStoredSessionThreads();
+  const uniquePaths = new Set<string>();
+  for (const key of Object.keys(mapping)) {
+    const { path } = parseSessionKey(key);
+    if (path) {
+      uniquePaths.add(path);
+    }
+  }
+  return uniquePaths.size;
+}
+
+function readStoredThreadId(path: string, sessionKey: string): string {
+  const normalizedPath = path.trim();
+  const normalizedSessionKey = sessionKey || '';
+  if (!normalizedSessionKey) {
+    return '';
+  }
+  const mapping = readStoredSessionThreads();
+  const exactMatch = mapping[normalizedSessionKey];
+  if (exactMatch) {
+    return exactMatch;
+  }
+
+  if (!normalizedPath) {
+    return '';
+  }
+  for (const [key, threadId] of Object.entries(mapping)) {
+    if (!threadId) {
+      continue;
+    }
+    const parsed = parseSessionKey(key);
+    if (parsed.path === normalizedPath) {
+      return threadId;
+    }
+  }
+  return '';
+}
+
+function persistStoredSessionThreads(sessions: Map<string, NotebookSession>): void {
+  const mapping: Record<string, string> = {};
+  for (const [sessionKey, session] of sessions) {
+    if (!sessionKey || !session?.threadId) {
+      continue;
+    }
+    mapping[sessionKey] = session.threadId;
+  }
+  try {
+    safeLocalStorageSet(SESSION_THREADS_STORAGE_KEY, JSON.stringify(mapping));
+  } catch {
+    // Ignore storage failures; in-memory sessions still work.
+  }
+}
+
+function coerceSessionThreadSyncEvent(value: string): SessionThreadSyncEvent | null {
+  if (!value) {
+    return null;
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(value);
+  } catch {
+    return null;
+  }
+  if (!raw || typeof raw !== 'object') {
+    return null;
+  }
+
+  const event = raw as Record<string, unknown>;
+  const sessionKey = typeof event.sessionKey === 'string' ? event.sessionKey.trim() : '';
+  const notebookPath = typeof event.notebookPath === 'string' ? event.notebookPath.trim() : '';
+  const threadId = typeof event.threadId === 'string' ? event.threadId.trim() : '';
+  const source = typeof event.source === 'string' ? event.source.trim() : '';
+  const id = typeof event.id === 'string' ? event.id.trim() : '';
+  if (!sessionKey || !notebookPath || !threadId || !id || event.kind !== 'new-thread') {
+    return null;
+  }
+  const issuedAt = typeof event.issuedAt === 'number' && Number.isFinite(event.issuedAt) ? event.issuedAt : Date.now();
+  return { kind: 'new-thread', sessionKey, notebookPath, threadId, source, id, issuedAt };
+}
+
+function coerceSessionHistory(
+  raw: any
+): Array<{
+  role: TextRole;
+  content: string;
+}> {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const result: Array<{ role: TextRole; content: string }> = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') {
+      continue;
+    }
+    const role = (item as any).role;
+    const content = (item as any).content;
+    if ((role !== 'user' && role !== 'assistant' && role !== 'system') || typeof content !== 'string') {
+      continue;
+    }
+    result.push({ role, content });
+  }
+  return result;
+}
+
+function createSession(
+  path: string,
+  intro: string,
+  options?: {
+    threadId?: string;
+    reuseStoredThread?: boolean;
+    sessionKey?: string;
+  }
+): NotebookSession {
   const defaultIntro = 'Session started';
   const systemText = normalizeSystemText('system', intro || defaultIntro);
+  const requestedThreadId = (options?.threadId || '').trim();
+  const storedThreadId = options?.reuseStoredThread === false ? '' : readStoredThreadId(path, options?.sessionKey || '');
+  const threadId = requestedThreadId || storedThreadId || crypto.randomUUID();
   return {
-    threadId: crypto.randomUUID(),
+    threadId,
     runState: 'ready',
     activeRunId: null,
+    runStartedAt: null,
     progress: '',
     progressKind: '',
     messages: [
@@ -509,6 +859,15 @@ function createSession(path: string, intro: string): NotebookSession {
     pairedOsPath: '',
     pairedMessage: '',
   };
+}
+
+function createThreadResetSession(path: string, sessionKey: string, threadId: string): NotebookSession {
+  const time = new Date().toLocaleTimeString();
+  return createSession(path, `Session started (${time})`, {
+    threadId,
+    reuseStoredThread: false,
+    sessionKey
+  });
 }
 
 function safeLocalStorageGet(key: string): string | null {
@@ -549,11 +908,11 @@ function formatSessionStartedNotice(label: string, time: string | null): string 
 function normalizeSessionStartedNotice(text: string): string | null {
   const raw = text.trim();
 
-  // Korean
+  // Korean legacy messages (normalize to English UI text)
   if (raw.startsWith('세션 시작')) {
     const { rest, value } = extractTrailingParenValue(raw);
     if (rest.startsWith('세션 시작')) {
-      return formatSessionStartedNotice('세션 시작', value);
+      return formatSessionStartedNotice('Session started', value);
     }
   }
 
@@ -603,16 +962,35 @@ function safeLocalStorageSet(key: string, value: string): void {
   }
 }
 
+function safeLocalStorageRemove(key: string): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    // Ignore storage errors; settings still work for current session.
+  }
+}
+
+function markDeleteAllPending(): void {
+  safeLocalStorageSet(DELETE_ALL_PENDING_KEY, '1');
+}
+
+function clearDeleteAllPending(): void {
+  safeLocalStorageRemove(DELETE_ALL_PENDING_KEY);
+}
+
+function hasDeleteAllPending(): boolean {
+  return safeLocalStorageGet(DELETE_ALL_PENDING_KEY) === '1';
+}
+
 function readStoredModel(): string {
   return safeLocalStorageGet(MODEL_STORAGE_KEY) ?? '';
 }
 
 function readStoredCommandPath(): string {
   return safeLocalStorageGet(COMMAND_PATH_STORAGE_KEY) ?? '';
-}
-
-function readStoredCustomModel(): string {
-  return safeLocalStorageGet(CUSTOM_MODEL_STORAGE_KEY) ?? '';
 }
 
 function readStoredAutoSave(): boolean {
@@ -633,9 +1011,8 @@ function readStoredReasoningEffort(): ReasoningOptionValue {
     if (stored === '__config__') {
       return '__config__';
     }
-    return REASONING_MENU_OPTIONS.some(option => option.value === stored)
-      ? (stored as ReasoningOptionValue)
-      : '__config__';
+    const normalized = stored.trim();
+    return normalized ? (normalized as ReasoningOptionValue) : '__config__';
   } catch {
     return '__config__';
   }
@@ -646,9 +1023,8 @@ function readStoredSandboxMode(): SandboxMode {
   return isKnownSandboxMode(stored) ? stored : SANDBOX_OPTIONS[0].value;
 }
 
-function persistModel(model: string, customModel: string): void {
+function persistModel(model: string): void {
   safeLocalStorageSet(MODEL_STORAGE_KEY, model);
-  safeLocalStorageSet(CUSTOM_MODEL_STORAGE_KEY, customModel);
 }
 
 function persistCommandPath(commandPath: string): void {
@@ -681,6 +1057,34 @@ function readStoredSettingsOpen(): boolean {
 
 function persistSettingsOpen(enabled: boolean): void {
   safeLocalStorageSet(SETTINGS_OPEN_STORAGE_KEY, enabled ? 'true' : 'false');
+}
+
+function readStoredNotifyOnDone(): boolean {
+  return (safeLocalStorageGet(NOTIFY_ON_DONE_STORAGE_KEY) ?? 'true') === 'true';
+}
+
+function persistNotifyOnDone(enabled: boolean): void {
+  safeLocalStorageSet(NOTIFY_ON_DONE_STORAGE_KEY, enabled ? 'true' : 'false');
+}
+
+function readStoredNotifyOnDoneMinSeconds(): number {
+  const raw = safeLocalStorageGet(NOTIFY_ON_DONE_MIN_SECONDS_STORAGE_KEY);
+  if (raw == null) {
+    return 30;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? Math.max(0, Math.trunc(parsed)) : 0;
+}
+
+function persistNotifyOnDoneMinSeconds(seconds: number): void {
+  safeLocalStorageSet(NOTIFY_ON_DONE_MIN_SECONDS_STORAGE_KEY, String(Math.max(0, Math.trunc(seconds))));
+}
+
+function getBrowserNotificationPermission(): NotificationPermission | 'unsupported' {
+  if (typeof window === 'undefined' || typeof window.Notification === 'undefined') {
+    return 'unsupported';
+  }
+  return window.Notification.permission;
 }
 
 function truncateMiddle(value: string, max: number): string {
@@ -770,6 +1174,19 @@ function formatDurationShort(ms: number): string {
     return `${hours}h ${minutes}m`;
   }
   return `${minutes}m`;
+}
+
+function formatRunDuration(ms: number): string {
+  if (!Number.isFinite(ms)) {
+    return '0s';
+  }
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes > 0) {
+    return `${minutes}m ${seconds}s`;
+  }
+  return `${seconds}s`;
 }
 
 function formatResetsIn(resetsAtSec: number | null, nowMs: number): string {
@@ -1134,9 +1551,10 @@ function renderMarkdownToSafeHtml(markdown: string): string {
   if (!markdown) {
     return '';
   }
+  const normalizedMarkdown = normalizeMathDelimiters(markdown);
   let html = '';
   try {
-    html = marked.parse(markdown, {
+    html = marked.parse(normalizedMarkdown, {
       gfm: true,
       breaks: true
     }) as string;
@@ -1148,6 +1566,41 @@ function renderMarkdownToSafeHtml(markdown: string): string {
   } catch {
     return html;
   }
+}
+
+function normalizeMathDelimiters(markdown: string): string {
+  const normalizedEscapedBlock = markdown.replace(
+    /(^|[^\\])\\\[([\s\S]*?)\\\]/g,
+    (_match, prefix: string, body: string) => `${prefix}\n$$\n${body}\n$$\n`
+  );
+
+  const normalizedEscapedInline = normalizedEscapedBlock.replace(
+    /(^|[^\\])\\\((.+?)\\\)/g,
+    (_match, prefix: string, body: string) => `${prefix}$${body}$`
+  );
+
+  // Some model outputs arrive with bare bracket delimiters:
+  // [
+  //   ...latex...
+  // ]
+  // Promote those to $$...$$ when the body looks like math.
+  return normalizedEscapedInline.replace(
+    /(^|\n)[ \t]*\[\s*\n([\s\S]*?)\n[ \t]*\](?=\n|$)/g,
+    (_match, prefix: string, body: string) => {
+      const trimmed = body.trim();
+      if (!looksLikeLatexMath(trimmed)) {
+        return `${prefix}[\n${body}\n]`;
+      }
+      return `${prefix}\n$$\n${trimmed}\n$$\n`;
+    }
+  );
+}
+
+function looksLikeLatexMath(value: string): boolean {
+  if (!value) {
+    return false;
+  }
+  return /\\[A-Za-z]+/.test(value) || /[_^{}]/.test(value);
 }
 
 function StatusPill(props: { status: PanelStatus }): JSX.Element {
@@ -1224,21 +1677,16 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const sessionsRef = useRef<Map<string, NotebookSession>>(new Map());
   const [currentNotebookPath, setCurrentNotebookPath] = useState<string>('');
   const currentNotebookPathRef = useRef<string>('');
+  const [currentNotebookSessionKey, setCurrentNotebookSessionKey] = useState<string>('');
+  const currentNotebookSessionKeyRef = useRef<string>('');
   const [cliDefaults, setCliDefaults] = useState<CliDefaultsSnapshot>({ model: null, reasoningEffort: null });
+  const [modelOptions, setModelOptions] = useState<ModelOption[]>(() => FALLBACK_MODEL_OPTIONS);
   const [modelOption, setModelOption] = useState<ModelOptionValue>(() => {
     const savedModel = readStoredModel();
-    if (isKnownModelOption(savedModel)) {
+    if (savedModel && savedModel !== '__config__' && savedModel !== '__custom__') {
       return savedModel;
     }
-    // If we previously stored a custom model name, keep the UI in "Custom" mode.
-    return savedModel ? '__custom__' : '__config__';
-  });
-  const [customModel, setCustomModel] = useState<string>(() => {
-    const savedModel = readStoredModel();
-    if (savedModel && !isKnownModelOption(savedModel)) {
-      return savedModel;
-    }
-    return readStoredCustomModel();
+    return '__config__';
   });
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningOptionValue>(() =>
     readStoredReasoningEffort()
@@ -1250,11 +1698,15 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const [includeActiveCellOutput, setIncludeActiveCellOutput] = useState<boolean>(() =>
     readStoredIncludeActiveCellOutput()
   );
+  const [notifyOnDone, setNotifyOnDone] = useState<boolean>(() => readStoredNotifyOnDone());
+  const [notifyOnDoneMinSeconds, setNotifyOnDoneMinSeconds] = useState<number>(() => readStoredNotifyOnDoneMinSeconds());
   const [settingsOpen, setSettingsOpen] = useState<boolean>(() => readStoredSettingsOpen());
   const [input, setInput] = useState('');
   const [pendingImages, setPendingImages] = useState<PendingImageAttachment[]>([]);
   const pendingImagesRef = useRef<PendingImageAttachment[]>([]);
   const [socketConnected, setSocketConnected] = useState(false);
+  const [isReconnecting, setIsReconnecting] = useState(false);
+  const [reconnectCounter, setReconnectCounter] = useState(0);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [reasoningMenuOpen, setReasoningMenuOpen] = useState(false);
@@ -1262,9 +1714,13 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const [permissionMenuOpen, setPermissionMenuOpen] = useState(false);
   const [rateLimits, setRateLimits] = useState<CodexRateLimitsSnapshot | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
-  const runToPathRef = useRef<Map<string, string>>(new Map());
+  const runToSessionKeyRef = useRef<Map<string, string>>(new Map());
+  const activeSessionKeyByPathRef = useRef<Map<string, string>>(new Map());
+  const sessionThreadSyncIdRef = useRef<string>(createSessionEventId());
   const lastRateLimitsRefreshRef = useRef<number>(0);
   const pendingRefreshPathsRef = useRef<Set<string>>(new Set());
+  const notifyOnDoneRef = useRef<boolean>(notifyOnDone);
+  const notifyOnDoneMinSecondsRef = useRef<number>(notifyOnDoneMinSeconds);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
   const modelMenuWrapRef = useRef<HTMLDivElement | null>(null);
@@ -1279,21 +1735,52 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const usagePopoverRef = useRef<HTMLDivElement>(null);
   const permissionBtnRef = useRef<HTMLButtonElement>(null);
   const permissionPopoverRef = useRef<HTMLDivElement>(null);
-  const customModelInputRef = useRef<HTMLInputElement | null>(null);
+  const notebookLabelRef = useRef<HTMLSpanElement | null>(null);
+  const [isNotebookLabelTruncated, setIsNotebookLabelTruncated] = useState(false);
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const selectedModel =
-    modelOption === '__custom__'
-      ? customModel.trim()
-      : modelOption === '__config__'
-        ? ''
-        : modelOption;
+  const storedThreadCount = useMemo<number>(() => getStoredSessionThreadCount(), [sessions]);
+  const selectedModel = modelOption === '__config__' ? '' : modelOption;
   const selectedReasoningEffort = reasoningEffort === '__config__' ? '' : reasoningEffort;
   const autoModel = cliDefaults.model;
   const autoReasoningEffort = cliDefaults.reasoningEffort;
+  const reasoningModel = modelOption === '__config__' ? (autoModel || '') : modelOption;
+  const reasoningOptions = useMemo<ReasoningOption[]>(
+    () => buildReasoningOptions(cliDefaults.availableModels, reasoningModel),
+    [cliDefaults.availableModels, reasoningModel]
+  );
+
+  useEffect(() => {
+    const dynamicModelOptions = readModelOptions(cliDefaults.availableModels);
+    setModelOptions(dynamicModelOptions);
+  }, [cliDefaults.availableModels]);
+
+  useEffect(() => {
+    if (reasoningEffort === '__config__') {
+      return;
+    }
+    if (!reasoningOptions.some(option => option.value === reasoningEffort)) {
+      setReasoningEffort('__config__');
+    }
+  }, [reasoningEffort, reasoningOptions]);
+
+  useEffect(() => {
+    if (modelOption === '__config__') {
+      return;
+    }
+    if (!modelOptions.some(option => option.value === modelOption)) {
+      setModelOption('__config__');
+    }
+  }, [modelOption, modelOptions]);
 
   useEffect(() => {
     sessionsRef.current = sessions;
+    currentNotebookSessionKeyRef.current = currentNotebookSessionKey;
   }, [sessions]);
+
+  useEffect(() => {
+    currentNotebookSessionKeyRef.current = currentNotebookSessionKey;
+    persistStoredSessionThreads(sessions);
+  }, [sessions, currentNotebookSessionKey]);
 
   useEffect(() => {
     pendingImagesRef.current = pendingImages;
@@ -1309,8 +1796,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   }, []);
 
   useEffect(() => {
-    persistModel(selectedModel, customModel.trim());
-  }, [selectedModel, customModel]);
+    persistModel(selectedModel);
+  }, [selectedModel]);
 
   useEffect(() => {
     persistAutoSave(autoSaveBeforeSend);
@@ -1348,15 +1835,15 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   }, [settingsOpen]);
 
   useEffect(() => {
-    if (!modelMenuOpen) {
-      return;
-    }
-    if (modelOption !== '__custom__') {
-      return;
-    }
-    const id = window.setTimeout(() => customModelInputRef.current?.focus(), 0);
-    return () => window.clearTimeout(id);
-  }, [modelMenuOpen, modelOption]);
+    notifyOnDoneRef.current = notifyOnDone;
+    persistNotifyOnDone(notifyOnDone);
+  }, [notifyOnDone]);
+
+  useEffect(() => {
+    const normalized = Number.isFinite(notifyOnDoneMinSeconds) ? Math.max(0, Math.floor(notifyOnDoneMinSeconds)) : 0;
+    notifyOnDoneMinSecondsRef.current = normalized;
+    persistNotifyOnDoneMinSeconds(normalized);
+  }, [notifyOnDoneMinSeconds]);
 
   useEffect(() => {
     if (!modelMenuOpen && !reasoningMenuOpen && !usagePopoverOpen && !permissionMenuOpen) {
@@ -1430,16 +1917,27 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     });
   }
 
-  function ensureSession(path: string): NotebookSession {
+  function resolveSessionKey(path: string): string {
     const normalizedPath = path || '';
-    const existing = sessionsRef.current.get(normalizedPath);
+    return makeSessionKey(normalizedPath);
+  }
+
+  function resolveCurrentSessionKey(path: string): string {
+    return resolveSessionKey(path);
+  }
+
+  function ensureSession(path: string, sessionKey?: string): NotebookSession {
+    const normalizedPath = path || '';
+    const effectiveSessionKey = sessionKey || resolveCurrentSessionKey(normalizedPath);
+    const existing = sessionsRef.current.get(effectiveSessionKey);
     if (existing) {
       return existing;
     }
 
-    const created = createSession(normalizedPath, `Session started`);
+    const created = createSession(normalizedPath, `Session started`, { sessionKey: effectiveSessionKey });
     const next = new Map(sessionsRef.current);
-    next.set(normalizedPath, created);
+    next.set(effectiveSessionKey, created);
+    activeSessionKeyByPathRef.current.set(normalizedPath, effectiveSessionKey);
     replaceSessions(next);
     return created;
   }
@@ -1472,7 +1970,134 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     setPermissionMenuOpen(false);
   }
 
-  function sendStartSession(session: NotebookSession, notebookPath: string): void {
+  async function updateNotifyOnDone(enabled: boolean): Promise<void> {
+    if (!enabled) {
+      setNotifyOnDone(false);
+      return;
+    }
+
+    const permission = getBrowserNotificationPermission();
+    const systemSessionKey = currentNotebookSessionKeyRef.current || '';
+    if (permission === 'unsupported') {
+      appendMessage(systemSessionKey, 'system', 'Browser notifications are not supported in this environment.');
+      setNotifyOnDone(false);
+      return;
+    }
+    if (permission === 'granted') {
+      setNotifyOnDone(true);
+      return;
+    }
+    if (permission === 'denied') {
+      appendMessage(
+        systemSessionKey,
+        'system',
+        'Browser notifications are blocked for this site. Allow notifications in browser settings to enable this option.'
+      );
+      setNotifyOnDone(false);
+      return;
+    }
+
+    try {
+      const requested = await window.Notification.requestPermission();
+      if (requested === 'granted') {
+        setNotifyOnDone(true);
+        return;
+      }
+      if (requested === 'denied') {
+        appendMessage(
+          systemSessionKey,
+          'system',
+          'Browser notification permission was denied. Allow notifications in browser settings to enable this option.'
+        );
+      }
+      setNotifyOnDone(false);
+    } catch {
+      appendMessage(systemSessionKey, 'system', 'Failed to request browser notification permission.');
+      setNotifyOnDone(false);
+    }
+  }
+
+  function getRunDurationMs(sessionKey: string): number | null {
+    if (!sessionKey) {
+      return null;
+    }
+    const session = sessionsRef.current.get(sessionKey);
+    if (!session || typeof session.runStartedAt !== 'number' || !Number.isFinite(session.runStartedAt)) {
+      return null;
+    }
+    return Math.max(0, Date.now() - session.runStartedAt);
+  }
+
+  function formatElapsedForNotification(elapsedMs: number): string {
+    const totalSeconds = Math.round(Math.max(0, elapsedMs) / 1000);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    if (minutes === 0) {
+      return `${totalSeconds}s`;
+    }
+    return `${minutes}m ${seconds}s`;
+  }
+
+  function notifyRunDone(sessionKey: string, notebookPath: string, cancelled: boolean, exitCode: number | null): void {
+    if (!notifyOnDoneRef.current) {
+      return;
+    }
+    const permission = getBrowserNotificationPermission();
+    if (permission !== 'granted' || typeof window === 'undefined' || typeof window.Notification === 'undefined') {
+      return;
+    }
+
+    const elapsedMs = getRunDurationMs(sessionKey);
+    const minimumMs = notifyOnDoneMinSecondsRef.current * 1000;
+    if (minimumMs > 0 && (elapsedMs === null || elapsedMs < minimumMs)) {
+      return;
+    }
+
+    const parsed = parseSessionKey(sessionKey);
+    const pathLabel = parsed.path || notebookPath || currentNotebookPathRef.current || 'current notebook';
+    const pathSummary = truncateMiddle(pathLabel, 120);
+    const elapsedText = elapsedMs === null ? '' : ` (${formatElapsedForNotification(elapsedMs)} elapsed)`;
+    const body = cancelled
+      ? `Run cancelled in ${pathSummary}${elapsedText}`
+      : exitCode === null || exitCode === 0
+        ? `Run completed in ${pathSummary}${elapsedText}`
+        : `Run failed (exit ${exitCode}) in ${pathSummary}${elapsedText}`;
+
+    try {
+      const notification = new window.Notification('Codex run finished', {
+        body,
+        tag: sessionKey ? `codex-done-${sessionKey}` : undefined
+      });
+      window.setTimeout(() => notification.close(), 12000);
+    } catch {
+      // Ignore failures; completion is still shown in the panel.
+    }
+  }
+
+  function emitSessionThreadEvent(sessionKey: string, notebookPath: string, threadId: string): void {
+    const source = sessionThreadSyncIdRef.current;
+    const payload: SessionThreadSyncEvent = {
+      kind: 'new-thread',
+      sessionKey,
+      notebookPath,
+      threadId,
+      source,
+      id: createSessionEventId(),
+      issuedAt: Date.now()
+    };
+    try {
+      window.localStorage.setItem(SESSION_THREADS_EVENT_KEY, JSON.stringify(payload));
+    } catch {
+      // Ignore sync write failures; local tab still updates immediately.
+    }
+  }
+
+  function sendStartSession(
+    session: NotebookSession,
+    notebookPath: string,
+    sessionKey: string,
+    options?: { forceNewThread?: boolean }
+  ): void {
     const socket = wsRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       return;
@@ -1482,29 +2107,61 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       JSON.stringify({
         type: 'start_session',
         sessionId: session.threadId,
-        notebookPath
+        notebookPath,
+        sessionContextKey: sessionKey,
+        forceNewThread: options?.forceNewThread === true
       })
     );
   }
 
-  function setSessionRunState(path: string, runState: RunState, runId: string | null): void {
-    if (!path) {
+  function deleteAllSessionsOnServer(): boolean {
+    const socket = wsRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+    try {
+      socket.send(JSON.stringify({ type: 'delete_all_sessions' }));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function setSessionRunState(sessionKey: string, runState: RunState, runId: string | null): void {
+    if (!sessionKey) {
       return;
     }
 
+    const now = Date.now();
     updateSessions(prev => {
       const next = new Map(prev);
-      const session = next.get(path) ?? createSession(path, `Session started`);
+      const existing = next.get(sessionKey) ?? createSession('', `Session started`, { sessionKey });
+      const session = next.get(sessionKey) ?? existing;
+      let messages = session.messages;
+      let runStartedAt = session.runStartedAt;
+
+      if (runState === 'running' && session.runState !== 'running') {
+        runStartedAt = now;
+      }
+      if (runState === 'ready' && session.runState === 'running') {
+        const startedAt = runStartedAt;
+        if (typeof startedAt === 'number' && Number.isFinite(startedAt)) {
+          const elapsedMs = Math.max(0, now - startedAt);
+          messages = [...messages, { kind: 'run-divider', id: crypto.randomUUID(), elapsedMs }];
+        }
+        runStartedAt = null;
+      }
+
       const progress = session.runState === runState ? session.progress : '';
       const progressKind = session.runState === runState ? session.progressKind : '';
-      next.set(path, { ...session, runState, activeRunId: runId, progress, progressKind });
+      next.set(sessionKey, { ...session, messages, runState, activeRunId: runId, runStartedAt, progress, progressKind });
       return next;
     });
   }
 
-  function setSessionProgress(path: string, progress: string, kind: ProgressKind = ''): void {
-    const targetPath = path || currentNotebookPathRef.current || '';
-    if (!targetPath) {
+  function setSessionProgress(sessionKey: string, progress: string, kind: ProgressKind = ''): void {
+    const targetSessionKey = sessionKey || currentNotebookSessionKeyRef.current || '';
+    if (!targetSessionKey) {
       return;
     }
 
@@ -1512,24 +2169,26 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     const nextKind: ProgressKind = nextProgress ? kind : '';
     updateSessions(prev => {
       const next = new Map(prev);
-      const session = next.get(targetPath) ?? createSession(targetPath, `Session started`);
+      const session =
+        next.get(targetSessionKey) ?? createSession('', `Session started`, { sessionKey: targetSessionKey });
       if (session.progress === nextProgress && session.progressKind === nextKind) {
         return prev;
       }
-      next.set(targetPath, { ...session, progress: nextProgress, progressKind: nextKind });
+      next.set(targetSessionKey, { ...session, progress: nextProgress, progressKind: nextKind });
       return next;
     });
   }
 
-  function appendActivityItem(path: string, item: Omit<ActivityItem, 'id' | 'ts'>): void {
-    const targetPath = path || currentNotebookPathRef.current || '';
-    if (!targetPath) {
+  function appendActivityItem(sessionKey: string, item: Omit<ActivityItem, 'id' | 'ts'>): void {
+    const targetSessionKey = sessionKey || currentNotebookSessionKeyRef.current || '';
+    if (!targetSessionKey) {
       return;
     }
 
     updateSessions(prev => {
       const next = new Map(prev);
-      const session = next.get(targetPath) ?? createSession(targetPath, `Session started`);
+      const session =
+        next.get(targetSessionKey) ?? createSession('', `Session started`, { sessionKey: targetSessionKey });
       const entry: ActivityItem = { id: crypto.randomUUID(), ts: Date.now(), ...item };
       const extractCommandKey = (detail: string): string => {
         const raw = (detail || '').trim();
@@ -1598,7 +2257,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
               { ...msg, item: updated },
               ...messages.slice(idx + 1),
             ];
-            next.set(targetPath, { ...session, messages: updatedMessages });
+            next.set(targetSessionKey, { ...session, messages: updatedMessages });
             return next;
           }
         }
@@ -1633,20 +2292,20 @@ function CodexChat(props: CodexChatProps): JSX.Element {
               { ...msg, item: updated },
               ...messages.slice(idx + 1),
             ];
-            next.set(targetPath, { ...session, messages: updatedMessages });
+            next.set(targetSessionKey, { ...session, messages: updatedMessages });
             return next;
           }
         }
       }
 
       const updatedMessages: ChatEntry[] = [...messages, { kind: 'activity', id: entry.id, item: entry }];
-      next.set(targetPath, { ...session, messages: updatedMessages });
+      next.set(targetSessionKey, { ...session, messages: updatedMessages });
       return next;
     });
   }
 
   function setSessionPairing(
-    path: string,
+    sessionKey: string,
     pairing: {
       pairedOk: boolean | null;
       pairedPath: string;
@@ -1654,64 +2313,82 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       pairedMessage: string;
     }
   ): void {
-    const targetPath = path || currentNotebookPathRef.current || '';
-    if (!targetPath) {
+    const targetSessionKey = sessionKey || currentNotebookSessionKeyRef.current || '';
+    if (!targetSessionKey) {
       return;
     }
 
     updateSessions(prev => {
       const next = new Map(prev);
-      const session = next.get(targetPath) ?? createSession(targetPath, `Session started`);
-      next.set(targetPath, { ...session, ...pairing });
+      const session =
+        next.get(targetSessionKey) ?? createSession('', `Session started`, { sessionKey: targetSessionKey });
+      next.set(targetSessionKey, { ...session, ...pairing });
       return next;
     });
   }
 
-  function resolveMessagePath(msg: any): string {
+  function resolveMessageSessionKey(msg: any): string {
     const messagePath = typeof msg.notebookPath === 'string' ? msg.notebookPath : '';
-    const runId = typeof msg.runId === 'string' ? msg.runId : '';
-
-    if (messagePath) {
-      if (runId) {
-        runToPathRef.current.set(runId, messagePath);
-      }
-      return messagePath;
+    const sessionContextKey = typeof msg.sessionContextKey === 'string' ? msg.sessionContextKey : '';
+    if (sessionContextKey) {
+      return sessionContextKey;
     }
 
+    const runId = typeof msg.runId === 'string' ? msg.runId : '';
     if (runId) {
-      const mapped = runToPathRef.current.get(runId);
+      const mapped = runToSessionKeyRef.current.get(runId);
       if (mapped) {
         return mapped;
       }
     }
 
-    return currentNotebookPathRef.current || '';
+    if (messagePath) {
+      if (runId) {
+        const activeSessionKey = activeSessionKeyByPathRef.current.get(messagePath);
+        if (activeSessionKey) {
+          runToSessionKeyRef.current.set(runId, activeSessionKey);
+          return activeSessionKey;
+        }
+      }
+      const activeSessionKey = activeSessionKeyByPathRef.current.get(messagePath);
+      if (activeSessionKey) {
+        return activeSessionKey;
+      }
+      return makeSessionKey(messagePath);
+    }
+
+    if (runId) {
+      const mapped = runToSessionKeyRef.current.get(runId);
+      if (mapped) {
+        return mapped;
+      }
+    }
+
+    return currentNotebookSessionKeyRef.current || '';
   }
 
-  function appendMessage(path: string, role: TextRole, text: string): void {
+  function appendMessage(sessionKey: string, role: TextRole, text: string): void {
     if (!text) {
       return;
     }
-    const targetPath = path || currentNotebookPathRef.current || '';
-    if (!targetPath) {
+    const targetSessionKey = sessionKey || currentNotebookSessionKeyRef.current || '';
+    if (!targetSessionKey) {
       return;
     }
     const nextText = normalizeSystemText(role, text);
 
     updateSessions(prev => {
       const next = new Map(prev);
-      const session = next.get(targetPath) ?? createSession(targetPath, `Session started`);
+      const session =
+        next.get(targetSessionKey) ?? createSession('', `Session started`, { sessionKey: targetSessionKey });
       const messages = session.messages;
-      const last = messages[messages.length - 1];
-      let updatedMessages: ChatEntry[];
-      // Coalesce streaming assistant output into a single bubble until a non-assistant message arrives.
-      if (role === 'assistant' && last && last.kind === 'text' && last.role === 'assistant') {
-        updatedMessages = [...messages.slice(0, -1), { ...last, text: last.text + nextText }];
-      } else {
-        updatedMessages = [...messages, { kind: 'text', id: crypto.randomUUID(), role, text: nextText }];
-      }
+      // Keep each incoming message as a distinct bubble for readability.
+      const updatedMessages: ChatEntry[] = [
+        ...messages,
+        { kind: 'text', id: crypto.randomUUID(), role, text: nextText }
+      ];
 
-      next.set(targetPath, { ...session, messages: updatedMessages });
+      next.set(targetSessionKey, { ...session, messages: updatedMessages });
       return next;
     });
   }
@@ -1730,21 +2407,57 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     setIsAtBottom(atBottom);
   }
 
-  function clearRunMappingForPath(path: string): void {
-    const runToPath = runToPathRef.current;
-    const next = new Map(runToPath);
-    for (const [runId, mappedPath] of runToPath) {
-      if (mappedPath === path) {
+  function clearRunMappingForSessionKey(targetSessionKey: string): void {
+    const runToSessionKey = runToSessionKeyRef.current;
+    const next = new Map(runToSessionKey);
+    for (const [runId, mappedSessionKey] of runToSessionKey) {
+      if (mappedSessionKey === targetSessionKey) {
         next.delete(runId);
       }
     }
-    runToPathRef.current = next;
+    runToSessionKeyRef.current = next;
   }
 
-  async function refreshNotebook(path: string): Promise<void> {
+  async function clearAllSessions(): Promise<void> {
+    const count = getStoredSessionThreadCount();
+    if (!count && sessions.size === 0) {
+      return;
+    }
+
+    const result = await showDialog({
+      title: 'Delete all conversations',
+      body: `This will delete ${count} saved conversation(s) and all in-memory messages in this panel.`,
+      buttons: [Dialog.cancelButton(), Dialog.okButton({ label: 'Delete' })]
+    });
+    if (!result.button.accept) {
+      return;
+    }
+
+    const activeSessionKey = currentNotebookSessionKeyRef.current || '';
+    if (activeSessionKey) {
+      clearRunMappingForSessionKey(activeSessionKey);
+    }
+    markDeleteAllPending();
+    if (!deleteAllSessionsOnServer() && activeSessionKey) {
+      appendMessage(activeSessionKey, 'system', 'Delete request could not be sent now. It will be retried when you reconnect.');
+    }
+    runToSessionKeyRef.current = new Map();
+    activeSessionKeyByPathRef.current = new Map();
+    safeLocalStorageRemove(SESSION_THREADS_STORAGE_KEY);
+    replaceSessions(new Map());
+    setInput('');
+    clearPendingImages();
+  }
+
+  async function refreshNotebook(sessionKey: string): Promise<void> {
+    const { path } = parseSessionKey(sessionKey);
+    if (!path) {
+      return;
+    }
+
     const widget = props.notebooks.currentWidget;
     if (!widget || widget.context.path !== path) {
-      pendingRefreshPathsRef.current.add(path);
+      pendingRefreshPathsRef.current.add(sessionKey);
       return;
     }
 
@@ -1756,32 +2469,34 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         buttons: [Dialog.cancelButton(), Dialog.okButton({ label: 'Reload' })]
       });
       if (!result.button.accept) {
-        pendingRefreshPathsRef.current.add(path);
+        pendingRefreshPathsRef.current.add(sessionKey);
         return;
       }
     }
 
     try {
       await context.revert();
-      appendMessage(path, 'system', 'Notebook was refreshed after Codex file updates.');
-      pendingRefreshPathsRef.current.delete(path);
+      appendMessage(sessionKey, 'system', 'Notebook was refreshed after Codex file updates.');
+      pendingRefreshPathsRef.current.delete(sessionKey);
     } catch (err) {
-      appendMessage(path, 'system', `Failed to refresh notebook: ${String(err)}`);
-      pendingRefreshPathsRef.current.add(path);
+      appendMessage(sessionKey, 'system', `Failed to refresh notebook: ${String(err)}`);
+      pendingRefreshPathsRef.current.add(sessionKey);
     }
   }
 
   useEffect(() => {
     const updateNotebook = () => {
       const path = getNotebookPath(props.notebooks);
-      const previous = currentNotebookPathRef.current;
-
-      if (path === previous) {
+      const sessionKey = resolveSessionKey(path);
+      const previousKey = currentNotebookSessionKeyRef.current;
+      if (sessionKey && sessionKey === previousKey) {
         return;
       }
 
       currentNotebookPathRef.current = path;
       setCurrentNotebookPath(path);
+      setCurrentNotebookSessionKey(sessionKey);
+      currentNotebookSessionKeyRef.current = sessionKey;
       setInput('');
       clearPendingImages();
       setIsAtBottom(true);
@@ -1790,10 +2505,12 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         return;
       }
 
-      const session = ensureSession(path);
-      sendStartSession(session, path);
-      if (pendingRefreshPathsRef.current.has(path)) {
-        void refreshNotebook(path);
+      const session = ensureSession(path, sessionKey);
+      activeSessionKeyByPathRef.current.set(path, sessionKey);
+      sendStartSession(session, path, sessionKey);
+      if (pendingRefreshPathsRef.current.has(sessionKey)) {
+        void refreshNotebook(sessionKey);
+        return;
       }
     };
 
@@ -1806,26 +2523,110 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   }, [props.notebooks]);
 
   useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== SESSION_THREADS_EVENT_KEY || !event.newValue) {
+        return;
+      }
+
+      const syncEvent = coerceSessionThreadSyncEvent(event.newValue);
+      if (!syncEvent) {
+        return;
+      }
+      if (syncEvent.source === sessionThreadSyncIdRef.current) {
+        return;
+      }
+
+      const notebookPath = syncEvent.notebookPath;
+      const sessionKey = syncEvent.sessionKey;
+      const threadId = syncEvent.threadId;
+      if (!notebookPath || !sessionKey || !threadId) {
+        return;
+      }
+
+      const resolvedSessionKey = resolveSessionKey(notebookPath);
+      if (!resolvedSessionKey || resolvedSessionKey !== sessionKey) {
+        return;
+      }
+
+      const resetSession = createThreadResetSession(notebookPath, sessionKey, threadId);
+      const currentPath = currentNotebookPathRef.current;
+
+      updateSessions(prev => {
+        const next = new Map(prev);
+        const existing = next.get(sessionKey);
+        if (existing && existing.threadId === threadId) {
+          return prev;
+        }
+        next.set(sessionKey, resetSession);
+        return next;
+      });
+      activeSessionKeyByPathRef.current.set(notebookPath, sessionKey);
+      clearRunMappingForSessionKey(sessionKey);
+
+      if (currentPath === notebookPath && currentNotebookSessionKeyRef.current !== sessionKey) {
+        setCurrentNotebookSessionKey(sessionKey);
+      }
+      if (currentPath === notebookPath) {
+        setInput('');
+        clearPendingImages();
+      }
+      sendStartSession(resetSession, notebookPath, sessionKey);
+    };
+
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener('storage', onStorage);
+    };
+  }, []);
+
+  function reconnectSocket(): void {
+    if (isReconnecting) {
+      return;
+    }
+    setReconnectCounter(value => value + 1);
+  }
+
+  useEffect(() => {
+    setIsReconnecting(true);
     const settings = ServerConnection.makeSettings();
     const wsUrl = URLExt.join(settings.wsUrl, 'codex', 'ws');
-    const socket = new WebSocket(wsUrl);
+    let socket: WebSocket;
+    try {
+      socket = new WebSocket(wsUrl);
+    } catch {
+      setSocketConnected(false);
+      setIsReconnecting(false);
+      return;
+    }
     wsRef.current = socket;
 
     socket.onopen = () => {
       setSocketConnected(true);
+      setIsReconnecting(false);
+
+      if (hasDeleteAllPending()) {
+        deleteAllSessionsOnServer();
+      }
 
       const notebookPath = currentNotebookPathRef.current || getNotebookPath(props.notebooks);
       if (!notebookPath) {
         return;
       }
 
-      const session = ensureSession(notebookPath);
-      sendStartSession(session, notebookPath);
+      const currentSessionKey = resolveCurrentSessionKey(notebookPath);
+      const session = ensureSession(notebookPath, currentSessionKey);
+      sendStartSession(session, notebookPath, currentSessionKey);
     };
 
     socket.onclose = () => {
       setSocketConnected(false);
-      runToPathRef.current = new Map();
+      setIsReconnecting(false);
+      runToSessionKeyRef.current = new Map();
+    };
+
+    socket.onerror = () => {
+      setSocketConnected(false);
+      setIsReconnecting(false);
     };
 
     socket.onmessage = event => {
@@ -1833,21 +2634,29 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       try {
         msg = JSON.parse(event.data);
       } catch (err) {
-        appendMessage(currentNotebookPathRef.current, 'system', `Invalid message: ${String(event.data)}`);
+        appendMessage(currentNotebookSessionKeyRef.current || '', 'system', `Invalid message: ${String(event.data)}`);
         return;
       }
 
       const runId = typeof msg.runId === 'string' ? msg.runId : '';
-      const targetPath = resolveMessagePath(msg);
+      const targetSessionKey = resolveMessageSessionKey(msg);
 
       if (msg.type === 'cli_defaults') {
-        const model = typeof msg.model === 'string' && msg.model.trim() ? msg.model.trim() : null;
-        const rawReasoning =
-          typeof msg.reasoningEffort === 'string' ? msg.reasoningEffort.trim().toLowerCase() : '';
-        const reasoningEffort = REASONING_MENU_OPTIONS.some(option => option.value === rawReasoning)
-          ? (rawReasoning as ReasoningMenuOptionValue)
+        const modelIsPresent = Object.prototype.hasOwnProperty.call(msg, 'model');
+        const reasoningIsPresent = Object.prototype.hasOwnProperty.call(msg, 'reasoningEffort');
+        const availableModelsIsPresent = Object.prototype.hasOwnProperty.call(msg, 'availableModels');
+        const model =
+          modelIsPresent && typeof msg.model === 'string' && msg.model.trim() ? msg.model.trim() : null;
+        const reasoningEffort = reasoningIsPresent
+          ? coerceReasoningEffort(typeof msg.reasoningEffort === 'string' ? msg.reasoningEffort : '')
           : null;
-        setCliDefaults({ model, reasoningEffort });
+        const availableModels = Array.isArray(msg.availableModels) ? msg.availableModels : undefined;
+        const normalizedAvailableModels = availableModels ? readModelCatalog(availableModels) : undefined;
+        setCliDefaults(prev => ({
+          model: modelIsPresent ? model : prev.model,
+          reasoningEffort: reasoningIsPresent ? reasoningEffort : prev.reasoningEffort,
+          availableModels: availableModelsIsPresent ? normalizedAvailableModels : prev.availableModels
+        }));
         return;
       }
 
@@ -1856,34 +2665,96 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         return;
       }
 
+      if (msg.type === 'delete_all_sessions') {
+        const ok = msg.ok === true;
+        if (ok) {
+          clearDeleteAllPending();
+        }
+        const deletedCount = Number.isFinite(Number(msg.deletedCount)) ? Number(msg.deletedCount) : 0;
+        const failedCount = Number.isFinite(Number(msg.failedCount)) ? Number(msg.failedCount) : 0;
+        const deletedSummary = deletedCount === 1 ? 'Deleted 1 conversation' : `Deleted ${deletedCount} conversations`;
+        const feedbackSession = currentNotebookSessionKeyRef.current;
+        const feedbackText = ok
+          ? `${deletedSummary} from the server.`
+          : `${deletedSummary} from the server. Failed to delete ${failedCount} conversations. ${typeof msg.message === 'string' ? msg.message : 'Server error'}. Retry after reconnect.`;
+        if (feedbackSession) {
+          appendMessage(feedbackSession, 'system', feedbackText);
+        }
+        if (!ok && !hasDeleteAllPending()) {
+          markDeleteAllPending();
+        }
+        return;
+      }
+
       if (msg.type === 'status') {
-        if (targetPath) {
+        const sessionId = typeof msg.sessionId === 'string' && msg.sessionId.trim() ? msg.sessionId.trim() : '';
+        const history = coerceSessionHistory(msg.history);
+        if (targetSessionKey && (sessionId || history.length > 0)) {
+          updateSessions(prev => {
+            const next = new Map(prev);
+            const existing =
+              next.get(targetSessionKey) ?? createSession('', `Session started`, { sessionKey: targetSessionKey });
+            const nextThreadId = sessionId || existing.threadId;
+            let nextMessages = existing.messages;
+
+            const hasConversation = existing.messages.some(
+              entry => entry.kind === 'text' && (entry.role === 'user' || entry.role === 'assistant')
+            );
+            if (!hasConversation && history.length > 0) {
+              const introEntry =
+                existing.messages.find(
+                  entry => entry.kind === 'text' && entry.role === 'system' && isSessionStartNotice(entry.text)
+                ) ??
+                ({
+                  kind: 'text',
+                  id: crypto.randomUUID(),
+                  role: 'system',
+                  text: normalizeSystemText('system', 'Session started')
+                } as ChatEntry);
+              const restoredEntries: ChatEntry[] = history.map(item => ({
+                kind: 'text',
+                id: crypto.randomUUID(),
+                role: item.role,
+                text: normalizeSystemText(item.role, item.content)
+              }));
+              nextMessages = [introEntry, ...restoredEntries];
+            }
+
+            if (nextThreadId === existing.threadId && nextMessages === existing.messages) {
+              return prev;
+            }
+            next.set(targetSessionKey, { ...existing, threadId: nextThreadId, messages: nextMessages });
+            return next;
+          });
+        }
+
+        if (targetSessionKey) {
           const pairedOk = typeof msg.pairedOk === 'boolean' ? msg.pairedOk : null;
           const pairedPath = typeof msg.pairedPath === 'string' ? msg.pairedPath : '';
           const pairedOsPath = typeof msg.pairedOsPath === 'string' ? msg.pairedOsPath : '';
           const pairedMessage = typeof msg.pairedMessage === 'string' ? msg.pairedMessage : '';
           if (pairedOk !== null || pairedPath || pairedOsPath || pairedMessage) {
-            setSessionPairing(targetPath, { pairedOk, pairedPath, pairedOsPath, pairedMessage });
+            setSessionPairing(targetSessionKey, { pairedOk, pairedPath, pairedOsPath, pairedMessage });
           }
         }
-        if (msg.state === 'running' && targetPath) {
-          setSessionRunState(targetPath, 'running', runId || null);
-          setSessionProgress(targetPath, '', '');
-        } else if (msg.state === 'ready' && targetPath) {
+        if (msg.state === 'running' && targetSessionKey) {
+          setSessionRunState(targetSessionKey, 'running', runId || null);
+          setSessionProgress(targetSessionKey, '', '');
+        } else if (msg.state === 'ready' && targetSessionKey) {
           // The server emits "ready" in a few contexts that are *not* run lifecycle events
           // (e.g. socket open, start_session responses). Those payloads don't include a
           // runId and must not clobber an in-progress run state when users switch tabs.
           if (runId) {
-            setSessionRunState(targetPath, 'ready', null);
-            setSessionProgress(targetPath, '', '');
-            runToPathRef.current.delete(runId);
+            setSessionRunState(targetSessionKey, 'ready', null);
+            setSessionProgress(targetSessionKey, '', '');
+            runToSessionKeyRef.current.delete(runId);
           }
         }
         return;
       }
 
       if (msg.type === 'output') {
-        appendMessage(targetPath, 'assistant', msg.text || '');
+        appendMessage(targetSessionKey, 'assistant', msg.text || '');
         return;
       }
 
@@ -1895,9 +2766,9 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         const summary = summarizeCodexEvent(payload);
         // "Reasoning" events are metadata-only and add noise; the loading indicator already conveys progress.
         if (summary.activity.category !== 'reasoning') {
-          appendActivityItem(targetPath, summary.activity);
+          appendActivityItem(targetSessionKey, summary.activity);
         }
-        setSessionProgress(targetPath, summary.progress, summary.progressKind);
+        setSessionProgress(targetSessionKey, summary.progress, summary.progressKind);
         return;
       }
 
@@ -1906,46 +2777,46 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         if (suggestedCommandPath && !commandPath) {
           setCommandPath(suggestedCommandPath);
           appendMessage(
-            targetPath,
+            targetSessionKey,
             'system',
             `Suggested command path has been saved to settings: ${suggestedCommandPath}`
           );
         }
-        appendMessage(targetPath, 'system', msg.message || 'Unknown error');
-        if (targetPath) {
+        appendMessage(targetSessionKey, 'system', msg.message || 'Unknown error');
+        if (targetSessionKey) {
           const pairedOk = typeof msg.pairedOk === 'boolean' ? msg.pairedOk : null;
           const pairedPath = typeof msg.pairedPath === 'string' ? msg.pairedPath : '';
           const pairedOsPath = typeof msg.pairedOsPath === 'string' ? msg.pairedOsPath : '';
           const pairedMessage = typeof msg.pairedMessage === 'string' ? msg.pairedMessage : '';
           if (pairedOk !== null || pairedPath || pairedOsPath || pairedMessage) {
-            setSessionPairing(targetPath, { pairedOk, pairedPath, pairedOsPath, pairedMessage });
+            setSessionPairing(targetSessionKey, { pairedOk, pairedPath, pairedOsPath, pairedMessage });
           }
         }
-        if (targetPath) {
-          setSessionRunState(targetPath, 'ready', null);
-          setSessionProgress(targetPath, '', '');
+        if (targetSessionKey) {
+          setSessionRunState(targetSessionKey, 'ready', null);
+          setSessionProgress(targetSessionKey, '', '');
         }
         if (runId) {
-          runToPathRef.current.delete(runId);
+          runToSessionKeyRef.current.delete(runId);
         }
         return;
       }
 
       if (msg.type === 'done') {
-        if (targetPath) {
+        if (targetSessionKey) {
           const pairedOk = typeof msg.pairedOk === 'boolean' ? msg.pairedOk : null;
           const pairedPath = typeof msg.pairedPath === 'string' ? msg.pairedPath : '';
           const pairedOsPath = typeof msg.pairedOsPath === 'string' ? msg.pairedOsPath : '';
           const pairedMessage = typeof msg.pairedMessage === 'string' ? msg.pairedMessage : '';
           if (pairedOk !== null || pairedPath || pairedOsPath || pairedMessage) {
-            setSessionPairing(targetPath, { pairedOk, pairedPath, pairedOsPath, pairedMessage });
+            setSessionPairing(targetSessionKey, { pairedOk, pairedPath, pairedOsPath, pairedMessage });
           }
         }
         const exitCode = typeof msg.exitCode === 'number' ? msg.exitCode : null;
         const cancelled = Boolean(msg.cancelled);
         const fileChanged = Boolean(msg.fileChanged);
-        if (fileChanged && targetPath) {
-          void refreshNotebook(targetPath);
+        if (fileChanged && targetSessionKey) {
+          void refreshNotebook(targetSessionKey);
         }
         if (!cancelled && exitCode !== null && exitCode !== 0) {
           const explicitError =
@@ -1954,16 +2825,22 @@ function CodexChat(props: CodexChatProps): JSX.Element {
             '';
           const trimmedError = explicitError ? truncateEnd(explicitError, 600) : '';
           const failureMessage = trimmedError
-            ? `Codex 실행 실패 (exit ${exitCode}): ${trimmedError}`
-            : `Codex 실행 실패 (exit ${exitCode}). 위 로그의 실제 에러 메시지를 확인해 주세요.`;
-          appendMessage(targetPath, 'system', failureMessage);
+            ? `Codex run failed (exit ${exitCode}): ${trimmedError}`
+            : `Codex run failed (exit ${exitCode}). Check the logs above for the underlying error.`;
+          appendMessage(targetSessionKey, 'system', failureMessage);
         }
-        if (targetPath) {
-          setSessionRunState(targetPath, 'ready', null);
-          setSessionProgress(targetPath, '', '');
+        notifyRunDone(
+          targetSessionKey,
+          typeof msg.notebookPath === 'string' ? msg.notebookPath : '',
+          cancelled,
+          exitCode
+        );
+        if (targetSessionKey) {
+          setSessionRunState(targetSessionKey, 'ready', null);
+          setSessionProgress(targetSessionKey, '', '');
         }
         if (runId) {
-          runToPathRef.current.delete(runId);
+          runToSessionKeyRef.current.delete(runId);
         }
       }
     };
@@ -1971,9 +2848,9 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     return () => {
       socket.close();
       wsRef.current = null;
-      runToPathRef.current = new Map();
+      runToSessionKeyRef.current = new Map();
     };
-  }, [props.notebooks]);
+  }, [props.notebooks, reconnectCounter]);
 
   useEffect(() => {
     if (!isAtBottom) {
@@ -2040,11 +2917,15 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 
   async function startNewThread(): Promise<void> {
     const path = currentNotebookPathRef.current || '';
+    const sessionKey = currentNotebookSessionKeyRef.current || '';
     if (!path) {
       return;
     }
+    if (!sessionKey) {
+      return;
+    }
 
-    const existing = sessionsRef.current.get(path);
+    const existing = sessionsRef.current.get(sessionKey);
     const hasConversation =
       existing?.messages.some(
         msg => msg.kind === 'text' && (msg.role === 'user' || msg.role === 'assistant')
@@ -2061,35 +2942,38 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       }
     }
 
-    const time = new Date().toLocaleTimeString();
-    const newSession = createSession(path, `Session started (${time})`);
+    const newSession = createThreadResetSession(path, sessionKey, createSessionEventId());
     updateSessions(prev => {
       const next = new Map(prev);
-      next.set(path, newSession);
+      next.set(sessionKey, newSession);
       return next;
     });
-    clearRunMappingForPath(path);
+    clearRunMappingForSessionKey(sessionKey);
     setInput('');
     clearPendingImages();
-    sendStartSession(newSession, path);
+    sendStartSession(newSession, path, sessionKey, { forceNewThread: true });
+    emitSessionThreadEvent(sessionKey, path, newSession.threadId);
   }
 
   function cancelRun(): void {
     const socket = wsRef.current;
-    const notebookPath = currentNotebookPathRef.current || '';
-    const session = notebookPath ? sessionsRef.current.get(notebookPath) : null;
+    const sessionKey = currentNotebookSessionKeyRef.current || '';
+    if (!sessionKey) {
+      return;
+    }
+    const session = sessionKey ? sessionsRef.current.get(sessionKey) : null;
     const runId = session?.activeRunId ?? null;
 
     if (!socket || socket.readyState !== WebSocket.OPEN) {
-      appendMessage(notebookPath, 'system', 'Cancel failed: WebSocket is not connected.');
+      appendMessage(sessionKey, 'system', 'Cancel failed: WebSocket is not connected.');
       return;
     }
     if (!runId) {
-      appendMessage(notebookPath, 'system', 'Cancel not available yet (waiting for run id).');
+      appendMessage(sessionKey, 'system', 'Cancel not available yet (waiting for run id).');
       return;
     }
 
-    setSessionProgress(notebookPath, 'Cancelling...');
+    setSessionProgress(sessionKey, 'Cancelling...');
     socket.send(JSON.stringify({ type: 'cancel', runId }));
   }
 
@@ -2138,7 +3022,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     const existingCount = pendingImagesRef.current.length;
     if (existingCount >= MAX_IMAGE_ATTACHMENTS) {
       appendMessage(
-        currentNotebookPathRef.current || '',
+        currentNotebookSessionKeyRef.current || '',
         'system',
         `Too many images attached (max ${MAX_IMAGE_ATTACHMENTS}).`
       );
@@ -2165,14 +3049,14 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 
     if (skippedLarge > 0) {
       appendMessage(
-        currentNotebookPathRef.current || '',
+        currentNotebookSessionKeyRef.current || '',
         'system',
         `Skipped ${skippedLarge} image(s): each must be <= ${Math.round(MAX_IMAGE_ATTACHMENT_BYTES / (1024 * 1024))}MB.`
       );
     }
     if (skippedTotal > 0) {
       appendMessage(
-        currentNotebookPathRef.current || '',
+        currentNotebookSessionKeyRef.current || '',
         'system',
         `Skipped ${skippedTotal} image(s): total attachments must be <= ${Math.round(MAX_IMAGE_ATTACHMENT_TOTAL_BYTES / (1024 * 1024))}MB.`
       );
@@ -2192,20 +3076,24 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   async function sendMessage(): Promise<void> {
     const socket = wsRef.current;
     const notebookPath = currentNotebookPathRef.current || '';
+    const sessionKey = currentNotebookSessionKeyRef.current || '';
 
     if (!notebookPath) {
       return;
     }
-
-    if (!socket || socket.readyState !== WebSocket.OPEN) {
-      appendMessage(notebookPath, 'system', 'WebSocket is not connected.');
+    if (!sessionKey) {
       return;
     }
 
-    const existing = sessionsRef.current.get(notebookPath);
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      appendMessage(sessionKey, 'system', 'WebSocket is not connected.');
+      return;
+    }
+
+    const existing = sessionKey ? sessionsRef.current.get(sessionKey) : null;
     if (existing?.pairedOk === false) {
       appendMessage(
-        notebookPath,
+        sessionKey,
         'system',
         existing.pairedMessage ||
           `Jupytext paired file not found. Expected: ${existing.pairedOsPath || existing.pairedPath || '<notebook>.py'}`
@@ -2218,12 +3106,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     if (!trimmed && !hasImages) {
       return;
     }
-    if (modelOption === '__custom__' && !selectedModel) {
-      appendMessage(notebookPath, 'system', 'Select a model before sending.');
-      return;
-    }
 
-    const current = sessionsRef.current.get(notebookPath);
+    const current = sessionKey ? sessionsRef.current.get(sessionKey) : null;
     if (current?.runState === 'running') {
       return;
     }
@@ -2233,7 +3117,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       try {
         await widget.context.save();
       } catch (err) {
-        appendMessage(notebookPath, 'system', `Auto-save failed: ${String(err)}`);
+        appendMessage(sessionKey, 'system', `Auto-save failed: ${String(err)}`);
         return;
       }
     }
@@ -2241,7 +3125,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     const selection = includeActiveCell ? getActiveCellText(props.notebooks) : '';
     const cellOutput =
       includeActiveCell && includeActiveCellOutput ? getActiveCellOutput(props.notebooks) : '';
-    const session = ensureSession(notebookPath);
+    const session = ensureSession(notebookPath, sessionKey);
 
     const content = trimmed || (hasImages ? 'Please analyze the attached image(s).' : '');
     let images: { name: string; dataUrl: string }[] | undefined;
@@ -2253,7 +3137,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
           images.push({ name: image.file.name || 'clipboard-image', dataUrl });
         }
       } catch (err) {
-        appendMessage(notebookPath, 'system', `Failed to attach image(s): ${String(err)}`);
+        appendMessage(sessionKey, 'system', `Failed to attach image(s): ${String(err)}`);
         return;
       }
     }
@@ -2262,6 +3146,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       JSON.stringify({
         type: 'send',
         sessionId: session.threadId,
+        sessionContextKey: sessionKey,
         content,
         selection,
         cellOutput,
@@ -2274,26 +3159,26 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       })
     );
 
-	    const imageCount = pendingImagesRef.current.length;
-	    updateSessions(prev => {
-	      const next = new Map(prev);
-	      const existing =
-	        next.get(notebookPath) ?? createSession(notebookPath, `Session started`);
-	      const updatedMessages: ChatEntry[] = [
-	        ...existing.messages,
-	        {
-	          kind: 'text',
-	          id: crypto.randomUUID(),
-	          role: 'user',
-	          text: content,
-	          attachments: imageCount > 0 ? { images: imageCount } : undefined
-	        }
-	      ];
-	      next.set(notebookPath, {
-	        ...existing,
-	        messages: updatedMessages,
+    const imageCount = pendingImagesRef.current.length;
+    updateSessions(prev => {
+      const next = new Map(prev);
+      const existing = next.get(sessionKey) ?? createSession('', `Session started`, { sessionKey });
+      const updatedMessages: ChatEntry[] = [
+        ...existing.messages,
+        {
+          kind: 'text',
+          id: crypto.randomUUID(),
+          role: 'user',
+          text: content,
+          attachments: imageCount > 0 ? { images: imageCount } : undefined
+        }
+      ];
+      next.set(sessionKey, {
+        ...existing,
+        messages: updatedMessages,
         runState: 'running',
         activeRunId: null,
+        runStartedAt: Date.now(),
         progress: '',
         progressKind: '',
       });
@@ -2303,7 +3188,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     clearPendingImages();
   }
 
-  const currentSession = currentNotebookPath ? sessions.get(currentNotebookPath) : null;
+  const currentSession = currentNotebookSessionKey ? sessions.get(currentNotebookSessionKey) : null;
   const messages = currentSession?.messages ?? [];
   const progress = currentSession?.progress ?? '';
   const progressKind = currentSession?.progressKind ?? '';
@@ -2314,26 +3199,37 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const canSend =
     status === 'ready' &&
     currentNotebookPath.length > 0 &&
-    (modelOption !== '__custom__' || selectedModel.length > 0) &&
     currentSession?.pairedOk !== false;
   const runningSummary = status === 'running' ? progress || 'Working...' : '';
   const autoModelLabel = autoModel
-    ? MODEL_OPTIONS.find(option => option.value === autoModel)?.label ?? truncateMiddle(autoModel, 32)
+    ? findModelLabel(autoModel, modelOptions)
     : 'Auto';
   const selectedModelLabel =
-    modelOption === '__custom__'
-      ? customModel.trim() || 'Custom'
-      : modelOption === '__config__'
-        ? autoModelLabel
-        : MODEL_OPTIONS.find(option => option.value === modelOption)?.label ?? 'Model';
+    modelOption === '__config__'
+      ? autoModelLabel
+      : findModelLabel(modelOption, modelOptions);
   const autoReasoningLabel = autoReasoningEffort
-    ? REASONING_MENU_OPTIONS.find(option => option.value === autoReasoningEffort)?.label ?? 'Auto'
+    ? findReasoningLabel(autoReasoningEffort, reasoningOptions)
     : 'Auto';
   const selectedReasoningLabel =
     reasoningEffort === '__config__'
       ? autoReasoningLabel
-      : REASONING_MENU_OPTIONS.find(option => option.value === reasoningEffort)?.label ?? 'Reasoning';
+      : findReasoningLabel(reasoningEffort, reasoningOptions);
   const selectedSandboxLabel = SANDBOX_OPTIONS.find(option => option.value === sandboxMode)?.label ?? 'Permission';
+  const notificationPermission = getBrowserNotificationPermission();
+  const notificationsUnsupported = notificationPermission === 'unsupported';
+  const minimumNotifyDurationLabel =
+    notifyOnDoneMinSeconds === 0
+      ? 'All completed runs'
+      : `Runs taking at least ${notifyOnDoneMinSeconds} second${notifyOnDoneMinSeconds === 1 ? '' : 's'}`;
+  const notificationHelpText =
+    notificationPermission === 'unsupported'
+      ? 'Browser notifications are not available in this environment.'
+      : notificationPermission === 'denied'
+        ? 'Notifications are blocked for this site. Allow them in browser settings.'
+        : notificationPermission === 'default'
+          ? 'Permission will be requested when enabling this option.'
+          : `Shows a browser notification for ${minimumNotifyDurationLabel}.`;
   const canStop = status === 'running' && Boolean(currentSession?.activeRunId);
   const nowMs = Date.now();
   const rateUpdatedAtMs = safeParseDateMs(rateLimits?.updatedAt ?? null);
@@ -2354,14 +3250,52 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const weeklyWindowLabel =
     weeklyWindowMinutes == null ? '' : `Window: ${Math.round(weeklyWindowMinutes / (60 * 24))}d`;
 
+  useLayoutEffect(() => {
+    const target = notebookLabelRef.current;
+    if (!target) {
+      setIsNotebookLabelTruncated(false);
+      return;
+    }
+
+    const update = (): void => {
+      const next = target.scrollWidth - target.clientWidth > 1;
+      setIsNotebookLabelTruncated(prev => (prev === next ? prev : next));
+    };
+
+    update();
+
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', update);
+      return () => {
+        window.removeEventListener('resize', update);
+      };
+    }
+
+    const observer = new ResizeObserver(() => {
+      update();
+    });
+    observer.observe(target);
+    if (target.parentElement) {
+      observer.observe(target.parentElement);
+    }
+    window.addEventListener('resize', update);
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', update);
+    };
+  }, [currentNotebookPath]);
+
   return (
     <div className="jp-CodexChat">
       <div className="jp-CodexChat-header">
         <div className="jp-CodexChat-header-top">
           <div className="jp-CodexChat-header-left">
             <StatusPill status={status} />
-            <span className="jp-CodexChat-notebook" title={currentNotebookPath || ''}>
-              {displayPath}
+            <span className="jp-CodexChat-notebookWrap" data-full-name={isNotebookLabelTruncated ? displayPath : undefined}>
+              <span className="jp-CodexChat-notebook" ref={notebookLabelRef} title={isNotebookLabelTruncated ? displayPath : undefined}>
+                {displayPath}
+              </span>
             </span>
           </div>
 	          <div className="jp-CodexChat-header-actions">
@@ -2374,7 +3308,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 	              title="New thread"
 	            >
 	              <PlusIcon width={16} height={16} />
-	              <span className="jp-CodexHeaderBtn-label">New</span>
 	            </button>
 	            <div
 	              className="jp-CodexMenuWrap"
@@ -2467,7 +3400,13 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 	            </PortalMenu>
 	            <button
 	              type="button"
-	              onClick={() => setSettingsOpen(open => !open)}
+	              onClick={() => {
+                  setSettingsOpen(open => !open);
+                  setModelMenuOpen(false);
+                  setReasoningMenuOpen(false);
+                  setUsagePopoverOpen(false);
+                  setPermissionMenuOpen(false);
+                }}
 	              className={`jp-CodexHeaderBtn jp-CodexHeaderBtn-icon${settingsOpen ? ' is-active' : ''}`}
 	              aria-label="Settings"
               aria-expanded={settingsOpen}
@@ -2488,67 +3427,26 @@ function CodexChat(props: CodexChatProps): JSX.Element {
           </div>
         )}
 
-        {settingsOpen && (
-          <div className="jp-CodexSettingsPanel">
-            <div className="jp-CodexSettingsPanel-top">
-              <div className="jp-CodexSettingsPanel-title">Settings</div>
-              <button
-                type="button"
-                className="jp-CodexHeaderBtn jp-CodexHeaderBtn-icon"
-                onClick={() => setSettingsOpen(false)}
-                aria-label="Close settings"
-                title="Close"
-              >
-                <XIcon width={16} height={16} />
-              </button>
-            </div>
-            <div className="jp-CodexChat-controls">
-              <label className="jp-CodexChat-model">
-                <span>Codex command path</span>
-                <input
-                  type="text"
-                  className="jp-CodexChat-model-input"
-                  placeholder="codex"
-                  value={commandPath}
-                  disabled={status === 'running'}
-                  onChange={e => setCommandPath(e.currentTarget.value.trimStart())}
-                  title="Leave empty to use PATH lookup."
-                />
-              </label>
-              <label className="jp-CodexChat-toggle">
-                <input
-                  type="checkbox"
-                  checked={autoSaveBeforeSend}
-                  onChange={e => setAutoSaveBeforeSend(e.currentTarget.checked)}
-                  disabled={status === 'running'}
-                />
-                Auto-save before send
-              </label>
-              <label className="jp-CodexChat-toggle">
-                <input
-                  type="checkbox"
-                  checked={includeActiveCell}
-                  onChange={e => setIncludeActiveCell(e.currentTarget.checked)}
-                  disabled={status === 'running'}
-                />
-                Include active cell
-              </label>
-              <label className="jp-CodexChat-toggle">
-                <input
-                  type="checkbox"
-                  checked={includeActiveCellOutput}
-                  onChange={e => setIncludeActiveCellOutput(e.currentTarget.checked)}
-                  disabled={status === 'running' || !includeActiveCell}
-                />
-                Include active cell output
-              </label>
-            </div>
-          </div>
-        )}
       </div>
 
       <div className="jp-CodexChat-body">
         <div className="jp-CodexChat-messages" ref={scrollRef} onScroll={onScrollMessages}>
+          {status === 'disconnected' && (
+            <div className="jp-CodexChat-message jp-CodexChat-system jp-CodexChat-reconnectNotice">
+              <div className="jp-CodexChat-role">system</div>
+              <div className="jp-CodexChat-text">Codex connection was lost. Reconnect to continue.</div>
+              <button
+                type="button"
+                className="jp-CodexReconnectBtn"
+                onClick={() => reconnectSocket()}
+                disabled={isReconnecting}
+                aria-label={isReconnecting ? 'Codex reconnecting' : 'Reconnect to Codex'}
+                title={isReconnecting ? 'Attempting to reconnect...' : 'Reconnect to Codex'}
+              >
+                {isReconnecting ? 'Connecting...' : 'Reconnect'}
+              </button>
+            </div>
+          )}
           {messages.length === 0 && (
             <div className="jp-CodexChat-message jp-CodexChat-system">
               <div className="jp-CodexChat-role">system</div>
@@ -2556,12 +3454,12 @@ function CodexChat(props: CodexChatProps): JSX.Element {
             </div>
           )}
 	          {messages.map(entry => {
-	            if (entry.kind === 'text') {
+		            if (entry.kind === 'text') {
 	              const systemVariant =
 	                entry.role === 'system'
 	                  ? isSessionStartNotice(entry.text)
 	                    ? ' is-success'
-	                    : ' is-warning'
+	                    : ''
 	                  : '';
 	              const imageCount = entry.attachments?.images ?? 0;
 	              return (
@@ -2584,10 +3482,17 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 	                    </div>
 	                  )}
 	                </div>
-	              );
-	            }
+		              );
+		            }
+              if (entry.kind === 'run-divider') {
+                return (
+                  <div key={entry.id} className="jp-CodexRunDivider" role="separator" aria-label="Run duration">
+                    <span className="jp-CodexRunDividerLabel">Worked for {formatRunDuration(entry.elapsedMs)}</span>
+                  </div>
+                );
+              }
 
-            const item = entry.item;
+	            const item = entry.item;
             const trimmedDetail = (item.detail || '').trim();
             const isExpandable = Boolean(trimmedDetail);
             const activityClassName = `jp-CodexChat-message jp-CodexChat-activity${
@@ -2753,9 +3658,12 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                 ariaLabel="Model"
                 align="left"
               >
-                {MODEL_OPTIONS.map(option => {
+                {modelOptions.length === 0 && (
+                  <div className="jp-CodexMenuItem">No models available</div>
+                )}
+                {modelOptions.map(option => {
                   const inferred =
-                    modelOption === '__config__' && autoModel && isKnownModelOption(autoModel)
+                    modelOption === '__config__' && autoModel && modelOptions.some(option => option.value === autoModel)
                       ? (autoModel as ModelOptionValue)
                       : modelOption;
                   const isActive = inferred === option.value;
@@ -2766,9 +3674,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                       className={`jp-CodexMenuItem ${isActive ? 'is-active' : ''}`}
                       onClick={() => {
                         setModelOption(option.value);
-                        if (option.value !== '__custom__') {
-                          setModelMenuOpen(false);
-                        }
+                        setModelMenuOpen(false);
                       }}
                     >
                       <span className="jp-CodexMenuItemLabel">{option.label}</span>
@@ -2778,30 +3684,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                     </button>
                   );
                 })}
-
-                {modelOption === '__custom__' && (
-                  <>
-                    <div className="jp-CodexMenuDivider" role="separator" />
-                    <div className="jp-CodexMenuCustom">
-                      <div className="jp-CodexMenuCustomLabel">Custom model</div>
-                      <input
-                        ref={customModelInputRef}
-                        className="jp-CodexMenuInput"
-                        value={customModel}
-                        onChange={e => setCustomModel(e.currentTarget.value)}
-                        placeholder={DEFAULT_MODEL || 'gpt-5.3-codex'}
-                        disabled={status === 'running'}
-                        aria-label="Custom model"
-                        onKeyDown={e => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            setModelMenuOpen(false);
-                          }
-                        }}
-                      />
-                    </div>
-                  </>
-                )}
               </PortalMenu>
 
               <div className="jp-CodexMenuWrap" ref={reasoningMenuWrapRef}>
@@ -2827,12 +3709,13 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                         ? autoReasoningEffort
                         : reasoningEffort) as ReasoningOptionValue
                     }
+                    effortOptions={reasoningOptions}
                     width={18}
                     height={18}
                   />
                 </button>
               </div>
-              <PortalMenu
+                <PortalMenu
                 open={reasoningMenuOpen}
                 anchorRef={reasoningBtnRef}
                 popoverRef={reasoningPopoverRef}
@@ -2840,7 +3723,10 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                 ariaLabel="Reasoning"
                 align="left"
               >
-                {REASONING_MENU_OPTIONS.map(option => {
+                {reasoningOptions.length === 0 && (
+                  <div className="jp-CodexMenuItem">No reasoning options</div>
+                )}
+                {reasoningOptions.map(option => {
                   const inferred =
                     reasoningEffort === '__config__' && autoReasoningEffort ? autoReasoningEffort : reasoningEffort;
                   const isActive = inferred === option.value;
@@ -2941,6 +3827,142 @@ function CodexChat(props: CodexChatProps): JSX.Element {
           </div>
         </div>
       </div>
+
+      {settingsOpen && (
+        <div className="jp-CodexSettingsOverlay" role="dialog" aria-modal="true" aria-label="Settings">
+          <button
+            type="button"
+            className="jp-CodexSettingsBackdrop"
+            onClick={() => setSettingsOpen(false)}
+            aria-label="Dismiss settings"
+            title="Dismiss settings"
+          />
+          <div className="jp-CodexSettingsPanel" onClick={e => e.stopPropagation()}>
+            <div className="jp-CodexSettingsPanel-top">
+              <div className="jp-CodexSettingsPanel-title">Settings</div>
+              <button
+                type="button"
+                className="jp-CodexHeaderBtn jp-CodexHeaderBtn-icon"
+                onClick={() => setSettingsOpen(false)}
+                aria-label="Close settings"
+                title="Close"
+              >
+                <XIcon width={16} height={16} />
+              </button>
+            </div>
+            <div className="jp-CodexSettingsPanel-sections">
+              <section className="jp-CodexSettingsSection" aria-label="General settings">
+                <div className="jp-CodexSettingsSection-title">General</div>
+                <label className="jp-CodexSettingsField">
+                  <span className="jp-CodexSettingsField-label">Codex command path</span>
+                  <input
+                    type="text"
+                    className="jp-CodexChat-model-input"
+                    placeholder="codex"
+                    value={commandPath}
+                    disabled={status === 'running'}
+                    onChange={e => setCommandPath(e.currentTarget.value.trimStart())}
+                    title="Leave empty to use PATH lookup."
+                  />
+                  <span className="jp-CodexSettingsField-help">Leave empty to use PATH lookup.</span>
+                </label>
+              </section>
+
+              <section className="jp-CodexSettingsSection" aria-label="Message options">
+                <div className="jp-CodexSettingsSection-title">Message Options</div>
+                <div className="jp-CodexSettingsOptions">
+                  <label className="jp-CodexChat-toggle">
+                    <input
+                      type="checkbox"
+                      checked={autoSaveBeforeSend}
+                      onChange={e => setAutoSaveBeforeSend(e.currentTarget.checked)}
+                      disabled={status === 'running'}
+                    />
+                    Auto-save before send
+                  </label>
+                  <label className="jp-CodexChat-toggle">
+                    <input
+                      type="checkbox"
+                      checked={includeActiveCell}
+                      onChange={e => setIncludeActiveCell(e.currentTarget.checked)}
+                      disabled={status === 'running'}
+                    />
+                    Include active cell
+                  </label>
+                  <label className="jp-CodexChat-toggle">
+                    <input
+                      type="checkbox"
+                      checked={includeActiveCellOutput}
+                      onChange={e => setIncludeActiveCellOutput(e.currentTarget.checked)}
+                      disabled={status === 'running' || !includeActiveCell}
+                    />
+                    Include active cell output
+                  </label>
+                </div>
+              </section>
+
+              <section className="jp-CodexSettingsSection" aria-label="Notification options">
+                <div className="jp-CodexSettingsSection-title">NOTIFICATION</div>
+                <div className="jp-CodexSettingsOptions">
+                  <label className="jp-CodexChat-toggle">
+                    <input
+                      type="checkbox"
+                      checked={notifyOnDone}
+                      onChange={e => void updateNotifyOnDone(e.currentTarget.checked)}
+                      disabled={status === 'running' || notificationsUnsupported}
+                    />
+                    Notify when run finishes
+                  </label>
+                  <label className="jp-CodexSettingsField">
+                    <span className="jp-CodexSettingsField-label">Minimum runtime (seconds)</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      className="jp-CodexChat-model-input"
+                      value={notifyOnDoneMinSeconds}
+                      onChange={e =>
+                        setNotifyOnDoneMinSeconds(
+                          Number.isFinite(Number(e.currentTarget.value)) ? Math.max(0, Math.floor(Number(e.currentTarget.value))) : 0
+                        )
+                      }
+                      disabled={notificationsUnsupported}
+                    />
+                    <span className="jp-CodexSettingsField-help">
+                      0 means notify for every finished run. Enter only when you want delayed notifications.
+                    </span>
+                  </label>
+                  <span className="jp-CodexSettingsField-help">{notificationHelpText}</span>
+                </div>
+              </section>
+
+              <section className="jp-CodexSettingsSection jp-CodexSettingsSection-danger" aria-label="Danger zone">
+                <div className="jp-CodexSettingsSection-title jp-CodexSettingsSection-title-danger">Danger Zone</div>
+                <div className="jp-CodexSettingsPanel-stats">
+                  <span className="jp-CodexSettingsPanel-stat">
+                    Saved conversations: {storedThreadCount}
+                  </span>
+                </div>
+                <div className="jp-CodexSettingsDanger">
+                  <button
+                    type="button"
+                    className="jp-CodexBtn jp-CodexBtn-xs jp-CodexBtn-danger"
+                    onClick={() => void clearAllSessions()}
+                    disabled={status === 'running' || (storedThreadCount === 0 && sessions.size === 0)}
+                    title={
+                      status === 'running'
+                        ? 'Cannot delete while a run is in progress.'
+                        : 'Delete all saved conversations'
+                    }
+                  >
+                    Delete all
+                  </button>
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -64,25 +64,24 @@ The backend runs `codex` as a local subprocess per request, streams JSONL events
 ## Install / Run
 
 ### Quick start (recommended for local development)
-Run:
+There are two development workflows:
+
+- `install_dev.sh` : install/link only (does not start JupyterLab)
+- `run_dev.sh` : install first, then start JupyterLab
+
+Install only:
 
 ```bash
-bash run_jupyterlab_codex.sh
+bash install_dev.sh
 ```
 
-The script will:
-1. install JS dependencies (`jlpm install`)
-2. build frontend (`jlpm build`)
-3. install Python package editable (`python -m pip install -e .`)
-4. install server config snippet and enable extension
-5. link labextension in `share/jupyter/labextensions/`
-6. launch `jupyter lab`
-
-You can pass JupyterLab options directly:
+Install + run:
 
 ```bash
-bash run_jupyterlab_codex.sh --ServerApp.port=8888
+bash run_dev.sh --ServerApp.port=8888
 ```
+
+`run_dev.sh` internally runs `install_dev.sh` first.
 
 ### Manual local install
 1. Build frontend
@@ -252,11 +251,24 @@ JupyterLab 4 우측 사이드바에서 Codex CLI(`codex exec --json`)를 채팅 
 
 ## 설치/실행
 ### 빠른 실행(권장)
-아래 스크립트는 “개발/로컬 실행”에 필요한 과정을 한 번에 수행합니다.
+개발용 스크립트가 분리되어 있습니다.
+
+- `install_dev.sh` : 설치/링크만 수행 (`jupyter lab` 실행 없음)
+- `run_dev.sh` : 설치 후 JupyterLab 실행
+
+설치만:
 
 ```bash
-bash run_jupyterlab_codex.sh
+bash install_dev.sh
 ```
+
+설치 + 실행:
+
+```bash
+bash run_dev.sh --ServerApp.port=8888
+```
+
+`run_dev.sh`는 내부적으로 `install_dev.sh`를 먼저 실행한 뒤 JupyterLab을 시작합니다.
 
 스크립트가 하는 일(요약):
 - JS 의존성 설치(`jlpm install`) 및 빌드(`jlpm build`)
@@ -268,7 +280,7 @@ bash run_jupyterlab_codex.sh
 추가로 JupyterLab 옵션을 넘기고 싶다면, 스크립트 뒤에 그대로 붙이면 됩니다.
 
 ```bash
-bash run_jupyterlab_codex.sh --ServerApp.port=8888
+bash run_dev.sh --ServerApp.port=8888
 ```
 
 ### 수동 설치(개발/로컬)

@@ -41,3 +41,8 @@
 - 사용자 프롬프트/출력 내용을 원문 저장하거나 네트워크로 전송하는 로직 변경
 - localStorage/IndexedDB/세션 파일에 사용자 컨텍스트를 저장하는 로직 추가
 - 외부 CLI/도구 실행 경로를 하드코딩하거나, 권한 범위를 확장하는 동작 변경
+
+## UI Language Policy
+
+- User-facing UI labels, buttons, notices, dialogs, and system messages must always be displayed in English.
+- Do not introduce Korean (or other non-English) UI strings in code changes.

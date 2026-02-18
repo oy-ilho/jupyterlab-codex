@@ -28,9 +28,7 @@ def load_cli_defaults_for_ui() -> Dict[str, Any]:
     effective_model = env_model or (config_model.strip() if config_model else None)
     effective_reasoning = (config_reasoning or "").strip().lower() or None
 
-    # UI only supports these levels today.
-    if effective_reasoning not in {"low", "medium", "high", "xhigh"}:
-        effective_reasoning = None
+    effective_reasoning = effective_reasoning or None
 
     return {
         "model": effective_model,
@@ -107,4 +105,3 @@ def _parse_toml_scalar(value: str) -> Any:
         # Keep this simple; config values we care about are typically plain strings.
         return value[1:-1]
     return value
-
