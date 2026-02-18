@@ -46,3 +46,45 @@
 
 - User-facing UI labels, buttons, notices, dialogs, and system messages must always be displayed in English.
 - Do not introduce Korean (or other non-English) UI strings in code changes.
+
+## 배포 프로세스 (이 레포지토리 전용)
+
+이 프로젝트(`jupyterlab-codex-sidebar`)는 Python 패키지(PyPI)와 JupyterLab 확장 패키지(NPM) 모두 배포해야 JupyterLab Discovery에 안정적으로 노출되고 서버 확장이 함께 동작합니다.
+
+1) 사전 점검
+- `npm`, `node`, `jlpm`, `jupyter`, `twine`, `python`(또는 `python3`)이 설치돼 있어야 함
+- PyPI/NPM 계정 토큰 준비
+- 현재 변경사항은 커밋/브랜치 정리 후 진행
+
+2) 릴리스 버전 규칙
+- `package.json`과 `pyproject.toml`의 버전은 항상 동일해야 함
+- 동일 버전으로 재업로드 시도 불가(Python dist는 파일명 재사용 불가로 400 에러 발생)
+- `x.y.z` 형식(SemVer)으로 bump
+
+3) 권장 릴리스 명령(전체 배포)
+- `./release.sh <new_version>`
+- 예) `./release.sh 0.1.4`
+
+4) 릴리스 스크립트 동작
+- 버전 동기화 (`package.json`, `pyproject.toml`)
+- `jlpm install`
+- `jlpm run build`
+- 이전 `dist/` 정리
+- `python -m build` 실행 (`dist/*.tar.gz`, `dist/*.whl` 생성)
+- `twine`로 PyPI 업로드
+- `npm publish --access public` 실행
+
+5) 선택 업로드
+- PyPI만: `./release.sh 0.1.4 --skip-npm`
+- npm만: `./release.sh 0.1.4 --skip-pypi`
+- 테스트 업로드: `./release.sh 0.1.4 --repository testpypi`
+
+6) 배포 후 확인
+- PyPI: `pip index versions jupyterlab-codex-sidebar`
+- npm: `npm view jupyterlab-codex-sidebar`
+- 사용자 설치 확인(예): `pip install jupyterlab-codex-sidebar==<버전>`
+- JupyterLab Extension Manager에서 `jupyterlab-codex-sidebar` 검색/표시 확인
+
+7) 기존 실수 방지 규칙
+- `release.sh` 실행 전 `dist/`에 남은 이전 버전 파일을 지워도 되지만, 가장 중요하게 `release.sh`는 새 버전으로만 실행해야 함
+- 400 에러(duplicate file)는 대개 버전 미갱신 또는 dist 재생성 누락 때문에 발생
