@@ -262,16 +262,37 @@ class CodexRunner:
         await proc.stdin.drain()
         proc.stdin.close()
 
-        async def _read_stdout() -> None:
-            async for raw in proc.stdout:
-                line = raw.decode("utf-8", errors="replace").strip()
-                if not line:
-                    continue
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    event = {"type": "raw", "text": line}
-                await on_event(event)
+            async def _read_stdout() -> None:
+            buffer = bytearray()
+            while True:
+                chunk = await proc.stdout.read(8192)
+                if not chunk:
+                    if buffer:
+                        line = buffer.decode("utf-8", errors="replace").strip()
+                        if line:
+                            try:
+                                event = json.loads(line)
+                            except json.JSONDecodeError:
+                                event = {"type": "raw", "text": line}
+                            await on_event(event)
+                    break
+
+                buffer.extend(chunk)
+                while True:
+                    separator_index = buffer.find(b"\n")
+                    if separator_index < 0:
+                        break
+                    raw_line = bytes(buffer[:separator_index])
+                    del buffer[:separator_index + 1]
+
+                    line = raw_line.decode("utf-8", errors="replace").strip()
+                    if not line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        event = {"type": "raw", "text": line}
+                    await on_event(event)
 
         async def _read_stderr() -> None:
             # Stream stderr so users can see prompts/errors even if Codex blocks.
