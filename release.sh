@@ -5,17 +5,18 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  ./release.sh <new_version> [--skip-pypi] [--skip-npm] [--repository <name>]
+  ./release.sh [version] [--skip-pypi] [--skip-npm] [--repository <name>]
 
 Examples:
+  ./release.sh
   ./release.sh 0.1.4
-  ./release.sh 0.1.4-dev
   ./release.sh 0.1.4 --repository testpypi
-  ./release.sh 0.1.4 --skip-pypi
-  ./release.sh 0.1.4 --skip-npm
+  ./release.sh --skip-pypi
+  ./release.sh --skip-npm
 
 Description:
-  - Updates version in package.json and pyproject.toml
+  - If [version] is provided, updates package.json and pyproject.toml to that version
+  - If [version] is omitted, uses the current synced version from manifests
   - Runs jlpm install and jlpm build
   - Builds Python distribution (dist/*)
   - Uploads to PyPI using twine (unless --skip-pypi)
@@ -26,12 +27,7 @@ EOF
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
-if [[ $# -lt 1 ]]; then
-  usage
-  exit 1
-fi
-
-NEW_VERSION=""
+EXPECTED_VERSION=""
 SKIP_PYPI=0
 SKIP_NPM=0
 PYPI_REPO="pypi"
@@ -64,8 +60,8 @@ while [[ $# -gt 0 ]]; do
       exit 1
       ;;
     *)
-      if [[ -z "$NEW_VERSION" ]]; then
-        NEW_VERSION="$1"
+      if [[ -z "$EXPECTED_VERSION" ]]; then
+        EXPECTED_VERSION="$1"
         shift
       else
         echo "ERROR: Multiple version arguments provided." >&2
@@ -76,21 +72,9 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if ! [[ "$NEW_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+if [[ -n "$EXPECTED_VERSION" ]] && ! [[ "$EXPECTED_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
   echo "ERROR: Version must follow SemVer format x.y.z or x.y.z-prerelease (examples: 0.1.4, 0.1.4-dev)." >&2
   exit 1
-fi
-
-if [[ "$NEW_VERSION" =~ -dev(\.[0-9A-Za-z-]+)*$ ]]; then
-  CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
-  if [[ "$CURRENT_BRANCH" == "HEAD" || -z "$CURRENT_BRANCH" ]]; then
-    echo "ERROR: Cannot determine current git branch. '-dev' releases require branch 'develop'." >&2
-    exit 1
-  fi
-  if [[ "$CURRENT_BRANCH" != "develop" ]]; then
-    echo "ERROR: '-dev' version is allowed only on branch 'develop' (current: '$CURRENT_BRANCH')." >&2
-    exit 1
-  fi
 fi
 
 require_cmd() {
@@ -108,28 +92,6 @@ else
   echo "ERROR: python (or python3) is required but not found in PATH." >&2
   exit 1
 fi
-
-"$PYTHON_BIN" - <<'PY' "$NEW_VERSION"
-import sys
-
-new_version = sys.argv[1]
-try:
-    from packaging.version import Version
-except Exception:
-    try:
-        from setuptools._vendor.packaging.version import Version
-    except Exception as exc:
-        raise SystemExit(
-            "ERROR: Unable to validate Python package version (missing packaging module)."
-        ) from exc
-
-try:
-    Version(new_version)
-except Exception as exc:
-    raise SystemExit(
-        f"ERROR: Version '{new_version}' is not valid for Python packaging (PEP 440)."
-    ) from exc
-PY
 
 require_cmd node
 require_cmd jlpm
@@ -156,50 +118,94 @@ print(match.group(1))
 PY
 )"
 
-if [[ "$NEW_VERSION" == "$CURRENT_PACKAGE_VERSION" && "$NEW_VERSION" == "$CURRENT_PYTHON_VERSION" ]]; then
-  echo "ERROR: Both package.json and pyproject.toml are already at version $NEW_VERSION. Nothing to update."
-  exit 1
-fi
+if [[ -n "$EXPECTED_VERSION" ]]; then
+  RELEASE_VERSION="$EXPECTED_VERSION"
 
-echo "[1/6] Updating versions"
-"$PYTHON_BIN" - "$NEW_VERSION" <<PY
-import json
+  if [[ "$CURRENT_PACKAGE_VERSION" != "$RELEASE_VERSION" ]]; then
+    node - <<'JS' "$RELEASE_VERSION"
+const fs = require('fs');
+const version = process.argv[2];
+const pkgPath = 'package.json';
+const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+pkg.version = version;
+fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
+JS
+  fi
+
+  if [[ "$CURRENT_PYTHON_VERSION" != "$RELEASE_VERSION" ]]; then
+    "$PYTHON_BIN" - <<'PY' "$RELEASE_VERSION"
 import pathlib
 import re
 import sys
 
-new_version = sys.argv[1]
-
-package_json = pathlib.Path("package.json")
-data = json.loads(package_json.read_text())
-data["version"] = new_version
-package_json.write_text(json.dumps(data, indent=2) + "\n")
-
+version = sys.argv[1]
 pyproject = pathlib.Path("pyproject.toml")
 text = pyproject.read_text()
-new_text, count = re.subn(
-    r'^version\s*=\s*"[^"]+"',
-    f'version = "{new_version}"',
+updated = re.sub(
+    r'(^version\s*=\s*")([^"]+)(")',
+    rf'\g<1>{version}\g<3>',
     text,
     count=1,
     flags=re.M,
 )
-if count != 1:
-    raise SystemExit("failed to update version in pyproject.toml")
-pyproject.write_text(new_text)
+if updated == text:
+    raise SystemExit("ERROR: version not found in pyproject.toml")
+pyproject.write_text(updated)
+PY
+  fi
+else
+  if [[ "$CURRENT_PACKAGE_VERSION" != "$CURRENT_PYTHON_VERSION" ]]; then
+    echo "ERROR: Version mismatch between package.json ($CURRENT_PACKAGE_VERSION) and pyproject.toml ($CURRENT_PYTHON_VERSION)." >&2
+    echo "       Sync versions first, then run release.sh again." >&2
+    exit 1
+  fi
+  RELEASE_VERSION="$CURRENT_PACKAGE_VERSION"
+fi
+
+if [[ "$RELEASE_VERSION" =~ -dev(\.[0-9A-Za-z-]+)*$ ]]; then
+  CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  if [[ "$CURRENT_BRANCH" == "HEAD" || -z "$CURRENT_BRANCH" ]]; then
+    echo "ERROR: Cannot determine current git branch. '-dev' releases require branch 'develop'." >&2
+    exit 1
+  fi
+  if [[ "$CURRENT_BRANCH" != "develop" ]]; then
+    echo "ERROR: '-dev' version is allowed only on branch 'develop' (current: '$CURRENT_BRANCH')." >&2
+    exit 1
+  fi
+fi
+
+"$PYTHON_BIN" - <<'PY' "$RELEASE_VERSION"
+import sys
+
+release_version = sys.argv[1]
+try:
+    from packaging.version import Version
+except Exception:
+    try:
+        from setuptools._vendor.packaging.version import Version
+    except Exception as exc:
+        raise SystemExit(
+            "ERROR: Unable to validate Python package version (missing packaging module)."
+        ) from exc
+
+try:
+    Version(release_version)
+except Exception as exc:
+    raise SystemExit(
+        f"ERROR: Version '{release_version}' is not valid for Python packaging (PEP 440)."
+    ) from exc
 PY
 
-echo "  - package.json: $CURRENT_PACKAGE_VERSION -> $NEW_VERSION"
-echo "  - pyproject.toml: $CURRENT_PYTHON_VERSION -> $NEW_VERSION"
+echo "[1/5] Using release version: $RELEASE_VERSION"
 
-echo "[2/6] Cleaning previous artifacts"
+echo "[2/5] Cleaning previous artifacts"
 rm -rf dist
 
-echo "[3/6] Installing JS dependencies and building frontend"
+echo "[3/5] Installing JS dependencies and building frontend"
 jlpm install
 jlpm run build
 
-echo "[4/6] Building Python distributions"
+echo "[4/5] Building Python distributions"
 "$PYTHON_BIN" -m pip install -q build >/dev/null 2>&1
 "$PYTHON_BIN" -m build
 if [[ "$SKIP_PYPI" -eq 0 ]]; then
@@ -207,23 +213,31 @@ if [[ "$SKIP_PYPI" -eq 0 ]]; then
 fi
 
 if [[ "$SKIP_PYPI" -eq 0 ]]; then
-  echo "[5/6] Uploading to PyPI (${PYPI_REPO})"
+  echo "[5/5] Uploading to PyPI (${PYPI_REPO})"
   if [[ ${#TWINE_BIN[@]} -eq 0 ]]; then
     echo "ERROR: twine is required for PyPI upload. Install it with: $PYTHON_BIN -m pip install twine" >&2
     exit 1
   fi
   "${TWINE_BIN[@]}" upload --repository "${PYPI_REPO}" dist/*
 else
-  echo "[5/6] Skipping PyPI upload (--skip-pypi)"
+  echo "[5/5] Skipping PyPI upload (--skip-pypi)"
 fi
 
 if [[ "$SKIP_NPM" -eq 0 ]]; then
-  echo "[6/6] Publishing to npm"
+  echo "[extra] Ensuring npm authentication"
+  if ! npm whoami >/dev/null 2>&1; then
+    echo "  - npm login required. Starting interactive login..."
+    npm login
+  else
+    echo "  - npm login already active."
+  fi
+
+  echo "[extra] Publishing to npm"
   npm publish --access public
 else
-  echo "[6/6] Skipping npm publish (--skip-npm)"
+  echo "[extra] Skipping npm publish (--skip-npm)"
 fi
 
-echo "Release completed for version: $NEW_VERSION"
+echo "Release completed for version: $RELEASE_VERSION"
 echo "Git status:"
 git status --short

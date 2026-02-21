@@ -1,5 +1,7 @@
 # JupyterLab Codex Sidebar
 
+![JupyterLab Codex Sidebar Screenshot](docs/images/codex-sidebar-screenshot.png)
+
 ## English
 
 ### Quick Guide (Discovery Install, Read First)
