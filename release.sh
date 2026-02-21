@@ -9,6 +9,7 @@ Usage:
 
 Examples:
   ./release.sh 0.1.4
+  ./release.sh 0.1.4-dev
   ./release.sh 0.1.4 --repository testpypi
   ./release.sh 0.1.4 --skip-pypi
   ./release.sh 0.1.4 --skip-npm
@@ -75,9 +76,21 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if ! [[ "$NEW_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "ERROR: Version must follow SemVer format x.y.z (example: 0.1.4)." >&2
+if ! [[ "$NEW_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+  echo "ERROR: Version must follow SemVer format x.y.z or x.y.z-prerelease (examples: 0.1.4, 0.1.4-dev)." >&2
   exit 1
+fi
+
+if [[ "$NEW_VERSION" =~ -dev(\.[0-9A-Za-z-]+)*$ ]]; then
+  CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  if [[ "$CURRENT_BRANCH" == "HEAD" || -z "$CURRENT_BRANCH" ]]; then
+    echo "ERROR: Cannot determine current git branch. '-dev' releases require branch 'develop'." >&2
+    exit 1
+  fi
+  if [[ "$CURRENT_BRANCH" != "develop" ]]; then
+    echo "ERROR: '-dev' version is allowed only on branch 'develop' (current: '$CURRENT_BRANCH')." >&2
+    exit 1
+  fi
 fi
 
 require_cmd() {
@@ -95,6 +108,28 @@ else
   echo "ERROR: python (or python3) is required but not found in PATH." >&2
   exit 1
 fi
+
+"$PYTHON_BIN" - <<'PY' "$NEW_VERSION"
+import sys
+
+new_version = sys.argv[1]
+try:
+    from packaging.version import Version
+except Exception:
+    try:
+        from setuptools._vendor.packaging.version import Version
+    except Exception as exc:
+        raise SystemExit(
+            "ERROR: Unable to validate Python package version (missing packaging module)."
+        ) from exc
+
+try:
+    Version(new_version)
+except Exception as exc:
+    raise SystemExit(
+        f"ERROR: Version '{new_version}' is not valid for Python packaging (PEP 440)."
+    ) from exc
+PY
 
 require_cmd node
 require_cmd jlpm
@@ -127,7 +162,7 @@ if [[ "$NEW_VERSION" == "$CURRENT_PACKAGE_VERSION" && "$NEW_VERSION" == "$CURREN
 fi
 
 echo "[1/6] Updating versions"
-"$PYTHON_BIN" - <<PY
+"$PYTHON_BIN" - "$NEW_VERSION" <<PY
 import json
 import pathlib
 import re
@@ -153,7 +188,6 @@ if count != 1:
     raise SystemExit("failed to update version in pyproject.toml")
 pyproject.write_text(new_text)
 PY
-"$NEW_VERSION"
 
 echo "  - package.json: $CURRENT_PACKAGE_VERSION -> $NEW_VERSION"
 echo "  - pyproject.toml: $CURRENT_PYTHON_VERSION -> $NEW_VERSION"
