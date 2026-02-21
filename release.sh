@@ -15,8 +15,8 @@ Examples:
   ./release.sh --skip-npm
 
 Description:
-  - Uses current versions in package.json and pyproject.toml (no version bump)
-  - Optionally validates that [version] matches current version
+  - If [version] is provided, updates package.json and pyproject.toml to that version
+  - If [version] is omitted, uses the current synced version from manifests
   - Runs jlpm install and jlpm build
   - Builds Python distribution (dist/*)
   - Uploads to PyPI using twine (unless --skip-pypi)
@@ -118,18 +118,48 @@ print(match.group(1))
 PY
 )"
 
-if [[ "$CURRENT_PACKAGE_VERSION" != "$CURRENT_PYTHON_VERSION" ]]; then
-  echo "ERROR: Version mismatch between package.json ($CURRENT_PACKAGE_VERSION) and pyproject.toml ($CURRENT_PYTHON_VERSION)." >&2
-  echo "       Sync versions first, then run release.sh again." >&2
-  exit 1
-fi
+if [[ -n "$EXPECTED_VERSION" ]]; then
+  RELEASE_VERSION="$EXPECTED_VERSION"
 
-RELEASE_VERSION="$CURRENT_PACKAGE_VERSION"
+  if [[ "$CURRENT_PACKAGE_VERSION" != "$RELEASE_VERSION" ]]; then
+    node - <<'JS' "$RELEASE_VERSION"
+const fs = require('fs');
+const version = process.argv[2];
+const pkgPath = 'package.json';
+const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+pkg.version = version;
+fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
+JS
+  fi
 
-if [[ -n "$EXPECTED_VERSION" && "$EXPECTED_VERSION" != "$RELEASE_VERSION" ]]; then
-  echo "ERROR: Requested version '$EXPECTED_VERSION' does not match current version '$RELEASE_VERSION'." >&2
-  echo "       This script does not change versions; update files first if needed." >&2
-  exit 1
+  if [[ "$CURRENT_PYTHON_VERSION" != "$RELEASE_VERSION" ]]; then
+    "$PYTHON_BIN" - <<'PY' "$RELEASE_VERSION"
+import pathlib
+import re
+import sys
+
+version = sys.argv[1]
+pyproject = pathlib.Path("pyproject.toml")
+text = pyproject.read_text()
+updated = re.sub(
+    r'(^version\s*=\s*")([^"]+)(")',
+    rf'\g<1>{version}\g<3>',
+    text,
+    count=1,
+    flags=re.M,
+)
+if updated == text:
+    raise SystemExit("ERROR: version not found in pyproject.toml")
+pyproject.write_text(updated)
+PY
+  fi
+else
+  if [[ "$CURRENT_PACKAGE_VERSION" != "$CURRENT_PYTHON_VERSION" ]]; then
+    echo "ERROR: Version mismatch between package.json ($CURRENT_PACKAGE_VERSION) and pyproject.toml ($CURRENT_PYTHON_VERSION)." >&2
+    echo "       Sync versions first, then run release.sh again." >&2
+    exit 1
+  fi
+  RELEASE_VERSION="$CURRENT_PACKAGE_VERSION"
 fi
 
 if [[ "$RELEASE_VERSION" =~ -dev(\.[0-9A-Za-z-]+)*$ ]]; then
