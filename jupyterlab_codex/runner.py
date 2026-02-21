@@ -300,6 +300,7 @@ class CodexRunner:
 
         async def _read_stdout() -> None:
             buffer = bytearray()
+            max_event_line_bytes = 1024 * 1024
             while True:
                 chunk = await proc.stdout.read(8192)
                 if not chunk:
@@ -314,6 +315,8 @@ class CodexRunner:
                     break
 
                 buffer.extend(chunk)
+                if len(buffer) > max_event_line_bytes and b"\n" not in buffer:
+                    raise RuntimeError("Codex emitted an oversized unterminated stdout line")
                 while True:
                     separator_index = buffer.find(b"\n")
                     if separator_index < 0:
@@ -342,6 +345,9 @@ class CodexRunner:
             await asyncio.gather(_read_stdout(), _read_stderr())
             return await proc.wait()
         except asyncio.CancelledError:
+            await self._terminate_process(proc)
+            raise
+        except Exception:
             await self._terminate_process(proc)
             raise
 
