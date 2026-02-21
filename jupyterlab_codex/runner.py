@@ -65,20 +65,56 @@ class CodexRunner:
         if proc.stdin is None or proc.stdout is None or proc.stderr is None:
             raise RuntimeError("Failed to open app-server subprocess streams")
 
-        async def read_message() -> dict[str, Any] | None:
-            raw = await asyncio.wait_for(proc.stdout.readline(), timeout=3.0)
-            if not raw:
+        buffer = bytearray()
+        max_message_bytes = 1024 * 1024
+
+        def _pop_message_from_buffer() -> dict[str, Any] | None:
+            separator_index = buffer.find(b"\n")
+            if separator_index < 0:
                 return None
-            line = raw.decode("utf-8", errors="replace").strip()
+            raw_line = bytes(buffer[:separator_index])
+            del buffer[:separator_index + 1]
+            line = raw_line.decode("utf-8", errors="replace").strip()
             if not line:
-                return None
+                return {}
             try:
                 payload = json.loads(line)
             except json.JSONDecodeError:
-                return None
+                return {}
             if isinstance(payload, dict):
                 return payload
-            return None
+            return {}
+
+        async def read_message() -> dict[str, Any] | None:
+            deadline = time.monotonic() + 3.0
+            while True:
+                message = _pop_message_from_buffer()
+                if message is not None:
+                    if message:
+                        return message
+                    continue
+
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise RuntimeError("App-server response timed out")
+
+                chunk = await asyncio.wait_for(proc.stdout.read(4096), timeout=remaining)
+                if not chunk:
+                    if buffer:
+                        line = buffer.decode("utf-8", errors="replace").strip()
+                        buffer.clear()
+                        if not line:
+                            return None
+                        try:
+                            payload = json.loads(line)
+                        except json.JSONDecodeError:
+                            return None
+                        if isinstance(payload, dict):
+                            return payload
+                    return None
+                buffer.extend(chunk)
+                if len(buffer) > max_message_bytes and b"\n" not in buffer:
+                    raise RuntimeError("App-server emitted an oversized response line")
 
         async def read_response(expected_id: int) -> dict[str, Any]:
             while True:
@@ -263,15 +299,39 @@ class CodexRunner:
         proc.stdin.close()
 
         async def _read_stdout() -> None:
-            async for raw in proc.stdout:
-                line = raw.decode("utf-8", errors="replace").strip()
-                if not line:
-                    continue
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    event = {"type": "raw", "text": line}
-                await on_event(event)
+            buffer = bytearray()
+            max_event_line_bytes = 1024 * 1024
+            while True:
+                chunk = await proc.stdout.read(8192)
+                if not chunk:
+                    if buffer:
+                        line = buffer.decode("utf-8", errors="replace").strip()
+                        if line:
+                            try:
+                                event = json.loads(line)
+                            except json.JSONDecodeError:
+                                event = {"type": "raw", "text": line}
+                            await on_event(event)
+                    break
+
+                buffer.extend(chunk)
+                if len(buffer) > max_event_line_bytes and b"\n" not in buffer:
+                    raise RuntimeError("Codex emitted an oversized unterminated stdout line")
+                while True:
+                    separator_index = buffer.find(b"\n")
+                    if separator_index < 0:
+                        break
+                    raw_line = bytes(buffer[:separator_index])
+                    del buffer[:separator_index + 1]
+
+                    line = raw_line.decode("utf-8", errors="replace").strip()
+                    if not line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        event = {"type": "raw", "text": line}
+                    await on_event(event)
 
         async def _read_stderr() -> None:
             # Stream stderr so users can see prompts/errors even if Codex blocks.
@@ -285,6 +345,9 @@ class CodexRunner:
             await asyncio.gather(_read_stdout(), _read_stderr())
             return await proc.wait()
         except asyncio.CancelledError:
+            await self._terminate_process(proc)
+            raise
+        except Exception:
             await self._terminate_process(proc)
             raise
 

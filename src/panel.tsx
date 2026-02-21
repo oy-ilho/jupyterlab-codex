@@ -1704,6 +1704,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const [input, setInput] = useState('');
   const [pendingImages, setPendingImages] = useState<PendingImageAttachment[]>([]);
   const pendingImagesRef = useRef<PendingImageAttachment[]>([]);
+  const inputRef = useRef<string>('');
+  const inputDraftsRef = useRef<Map<string, string>>(new Map());
   const [socketConnected, setSocketConnected] = useState(false);
   const [isReconnecting, setIsReconnecting] = useState(false);
   const [reconnectCounter, setReconnectCounter] = useState(0);
@@ -1771,6 +1773,49 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       setModelOption('__config__');
     }
   }, [modelOption, modelOptions]);
+
+  function saveCurrentInputDraft(value: string): void {
+    const sessionKey = currentNotebookSessionKeyRef.current || '';
+    if (!sessionKey) {
+      return;
+    }
+
+    const nextDrafts = new Map(inputDraftsRef.current);
+    if (value) {
+      nextDrafts.set(sessionKey, value);
+    } else {
+      nextDrafts.delete(sessionKey);
+    }
+    inputDraftsRef.current = nextDrafts;
+  }
+
+  function clearInputForCurrentSession(): void {
+    const sessionKey = currentNotebookSessionKeyRef.current || '';
+    if (!sessionKey) {
+      setInput('');
+      inputRef.current = '';
+      return;
+    }
+    saveCurrentInputDraft('');
+    setInput('');
+    inputRef.current = '';
+  }
+
+  function updateInput(nextValue: string): void {
+    saveCurrentInputDraft(nextValue);
+    setInput(nextValue);
+    inputRef.current = nextValue;
+  }
+
+  function restoreInput(sessionKey: string): void {
+    const restoredInput = sessionKey ? inputDraftsRef.current.get(sessionKey) || '' : '';
+    inputRef.current = restoredInput;
+    setInput(restoredInput);
+  }
+
+  useEffect(() => {
+    inputRef.current = input;
+  }, [input]);
 
   useEffect(() => {
     sessionsRef.current = sessions;
@@ -2445,7 +2490,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     activeSessionKeyByPathRef.current = new Map();
     safeLocalStorageRemove(SESSION_THREADS_STORAGE_KEY);
     replaceSessions(new Map());
-    setInput('');
+    clearInputForCurrentSession();
     clearPendingImages();
   }
 
@@ -2493,11 +2538,19 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         return;
       }
 
+      if (previousKey) {
+        saveCurrentInputDraft(inputRef.current);
+      }
+
       currentNotebookPathRef.current = path;
       setCurrentNotebookPath(path);
       setCurrentNotebookSessionKey(sessionKey);
       currentNotebookSessionKeyRef.current = sessionKey;
-      setInput('');
+      if (!sessionKey) {
+        clearInputForCurrentSession();
+        return;
+      }
+      restoreInput(sessionKey);
       clearPendingImages();
       setIsAtBottom(true);
 
@@ -2567,7 +2620,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         setCurrentNotebookSessionKey(sessionKey);
       }
       if (currentPath === notebookPath) {
-        setInput('');
+        clearInputForCurrentSession();
         clearPendingImages();
       }
       sendStartSession(resetSession, notebookPath, sessionKey);
@@ -2949,7 +3002,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       return next;
     });
     clearRunMappingForSessionKey(sessionKey);
-    setInput('');
+    clearInputForCurrentSession();
     clearPendingImages();
     sendStartSession(newSession, path, sessionKey, { forceNewThread: true });
     emitSessionThreadEvent(sessionKey, path, newSession.threadId);
@@ -3184,7 +3237,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       });
       return next;
     });
-    setInput('');
+    clearInputForCurrentSession();
     clearPendingImages();
   }
 
@@ -3585,7 +3638,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 	            ref={composerTextareaRef}
 	            value={input}
 	            onChange={e => {
-	              setInput(e.currentTarget.value);
+	              updateInput(e.currentTarget.value);
 	              // Resize using the current target so typing feels immediate.
 	              window.requestAnimationFrame(() => autosizeComposerTextarea(e.currentTarget));
 	            }}
