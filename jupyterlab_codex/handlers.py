@@ -36,6 +36,10 @@ _NOISY_STDERR_PATTERNS = (
     ),
 )
 
+_AUTH_REQUIRED_HINT = (
+    "Authentication required: open a terminal and run `codex` (or `codex login`) to sign in, then retry."
+)
+
 
 def _strip_noisy_stderr_lines(text: str) -> str:
     if not text:
@@ -46,6 +50,15 @@ def _strip_noisy_stderr_lines(text: str) -> str:
         line for line in lines if not any(pattern.search(line) for pattern in _NOISY_STDERR_PATTERNS)
     ]
     return "".join(kept)
+
+
+def _is_missing_auth_stderr(text: str) -> bool:
+    lower = (text or "").lower()
+    if not lower:
+        return False
+    if "missing bearer or basic authentication" in lower:
+        return True
+    return "401 unauthorized" in lower and "api.openai.com" in lower
 
 
 def _coerce_command_path(value: Any) -> str:
@@ -356,8 +369,30 @@ class CodexWSHandler(WebSocketHandler):
             temp_images_dir = None
             image_paths: list[str] = []
             assistant_buffer = []
+            auth_hint_sent = False
 
             async def on_event(event: Dict[str, Any]):
+                nonlocal auth_hint_sent
+                if event.get("type") == "stderr":
+                    raw_stderr = event.get("text", "")
+                    if isinstance(raw_stderr, str) and _is_missing_auth_stderr(raw_stderr):
+                        if not auth_hint_sent:
+                            auth_hint_sent = True
+                            self.write_message(
+                                json.dumps(
+                                    {
+                                        "type": "output",
+                                        "runId": run_id,
+                                        "sessionId": session_id,
+                                        "sessionContextKey": session_context_key,
+                                        "notebookPath": notebook_path,
+                                        "role": "system",
+                                        "text": _AUTH_REQUIRED_HINT,
+                                    }
+                                )
+                            )
+                        return
+
                 text = event_to_text(event)
                 if text:
                     assistant_buffer.append(text)

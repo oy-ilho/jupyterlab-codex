@@ -2807,7 +2807,9 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       }
 
       if (msg.type === 'output') {
-        appendMessage(targetSessionKey, 'assistant', msg.text || '');
+        const role: TextRole =
+          msg.role === 'user' || msg.role === 'assistant' || msg.role === 'system' ? msg.role : 'assistant';
+        appendMessage(targetSessionKey, role, msg.text || '');
         return;
       }
 
