@@ -165,9 +165,13 @@ class CodexWSHandler(WebSocketHandler):
         except Exception:
             return
 
-    def _send_model_catalog(self) -> None:
+    def _send_model_catalog(self, command: str | None = None, force_refresh: bool = False) -> None:
+        requested_command = _coerce_command_path(command)
+
         async def _send() -> None:
-            models = await self._runner.list_available_models()
+            models = await self._runner.list_available_models(
+                command=requested_command or None, force_refresh=force_refresh
+            )
             if not models:
                 return
             try:
@@ -186,6 +190,8 @@ class CodexWSHandler(WebSocketHandler):
             requested_session_id = str(requested_session_id)
         requested_session_id = requested_session_id.strip()
         force_new_thread = _coerce_bool_flag(payload.get("forceNewThread"))
+        requested_command_path = _coerce_command_path(payload.get("commandPath"))
+        self._send_model_catalog(command=requested_command_path, force_refresh=force_new_thread)
         notebook_path = payload.get("notebookPath", "")
         if not isinstance(notebook_path, str):
             notebook_path = str(notebook_path)

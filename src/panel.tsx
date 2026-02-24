@@ -2147,6 +2147,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       return;
     }
+    const normalizedCommandPath = commandPath.trim();
 
     socket.send(
       JSON.stringify({
@@ -2154,7 +2155,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         sessionId: session.threadId,
         notebookPath,
         sessionContextKey: sessionKey,
-        forceNewThread: options?.forceNewThread === true
+        forceNewThread: options?.forceNewThread === true,
+        commandPath: normalizedCommandPath || undefined
       })
     );
   }

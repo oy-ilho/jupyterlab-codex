@@ -11,6 +11,7 @@ class CodexRunner:
     def __init__(self, command: str = "codex", args: List[str] | None = None):
         configured_command = os.environ.get("JUPYTERLAB_CODEX_COMMAND", "").strip()
         self._command = self._resolve_command(configured_command or command)
+        self._model_catalog_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
         if args is not None:
             self._raw_args = list(args)
             self._common_args: List[str] = []
@@ -32,24 +33,24 @@ class CodexRunner:
             "never",
             "--skip-git-repo-check",
         ]
-        self._model_catalog_cache: list[dict[str, Any]] = []
-        self._model_catalog_cache_time = 0.0
 
-    async def list_available_models(self, command: str | None = None) -> list[dict[str, Any]]:
-        now = time.monotonic()
-        if self._model_catalog_cache and now - self._model_catalog_cache_time < 600:
-            return list(self._model_catalog_cache)
-
+    async def list_available_models(
+        self, command: str | None = None, force_refresh: bool = False
+    ) -> list[dict[str, Any]]:
         command_to_run = self._resolve_command((command or "").strip() or self._command)
+        now = time.monotonic()
+        cached = self._model_catalog_cache.get(command_to_run)
+        if not force_refresh and cached and now - cached[0] < 600:
+            return list(cached[1])
+
         try:
             models = await self._load_available_models(command_to_run)
         except Exception:
-            return []
+            return list(cached[1]) if cached else []
 
         if not isinstance(models, list) or not models:
-            return []
-        self._model_catalog_cache = models
-        self._model_catalog_cache_time = now
+            return list(cached[1]) if cached else []
+        self._model_catalog_cache[command_to_run] = (now, models)
         return list(models)
 
     async def _load_available_models(self, command_to_run: str) -> list[dict[str, Any]]:
