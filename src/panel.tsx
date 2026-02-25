@@ -1805,6 +1805,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const wsRef = useRef<WebSocket | null>(null);
   const runToSessionKeyRef = useRef<Map<string, string>>(new Map());
   const activeSessionKeyByPathRef = useRef<Map<string, string>>(new Map());
+  const pendingPermissionThreadResetRef = useRef<Map<string, SandboxMode>>(new Map());
   const sessionThreadSyncIdRef = useRef<string>(createSessionEventId());
   const lastRateLimitsRefreshRef = useRef<number>(0);
   const pendingRefreshPathsRef = useRef<Set<string>>(new Set());
@@ -3292,7 +3293,29 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     const includeCellOutputKey =
       includeActiveCell && includeActiveCellOutput && notebookMode === 'ipynb';
     const cellOutput = includeCellOutputKey ? getActiveCellOutput(props.notebooks) : '';
-    const session = ensureSession(notebookPath, sessionKey);
+    let session = ensureSession(notebookPath, sessionKey);
+    const pendingPermissionMode = pendingPermissionThreadResetRef.current.get(sessionKey);
+    if (pendingPermissionMode && pendingPermissionMode === sandboxMode) {
+      const resetSession = createThreadResetSession(notebookPath, sessionKey, createSessionEventId());
+      updateSessions(prev => {
+        const next = new Map(prev);
+        next.set(sessionKey, resetSession);
+        return next;
+      });
+      activeSessionKeyByPathRef.current.set(notebookPath, sessionKey);
+      clearRunMappingForSessionKey(sessionKey);
+      sendStartSession(resetSession, notebookPath, sessionKey, { forceNewThread: true });
+      emitSessionThreadEvent(sessionKey, notebookPath, resetSession.threadId);
+      appendMessage(
+        sessionKey,
+        'system',
+        `Started a new thread to apply permission: ${
+          sandboxMode === 'danger-full-access' ? 'Full access' : 'Default permission'
+        }.`
+      );
+      pendingPermissionThreadResetRef.current.delete(sessionKey);
+      session = resetSession;
+    }
 
     const content = trimmed || (hasImages ? 'Please analyze the attached image(s).' : '');
     let images: { name: string; dataUrl: string }[] | undefined;
@@ -3963,16 +3986,23 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                 ariaLabel="Permissions"
                 align="right"
               >
-                {SANDBOX_OPTIONS.map(option => (
-                  <button
-                    key={option.value}
-                    type="button"
-                    className={`jp-CodexMenuItem ${sandboxMode === option.value ? 'is-active' : ''}`}
-                    onClick={() => {
-                      setSandboxMode(option.value);
-                      setPermissionMenuOpen(false);
-                    }}
-                  >
+	                {SANDBOX_OPTIONS.map(option => (
+	                  <button
+	                    key={option.value}
+	                    type="button"
+	                    className={`jp-CodexMenuItem ${sandboxMode === option.value ? 'is-active' : ''}`}
+	                    onClick={() => {
+	                      const previousSandbox = sandboxMode;
+	                      setSandboxMode(option.value);
+	                      const currentSessionKey = currentNotebookSessionKeyRef.current || '';
+	                      if (currentSessionKey && previousSandbox !== option.value) {
+	                        const next = new Map(pendingPermissionThreadResetRef.current);
+	                        next.set(currentSessionKey, option.value);
+	                        pendingPermissionThreadResetRef.current = next;
+	                      }
+	                      setPermissionMenuOpen(false);
+	                    }}
+	                  >
                     <span className="jp-CodexMenuItemLabel">{option.label}</span>
                     {sandboxMode === option.value && <CheckIcon className="jp-CodexMenuCheck" width={16} height={16} />}
                   </button>
