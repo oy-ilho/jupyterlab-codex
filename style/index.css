@@ -1636,6 +1636,19 @@
   color: color-mix(in srgb, var(--cdx-bad) 85%, var(--cdx-text));
 }
 
+.jp-CodexPermissionBtn.is-warning:not(:disabled) {
+  border-color: transparent;
+  background: transparent;
+  color: color-mix(in srgb, #f5b301 72%, var(--cdx-text));
+}
+
+.jp-CodexPermissionBtn.is-warning:hover:not(:disabled),
+.jp-CodexPermissionBtn.is-warning.is-open:not(:disabled) {
+  border-color: color-mix(in srgb, #f5b301 55%, var(--cdx-border));
+  background: color-mix(in srgb, #f5b301 14%, var(--cdx-surface));
+  color: color-mix(in srgb, #f5b301 84%, var(--cdx-text));
+}
+
 .jp-CodexUsageBtn.is-stale:not(:disabled),
 .jp-CodexUsageBtn.is-stale:hover:not(:disabled),
 .jp-CodexUsageBtn.is-stale.is-open:not(:disabled) {

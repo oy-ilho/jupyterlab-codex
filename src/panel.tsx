@@ -565,6 +565,7 @@ const SESSION_KEY_SEPARATOR = '\u0000';
 const MAX_IMAGE_ATTACHMENTS = 4;
 const MAX_IMAGE_ATTACHMENT_BYTES = 4 * 1024 * 1024; // Avoid huge WebSocket payloads.
 const MAX_IMAGE_ATTACHMENT_TOTAL_BYTES = 6 * 1024 * 1024;
+const READ_ONLY_PERMISSION_WARNING = 'Code changes are not available with the current permission (Read only).';
 
 function findModelLabel(model: string, options: readonly ModelOption[]): string {
   const match = options.find(option => option.value === model);
@@ -3359,11 +3360,23 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     socket.send(JSON.stringify(sendPayload));
 
     const imageCount = pendingImagesRef.current.length;
+    const showReadOnlyWarning = sandboxForSend === 'read-only';
     updateSessions(prev => {
       const next = new Map(prev);
       const existing = next.get(sessionKey) ?? createSession('', `Session started`, { sessionKey });
+      const warningEntry: ChatEntry[] = showReadOnlyWarning
+        ? [
+            {
+              kind: 'text',
+              id: crypto.randomUUID(),
+              role: 'system',
+              text: normalizeSystemText('system', READ_ONLY_PERMISSION_WARNING)
+            }
+          ]
+        : [];
       const updatedMessages: ChatEntry[] = [
         ...existing.messages,
+        ...warningEntry,
         {
           kind: 'text',
           id: crypto.randomUUID(),
@@ -3924,8 +3937,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                         : reasoningEffort) as ReasoningOptionValue
                     }
                     effortOptions={reasoningOptions}
-                    width={18}
-                    height={18}
+                    width={17}
+                    height={17}
                   />
                 </button>
               </div>
@@ -3966,7 +3979,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 	              <div className="jp-CodexMenuWrap" ref={permissionMenuWrapRef}>
 	                <button
 	                  type="button"
-	                  className={`jp-CodexIconBtn jp-CodexPermissionBtn${permissionMenuOpen ? ' is-open' : ''}${sandboxMode === 'danger-full-access' ? ' is-danger' : ''}`}
+	                  className={`jp-CodexIconBtn jp-CodexPermissionBtn${permissionMenuOpen ? ' is-open' : ''}${sandboxMode === 'danger-full-access' ? ' is-danger' : ''}${sandboxMode === 'read-only' ? ' is-warning' : ''}`}
 	                  ref={permissionBtnRef}
                   onClick={() => {
                     setPermissionMenuOpen(open => !open);
@@ -3980,7 +3993,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                   aria-expanded={permissionMenuOpen}
                   title={`Permission: ${selectedSandboxLabel}`}
                 >
-                  <ShieldIcon width={18} height={18} />
+                  <ShieldIcon width={17} height={17} />
                 </button>
               </div>
               <PortalMenu
@@ -4006,43 +4019,43 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                   </button>
                 ))}
               </PortalMenu>
+              <div className="jp-CodexContextWrap">
+                <button
+                  type="button"
+                  className={`jp-CodexIconBtn jp-CodexContextBtn${usageIsStale ? ' is-stale' : ''}`}
+                  aria-label={
+                    contextUsedTokens == null || contextLeftTokens == null
+                      ? 'Context window usage unavailable'
+                      : `Context window: used ${contextUsedLabel} tokens, left ${contextLeftLabel} tokens`
+                  }
+                  title={
+                    contextUsedTokens == null || contextLeftTokens == null
+                      ? 'Context window usage unavailable'
+                      : `Used ${contextUsedLabel} / left ${contextLeftLabel}`
+                  }
+                >
+                  <ContextWindowIcon level={contextLevel} width={17} height={17} />
+                </button>
+                <div className="jp-CodexContextPopover" role="tooltip">
+                  <div className="jp-CodexContextPopoverTitle">Context window</div>
+                  <div className="jp-CodexContextPopoverRow">
+                    <span>Used</span>
+                    <strong>{contextUsedLabel}</strong>
+                  </div>
+                  <div className="jp-CodexContextPopoverRow">
+                    <span>Left</span>
+                    <strong>{contextLeftLabel}</strong>
+                  </div>
+                  <div className="jp-CodexContextPopoverMeta">
+                    {contextWindowTokens == null
+                      ? 'Window size unavailable'
+                      : `Window: ${contextWindowLabel} tokens (${contextUsedPercentLabel} used)`}
+                  </div>
+                </div>
+              </div>
             </div>
 
 	            <div className="jp-CodexComposer-toolbarRight">
-	              <div className="jp-CodexContextWrap">
-	                <button
-	                  type="button"
-	                  className={`jp-CodexIconBtn jp-CodexContextBtn${usageIsStale ? ' is-stale' : ''}`}
-	                  aria-label={
-	                    contextUsedTokens == null || contextLeftTokens == null
-	                      ? 'Context window usage unavailable'
-	                      : `Context window: used ${contextUsedLabel} tokens, left ${contextLeftLabel} tokens`
-	                  }
-	                  title={
-	                    contextUsedTokens == null || contextLeftTokens == null
-	                      ? 'Context window usage unavailable'
-	                      : `Used ${contextUsedLabel} / left ${contextLeftLabel}`
-	                  }
-	                >
-	                  <ContextWindowIcon level={contextLevel} width={18} height={18} />
-	                </button>
-	                <div className="jp-CodexContextPopover" role="tooltip">
-	                  <div className="jp-CodexContextPopoverTitle">Context window</div>
-	                  <div className="jp-CodexContextPopoverRow">
-	                    <span>Used</span>
-	                    <strong>{contextUsedLabel}</strong>
-	                  </div>
-	                  <div className="jp-CodexContextPopoverRow">
-	                    <span>Left</span>
-	                    <strong>{contextLeftLabel}</strong>
-	                  </div>
-	                  <div className="jp-CodexContextPopoverMeta">
-	                    {contextWindowTokens == null
-	                      ? 'Window size unavailable'
-	                      : `Window: ${contextWindowLabel} tokens (${contextUsedPercentLabel} used)`}
-	                  </div>
-	                </div>
-	              </div>
 	              <button
 	                type="button"
 	                className={`jp-CodexSendBtn${status === 'running' ? ' is-stop' : ''}`}
