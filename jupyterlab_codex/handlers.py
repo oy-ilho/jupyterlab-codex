@@ -372,6 +372,7 @@ class CodexWSHandler(WebSocketHandler):
             cell_output,
             cwd=cwd,
             notebook_mode=notebook_mode,
+            include_history=False,
         )
         self._store.append_message(session_id, "user", content)
 
@@ -400,7 +401,37 @@ class CodexWSHandler(WebSocketHandler):
             auth_hint_sent = False
 
             async def on_event(event: Dict[str, Any]):
-                nonlocal auth_hint_sent
+                nonlocal auth_hint_sent, session_id
+                if event.get("type") == "thread.started":
+                    thread_id_raw = event.get("thread_id")
+                    if isinstance(thread_id_raw, str):
+                        thread_id = thread_id_raw.strip()
+                    else:
+                        thread_id = ""
+                    if thread_id and thread_id != session_id:
+                        session_id = self._store.rename_session(session_id, thread_id)
+                        run_context = self._active_runs.get(run_id)
+                        if isinstance(run_context, dict):
+                            run_context["sessionId"] = session_id
+                        self.write_message(
+                            json.dumps(
+                                {
+                                    "type": "status",
+                                    "state": "running",
+                                    "runId": run_id,
+                                    "sessionId": session_id,
+                                    "sessionContextKey": session_context_key,
+                                    "notebookPath": notebook_path,
+                                    "pairedOk": paired_ok,
+                                    "pairedPath": paired_path,
+                                    "pairedOsPath": paired_os_path,
+                                    "pairedMessage": paired_message,
+                                    "notebookMode": notebook_mode,
+                                }
+                            )
+                        )
+                    return
+
                 if event.get("type") == "stderr":
                     raw_stderr = event.get("text", "")
                     if isinstance(raw_stderr, str) and _is_missing_auth_stderr(raw_stderr):
@@ -480,6 +511,7 @@ class CodexWSHandler(WebSocketHandler):
                     sandbox=requested_sandbox,
                     command=requested_command_path,
                     images=image_paths,
+                    resume_session_id=session_id,
                 )
                 if assistant_buffer:
                     self._store.append_message(session_id, "assistant", "".join(assistant_buffer))
@@ -862,6 +894,7 @@ def _extract_rate_limits_from_session_event(obj: Dict[str, Any]) -> Dict[str, An
         "updatedAt": _normalize_iso8601(updated_at) if updated_at else None,
         "primary": _coerce_rate_limit_window(primary),
         "secondary": _coerce_rate_limit_window(secondary),
+        "contextWindow": _coerce_context_window_snapshot(payload.get("info")),
     }
 
 
@@ -872,6 +905,50 @@ def _coerce_rate_limit_window(window: Dict[str, Any]) -> Dict[str, Any]:
     )
     resets_at = _coerce_int(_pick(window, "resets_at", "resetsAt"))
     return {"usedPercent": used, "windowMinutes": window_mins, "resetsAt": resets_at}
+
+
+def _coerce_context_window_snapshot(info: Any) -> Dict[str, Any] | None:
+    if not isinstance(info, dict):
+        return None
+
+    window_tokens = _coerce_int(_pick(info, "model_context_window", "modelContextWindow"))
+    if window_tokens is not None and window_tokens < 0:
+        window_tokens = None
+
+    last_usage = info.get("last_token_usage")
+    if not isinstance(last_usage, dict):
+        last_usage = info.get("lastTokenUsage")
+    total_usage = info.get("total_token_usage")
+    if not isinstance(total_usage, dict):
+        total_usage = info.get("totalTokenUsage")
+
+    used_tokens: int | None = None
+    if isinstance(last_usage, dict):
+        used_tokens = _coerce_int(_pick(last_usage, "input_tokens", "inputTokens"))
+    if used_tokens is None and isinstance(total_usage, dict):
+        used_tokens = _coerce_int(_pick(total_usage, "input_tokens", "inputTokens"))
+    if used_tokens is not None and used_tokens < 0:
+        used_tokens = 0
+
+    left_tokens: int | None = None
+    used_percent: float | None = None
+    if window_tokens is not None and used_tokens is not None:
+        used_tokens = min(used_tokens, window_tokens)
+        left_tokens = max(0, window_tokens - used_tokens)
+        if window_tokens > 0:
+            used_percent = (used_tokens / window_tokens) * 100.0
+        else:
+            used_percent = 0.0
+
+    if window_tokens is None and used_tokens is None and left_tokens is None:
+        return None
+
+    return {
+        "windowTokens": window_tokens,
+        "usedTokens": used_tokens,
+        "leftTokens": left_tokens,
+        "usedPercent": used_percent,
+    }
 
 
 def _pick(d: Dict[str, Any], *keys: str) -> Any:

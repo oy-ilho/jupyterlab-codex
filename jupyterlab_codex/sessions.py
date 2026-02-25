@@ -3,7 +3,7 @@ import os
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 
 _TRUE_VALUES = {"1", "true", "y", "yes", "on"}
@@ -104,8 +104,9 @@ class SessionStore:
         cell_output: str,
         cwd: str | None = None,
         notebook_mode: str = "",
+        include_history: bool = True,
     ) -> str:
-        messages = self.load_messages(session_id)
+        messages = self.load_messages(session_id) if include_history else []
         meta = self._load_meta(session_id)
         notebook_path = meta.get("notebook_path", "")
         notebook_os_path = meta.get("notebook_os_path", "")
@@ -192,7 +193,7 @@ class SessionStore:
 
         parts.extend(["", "System: Instructions:", *instructions, ""])
 
-        if messages:
+        if include_history and messages:
             parts.append("Conversation:")
             for msg in messages:
                 role = msg.get("role", "user")
@@ -319,6 +320,71 @@ class SessionStore:
             return
 
         self._touch_meta(session_id)
+
+    def rename_session(self, old_session_id: str, new_session_id: str) -> str:
+        """
+        Move session files to a new id (for example, when Codex returns a real
+        `thread_id` after the first run).
+        """
+        old_id = (old_session_id or "").strip()
+        new_id = (new_session_id or "").strip()
+        if not old_id or not new_id or old_id == new_id:
+            return new_id or old_id
+        if not self._logging_enabled:
+            return new_id
+
+        old_jsonl = self._jsonl_path(old_id)
+        new_jsonl = self._jsonl_path(new_id)
+        if old_jsonl.exists():
+            if new_jsonl.exists():
+                try:
+                    with old_jsonl.open("r", encoding="utf-8") as source, new_jsonl.open(
+                        "a", encoding="utf-8"
+                    ) as target:
+                        for line in source:
+                            if not line:
+                                continue
+                            if line.endswith("\n"):
+                                target.write(line)
+                            else:
+                                target.write(f"{line}\n")
+                    old_jsonl.unlink()
+                except OSError:
+                    pass
+            else:
+                try:
+                    old_jsonl.rename(new_jsonl)
+                except OSError:
+                    pass
+
+        merged_meta: Dict[str, Any] = {}
+        for candidate in (self._meta_path(new_id), self._meta_path(old_id)):
+            if not candidate.exists():
+                continue
+            try:
+                loaded = json.loads(candidate.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, IOError):
+                continue
+            if isinstance(loaded, dict):
+                merged_meta.update(loaded)
+
+        if merged_meta:
+            merged_meta["session_id"] = new_id
+            merged_meta["updated_at"] = _now_iso()
+            try:
+                self._meta_path(new_id).write_text(json.dumps(merged_meta, indent=2), encoding="utf-8")
+            except IOError:
+                pass
+
+        old_meta = self._meta_path(old_id)
+        new_meta = self._meta_path(new_id)
+        if old_meta != new_meta and old_meta.exists():
+            try:
+                old_meta.unlink()
+            except OSError:
+                pass
+
+        return new_id
 
     def _touch_meta(self, session_id: str) -> None:
         if not self._logging_enabled:

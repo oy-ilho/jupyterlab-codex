@@ -212,6 +212,37 @@ function BatteryIcon(
   );
 }
 
+function ContextWindowIcon(
+  props: React.SVGProps<SVGSVGElement> & { level?: number | null }
+): JSX.Element {
+  const { level, ...svgProps } = props;
+  const clamped =
+    typeof level === 'number' && Number.isFinite(level) ? Math.min(1, Math.max(0, level)) : null;
+  const radius = 6.8;
+  const circumference = 2 * Math.PI * radius;
+  const fillRatio = clamped == null ? 0.35 : Math.max(0.05, clamped);
+  const fillLength = circumference * fillRatio;
+  const gapLength = Math.max(0, circumference - fillLength);
+  const dashed = clamped == null;
+
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" {...svgProps}>
+      <circle cx="12" cy="12" r={radius} stroke="currentColor" strokeWidth="2.2" opacity={0.22} />
+      <circle
+        cx="12"
+        cy="12"
+        r={radius}
+        stroke="currentColor"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+        strokeDasharray={`${fillLength} ${gapLength}`}
+        strokeDashoffset={circumference * 0.25}
+        opacity={dashed ? 0.55 : 0.92}
+      />
+    </svg>
+  );
+}
+
 function ShieldIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
   return (
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" {...props}>
@@ -439,10 +470,18 @@ type RateLimitWindowSnapshot = {
   resetsAt: number | null;
 };
 
+type ContextWindowSnapshot = {
+  windowTokens: number | null;
+  usedTokens: number | null;
+  leftTokens: number | null;
+  usedPercent: number | null;
+};
+
 type CodexRateLimitsSnapshot = {
   updatedAt: string | null;
   primary: RateLimitWindowSnapshot | null;
   secondary: RateLimitWindowSnapshot | null;
+  contextWindow: ContextWindowSnapshot | null;
 };
 
 type ModelCatalogEntry = {
@@ -1150,6 +1189,24 @@ function coerceRateLimitWindow(raw: any): RateLimitWindowSnapshot | null {
   return { usedPercent, windowMinutes, resetsAt };
 }
 
+function coerceContextWindowSnapshot(raw: any): ContextWindowSnapshot | null {
+  if (!raw || typeof raw !== 'object') {
+    return null;
+  }
+  const windowTokens =
+    typeof raw.windowTokens === 'number' && Number.isFinite(raw.windowTokens) ? Math.round(raw.windowTokens) : null;
+  const usedTokens =
+    typeof raw.usedTokens === 'number' && Number.isFinite(raw.usedTokens) ? Math.round(raw.usedTokens) : null;
+  const leftTokens =
+    typeof raw.leftTokens === 'number' && Number.isFinite(raw.leftTokens) ? Math.round(raw.leftTokens) : null;
+  const usedPercent =
+    typeof raw.usedPercent === 'number' && Number.isFinite(raw.usedPercent) ? raw.usedPercent : null;
+  if (windowTokens == null && usedTokens == null && leftTokens == null && usedPercent == null) {
+    return null;
+  }
+  return { windowTokens, usedTokens, leftTokens, usedPercent };
+}
+
 function coerceRateLimitsSnapshot(raw: any): CodexRateLimitsSnapshot | null {
   if (!raw || typeof raw !== 'object') {
     return null;
@@ -1158,7 +1215,8 @@ function coerceRateLimitsSnapshot(raw: any): CodexRateLimitsSnapshot | null {
   return {
     updatedAt,
     primary: coerceRateLimitWindow(raw.primary),
-    secondary: coerceRateLimitWindow(raw.secondary)
+    secondary: coerceRateLimitWindow(raw.secondary),
+    contextWindow: coerceContextWindowSnapshot(raw.contextWindow)
   };
 }
 
@@ -1220,6 +1278,13 @@ function formatResetsIn(resetsAtSec: number | null, nowMs: number): string {
     return 'Overdue';
   }
   return formatDurationShort(diffMs);
+}
+
+function formatTokenCount(value: number | null): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return '--';
+  }
+  return value.toLocaleString();
 }
 
 function truncateEnd(text: string, max: number): string {
@@ -3355,6 +3420,21 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const sessionWindowLabel = sessionWindowMinutes == null ? '' : `Window: ${Math.round(sessionWindowMinutes / 60)}h`;
   const weeklyWindowLabel =
     weeklyWindowMinutes == null ? '' : `Window: ${Math.round(weeklyWindowMinutes / (60 * 24))}d`;
+  const contextWindowTokens = rateLimits?.contextWindow?.windowTokens ?? null;
+  const contextUsedTokens = rateLimits?.contextWindow?.usedTokens ?? null;
+  const contextLeftTokens = rateLimits?.contextWindow?.leftTokens ?? null;
+  const contextUsedPercent = rateLimits?.contextWindow?.usedPercent ?? null;
+  const contextLevel =
+    typeof contextUsedPercent === 'number' && Number.isFinite(contextUsedPercent)
+      ? clampNumber(contextUsedPercent / 100, 0, 1)
+      : null;
+  const contextUsedLabel = formatTokenCount(contextUsedTokens);
+  const contextLeftLabel = formatTokenCount(contextLeftTokens);
+  const contextWindowLabel = formatTokenCount(contextWindowTokens);
+  const contextUsedPercentLabel =
+    typeof contextUsedPercent === 'number' && Number.isFinite(contextUsedPercent)
+      ? `${Math.round(clampNumber(contextUsedPercent, 0, 100))}%`
+      : 'Unknown';
 
   useLayoutEffect(() => {
     const target = notebookLabelRef.current;
@@ -3900,10 +3980,44 @@ function CodexChat(props: CodexChatProps): JSX.Element {
               </PortalMenu>
             </div>
 
-            <div className="jp-CodexComposer-toolbarRight">
-              <button
-                type="button"
-                className={`jp-CodexSendBtn${status === 'running' ? ' is-stop' : ''}`}
+	            <div className="jp-CodexComposer-toolbarRight">
+	              <div className="jp-CodexContextWrap">
+	                <button
+	                  type="button"
+	                  className={`jp-CodexIconBtn jp-CodexContextBtn${usageIsStale ? ' is-stale' : ''}`}
+	                  aria-label={
+	                    contextUsedTokens == null || contextLeftTokens == null
+	                      ? 'Context window usage unavailable'
+	                      : `Context window: used ${contextUsedLabel} tokens, left ${contextLeftLabel} tokens`
+	                  }
+	                  title={
+	                    contextUsedTokens == null || contextLeftTokens == null
+	                      ? 'Context window usage unavailable'
+	                      : `Used ${contextUsedLabel} / left ${contextLeftLabel}`
+	                  }
+	                >
+	                  <ContextWindowIcon level={contextLevel} width={18} height={18} />
+	                </button>
+	                <div className="jp-CodexContextPopover" role="tooltip">
+	                  <div className="jp-CodexContextPopoverTitle">Context window</div>
+	                  <div className="jp-CodexContextPopoverRow">
+	                    <span>Used</span>
+	                    <strong>{contextUsedLabel}</strong>
+	                  </div>
+	                  <div className="jp-CodexContextPopoverRow">
+	                    <span>Left</span>
+	                    <strong>{contextLeftLabel}</strong>
+	                  </div>
+	                  <div className="jp-CodexContextPopoverMeta">
+	                    {contextWindowTokens == null
+	                      ? 'Window size unavailable'
+	                      : `Window: ${contextWindowLabel} tokens (${contextUsedPercentLabel} used)`}
+	                  </div>
+	                </div>
+	              </div>
+	              <button
+	                type="button"
+	                className={`jp-CodexSendBtn${status === 'running' ? ' is-stop' : ''}`}
                 onClick={() => {
                   if (status === 'running') {
                     cancelRun();

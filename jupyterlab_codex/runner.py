@@ -276,10 +276,15 @@ class CodexRunner:
         sandbox: str | None = None,
         images: List[str] | None = None,
         command: str | None = None,
+        resume_session_id: str | None = None,
     ) -> int:
         command_to_run = self._resolve_command((command or "").strip() or self._command)
         args = self._args_for_options(
-            model=model, reasoning_effort=reasoning_effort, sandbox=sandbox, images=images
+            model=model,
+            reasoning_effort=reasoning_effort,
+            sandbox=sandbox,
+            images=images,
+            resume_session_id=resume_session_id,
         )
 
         proc = await asyncio.create_subprocess_exec(
@@ -372,11 +377,13 @@ class CodexRunner:
         reasoning_effort: str | None,
         sandbox: str | None,
         images: List[str] | None,
+        resume_session_id: str | None = None,
     ) -> List[str]:
         requested_model = (model or "").strip()
         requested_reasoning_effort = (reasoning_effort or "").strip()
         requested_sandbox = (sandbox or "").strip()
         requested_images = [p for p in (images or []) if isinstance(p, str) and p.strip()]
+        requested_resume_session_id = (resume_session_id or "").strip()
 
         if self._raw_args is not None:
             args = list(self._raw_args)
@@ -401,10 +408,13 @@ class CodexRunner:
                 idx += 1
 
             insertion_index = cleaned.index("-") if "-" in cleaned else len(cleaned)
+            if requested_resume_session_id and "resume" not in cleaned:
+                cleaned[insertion_index:insertion_index] = ["resume", requested_resume_session_id]
+                insertion_index = cleaned.index("-") if "-" in cleaned else len(cleaned)
             to_insert: List[str] = []
             if requested_images:
                 to_insert.extend(["--image", *requested_images])
-            if requested_sandbox:
+            if requested_sandbox and not requested_resume_session_id:
                 to_insert.extend(["-s", requested_sandbox])
             if requested_model:
                 to_insert.extend(["-m", requested_model])
@@ -416,6 +426,32 @@ class CodexRunner:
 
         effective_model = requested_model or self._default_model
         effective_sandbox = requested_sandbox or self._default_sandbox
+
+        if requested_resume_session_id:
+            # `codex exec resume` is a subcommand and does not accept `--sandbox` at
+            # the resume level. Pass sandbox as a top-level global option instead.
+            args: List[str] = ["--ask-for-approval", "never"]
+            if effective_sandbox:
+                args.extend(["--sandbox", effective_sandbox])
+            args.extend(
+                [
+                    "exec",
+                    "--json",
+                    "--color",
+                    "never",
+                    "--skip-git-repo-check",
+                    "resume",
+                ]
+            )
+            if effective_model:
+                args.extend(["-m", effective_model])
+            if requested_reasoning_effort:
+                args.extend(["-c", f'model_reasoning_effort="{requested_reasoning_effort}"'])
+            if requested_images:
+                args.extend(["--image", *requested_images])
+            args.extend([requested_resume_session_id, "-"])
+            return args
+
         args = list(self._common_args)
         if effective_sandbox:
             args.extend(["--sandbox", effective_sandbox])
