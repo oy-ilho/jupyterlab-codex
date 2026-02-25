@@ -236,23 +236,23 @@ class CodexWSHandler(WebSocketHandler):
         paired_ok, paired_path, paired_os_path, paired_message, notebook_mode = _compute_pairing_status(
             notebook_path, notebook_os_path
         )
-        self.write_message(
-            json.dumps(
-                {
-                    "type": "status",
-                    "state": "ready",
-                    "sessionId": resolved_session_id,
-                    "notebookPath": notebook_path,
-                    "sessionContextKey": session_context_key,
-                    "history": history,
-                    "pairedOk": paired_ok,
-                    "pairedPath": paired_path,
-                    "pairedOsPath": paired_os_path,
-                    "pairedMessage": paired_message,
-                    "notebookMode": notebook_mode,
-                }
-            )
-        )
+        status_payload: Dict[str, Any] = {
+            "type": "status",
+            "state": "ready",
+            "sessionId": resolved_session_id,
+            "notebookPath": notebook_path,
+            "sessionContextKey": session_context_key,
+            "history": history,
+            "pairedOk": paired_ok,
+            "pairedPath": paired_path,
+            "pairedOsPath": paired_os_path,
+            "pairedMessage": paired_message,
+            "notebookMode": notebook_mode,
+        }
+        effective_sandbox = load_effective_sandbox_for_thread(resolved_session_id)
+        if effective_sandbox:
+            status_payload["effectiveSandbox"] = effective_sandbox
+        self.write_message(json.dumps(status_payload))
 
     async def _handle_send(self, payload: Dict[str, Any]):
         session_id = payload.get("sessionId") or ""
@@ -315,6 +315,25 @@ class CodexWSHandler(WebSocketHandler):
         paired_ok, paired_path, paired_os_path, paired_message, notebook_mode = _compute_pairing_status(
             notebook_path, notebook_os_path
         )
+        def _build_status_payload(state: str) -> Dict[str, Any]:
+            payload: Dict[str, Any] = {
+                "type": "status",
+                "state": state,
+                "runId": run_id,
+                "sessionId": session_id,
+                "sessionContextKey": session_context_key,
+                "notebookPath": notebook_path,
+                "pairedOk": paired_ok,
+                "pairedPath": paired_path,
+                "pairedOsPath": paired_os_path,
+                "pairedMessage": paired_message,
+                "notebookMode": notebook_mode,
+            }
+            effective_sandbox = load_effective_sandbox_for_thread(session_id)
+            if effective_sandbox:
+                payload["effectiveSandbox"] = effective_sandbox
+            return payload
+
         if not paired_ok:
             # Enforce paired workflow on the server as well (front-end can be bypassed).
             self.write_message(
@@ -335,21 +354,7 @@ class CodexWSHandler(WebSocketHandler):
                 )
             )
             self.write_message(
-                json.dumps(
-                    {
-                        "type": "status",
-                        "state": "ready",
-                        "runId": run_id,
-                        "sessionId": session_id,
-                        "sessionContextKey": session_context_key,
-                        "notebookPath": notebook_path,
-                        "pairedOk": paired_ok,
-                        "pairedPath": paired_path,
-                        "pairedOsPath": paired_os_path,
-                        "pairedMessage": paired_message,
-                        "notebookMode": notebook_mode,
-                    }
-                )
+                json.dumps(_build_status_payload("ready"))
             )
             return
 
@@ -378,21 +383,7 @@ class CodexWSHandler(WebSocketHandler):
 
         async def _run():
             self.write_message(
-                json.dumps(
-                    {
-                        "type": "status",
-                        "state": "running",
-                        "runId": run_id,
-                        "sessionId": session_id,
-                        "sessionContextKey": session_context_key,
-                        "notebookPath": notebook_path,
-                        "pairedOk": paired_ok,
-                        "pairedPath": paired_path,
-                        "pairedOsPath": paired_os_path,
-                        "pairedMessage": paired_message,
-                        "notebookMode": notebook_mode,
-                    }
-                )
+                json.dumps(_build_status_payload("running"))
             )
 
             temp_images_dir = None
@@ -414,21 +405,7 @@ class CodexWSHandler(WebSocketHandler):
                         if isinstance(run_context, dict):
                             run_context["sessionId"] = session_id
                         self.write_message(
-                            json.dumps(
-                                {
-                                    "type": "status",
-                                    "state": "running",
-                                    "runId": run_id,
-                                    "sessionId": session_id,
-                                    "sessionContextKey": session_context_key,
-                                    "notebookPath": notebook_path,
-                                    "pairedOk": paired_ok,
-                                    "pairedPath": paired_path,
-                                    "pairedOsPath": paired_os_path,
-                                    "pairedMessage": paired_message,
-                                    "notebookMode": notebook_mode,
-                                }
-                            )
+                            json.dumps(_build_status_payload("running"))
                         )
                     return
 
@@ -535,21 +512,7 @@ class CodexWSHandler(WebSocketHandler):
                     )
                 )
                 self.write_message(
-                    json.dumps(
-                        {
-                            "type": "status",
-                            "state": "ready",
-                            "runId": run_id,
-                            "sessionId": session_id,
-                            "sessionContextKey": session_context_key,
-                            "notebookPath": notebook_path,
-                            "pairedOk": paired_ok,
-                            "pairedPath": paired_path,
-                            "pairedOsPath": paired_os_path,
-                            "pairedMessage": paired_message,
-                            "notebookMode": notebook_mode,
-                        }
-                    )
+                    json.dumps(_build_status_payload("ready"))
                 )
             except asyncio.CancelledError:
                 file_changed = _has_path_changes(before_mtimes, _capture_mtimes(watch_paths))
@@ -573,21 +536,7 @@ class CodexWSHandler(WebSocketHandler):
                     )
                 )
                 self.write_message(
-                    json.dumps(
-                        {
-                            "type": "status",
-                            "state": "ready",
-                            "runId": run_id,
-                            "sessionId": session_id,
-                            "sessionContextKey": session_context_key,
-                            "notebookPath": notebook_path,
-                            "pairedOk": paired_ok,
-                            "pairedPath": paired_path,
-                            "pairedOsPath": paired_os_path,
-                            "pairedMessage": paired_message,
-                            "notebookMode": notebook_mode,
-                        }
-                    )
+                    json.dumps(_build_status_payload("ready"))
                 )
                 raise
             except FileNotFoundError:
@@ -609,21 +558,7 @@ class CodexWSHandler(WebSocketHandler):
                     error_payload["suggestedCommandPath"] = suggested_command_path
                 self.write_message(json.dumps(error_payload))
                 self.write_message(
-                    json.dumps(
-                        {
-                            "type": "status",
-                            "state": "ready",
-                            "runId": run_id,
-                            "sessionId": session_id,
-                            "sessionContextKey": session_context_key,
-                            "notebookPath": notebook_path,
-                            "pairedOk": paired_ok,
-                            "pairedPath": paired_path,
-                            "pairedOsPath": paired_os_path,
-                            "pairedMessage": paired_message,
-                            "notebookMode": notebook_mode,
-                        }
-                    )
+                    json.dumps(_build_status_payload("ready"))
                 )
             except Exception as exc:  # pragma: no cover - defensive path
                 self.write_message(
@@ -644,21 +579,7 @@ class CodexWSHandler(WebSocketHandler):
                     )
                 )
                 self.write_message(
-                    json.dumps(
-                        {
-                            "type": "status",
-                            "state": "ready",
-                            "runId": run_id,
-                            "sessionId": session_id,
-                            "sessionContextKey": session_context_key,
-                            "notebookPath": notebook_path,
-                            "pairedOk": paired_ok,
-                            "pairedPath": paired_path,
-                            "pairedOsPath": paired_os_path,
-                            "pairedMessage": paired_message,
-                            "notebookMode": notebook_mode,
-                        }
-                    )
+                    json.dumps(_build_status_payload("ready"))
                 )
             finally:
                 # Rate limits are recorded by the Codex Desktop app/CLI in ~/.codex/sessions/*.
@@ -734,18 +655,18 @@ class CodexWSHandler(WebSocketHandler):
         task = run_context["task"]
         task.cancel()
         session_context_key = _coerce_session_context_key(run_context.get("sessionContextKey"))
-        self.write_message(
-            json.dumps(
-                {
-                    "type": "status",
-                    "state": "ready",
-                    "runId": run_id,
-                    "sessionId": run_context["sessionId"],
-                    "sessionContextKey": session_context_key,
-                    "notebookPath": run_context["notebookPath"],
-                }
-            )
-        )
+        status_payload: Dict[str, Any] = {
+            "type": "status",
+            "state": "ready",
+            "runId": run_id,
+            "sessionId": run_context["sessionId"],
+            "sessionContextKey": session_context_key,
+            "notebookPath": run_context["notebookPath"],
+        }
+        effective_sandbox = load_effective_sandbox_for_thread(run_context["sessionId"])
+        if effective_sandbox:
+            status_payload["effectiveSandbox"] = effective_sandbox
+        self.write_message(json.dumps(status_payload))
 
     async def _handle_end_session(self, payload: Dict[str, Any]):
         session_id = payload.get("sessionId")
@@ -783,6 +704,113 @@ class CodexWSHandler(WebSocketHandler):
 
 _RATE_LIMITS_CACHE_TTL_SECONDS = 30.0
 _RATE_LIMITS_CACHE: Dict[str, Any] = {"fetched_at": 0.0, "snapshot": None}
+_EFFECTIVE_SANDBOX_CACHE_TTL_SECONDS = 5.0
+_EFFECTIVE_SANDBOX_CACHE: Dict[str, Dict[str, Any]] = {}
+
+
+def load_effective_sandbox_for_thread(thread_id: str, force: bool = False) -> str | None:
+    normalized_thread_id = (thread_id or "").strip()
+    if not normalized_thread_id:
+        return None
+
+    now = time.time()
+    cached = _EFFECTIVE_SANDBOX_CACHE.get(normalized_thread_id)
+    if (
+        not force
+        and isinstance(cached, dict)
+        and isinstance(cached.get("fetched_at"), (int, float))
+        and now - float(cached["fetched_at"]) < _EFFECTIVE_SANDBOX_CACHE_TTL_SECONDS
+    ):
+        cached_mode = cached.get("mode")
+        return cached_mode if isinstance(cached_mode, str) else None
+
+    mode = _scan_effective_sandbox_for_thread(normalized_thread_id)
+    _EFFECTIVE_SANDBOX_CACHE[normalized_thread_id] = {"fetched_at": now, "mode": mode}
+    return mode
+
+
+def _scan_effective_sandbox_for_thread(thread_id: str) -> str | None:
+    base = Path(os.path.expanduser("~")) / ".codex" / "sessions"
+    if not base.is_dir():
+        return None
+
+    pattern = f"rollout-*{thread_id}.jsonl"
+    candidates: list[tuple[float, Path]] = []
+    for path in base.rglob(pattern):
+        try:
+            candidates.append((path.stat().st_mtime, path))
+        except OSError:
+            continue
+    candidates.sort(key=lambda item: item[0], reverse=True)
+
+    for _mtime, path in candidates[:8]:
+        mode = _extract_effective_sandbox_from_rollout_file(path)
+        if mode:
+            return mode
+    return None
+
+
+def _extract_effective_sandbox_from_rollout_file(path: Path) -> str | None:
+    tail = _read_file_tail(path, max_bytes=512 * 1024)
+    if not tail:
+        return None
+
+    for line in reversed(tail.splitlines()):
+        text = line.strip()
+        if not text or "sandbox" not in text:
+            continue
+        try:
+            obj = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+
+        mode = _extract_effective_sandbox_from_rollout_event(obj)
+        if mode:
+            return mode
+    return None
+
+
+def _extract_effective_sandbox_from_rollout_event(obj: Dict[str, Any]) -> str | None:
+    turn_context_payload: Dict[str, Any] | None = None
+
+    if obj.get("type") == "event_msg":
+        payload = obj.get("payload")
+        if isinstance(payload, dict) and payload.get("type") == "turn_context":
+            nested_payload = payload.get("payload")
+            if isinstance(nested_payload, dict):
+                turn_context_payload = nested_payload
+    elif obj.get("type") == "turn_context":
+        payload = obj.get("payload")
+        if isinstance(payload, dict):
+            turn_context_payload = payload
+
+    if turn_context_payload is None:
+        payload = obj.get("payload")
+        if isinstance(payload, dict) and payload.get("type") == "turn_context":
+            nested_payload = payload.get("payload")
+            if isinstance(nested_payload, dict):
+                turn_context_payload = nested_payload
+
+    if not isinstance(turn_context_payload, dict):
+        return None
+
+    sandbox_policy = turn_context_payload.get("sandbox_policy")
+    if not isinstance(sandbox_policy, dict):
+        sandbox_policy = turn_context_payload.get("sandboxPolicy")
+    if not isinstance(sandbox_policy, dict):
+        return None
+
+    mode = sandbox_policy.get("type")
+    if mode is None:
+        mode = sandbox_policy.get("mode")
+    return _coerce_effective_sandbox_mode(mode)
+
+
+def _coerce_effective_sandbox_mode(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower().replace("_", "-")
+    return _sanitize_sandbox_mode(normalized)
 
 
 def load_latest_rate_limits(force: bool = False) -> Dict[str, Any] | None:

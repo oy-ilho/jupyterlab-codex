@@ -428,21 +428,20 @@ class CodexRunner:
         effective_sandbox = requested_sandbox or self._default_sandbox
 
         if requested_resume_session_id:
-            # `codex exec resume` is a subcommand and does not accept `--sandbox` at
-            # the resume level. Pass sandbox as a top-level global option instead.
-            args: List[str] = ["--ask-for-approval", "never"]
+            # `codex exec resume` does not accept `--sandbox` after `resume`.
+            # Sandbox must be passed as an `exec` option before the `resume` subcommand.
+            args: List[str] = [
+                "--ask-for-approval",
+                "never",
+                "exec",
+                "--json",
+                "--color",
+                "never",
+                "--skip-git-repo-check",
+            ]
             if effective_sandbox:
                 args.extend(["--sandbox", effective_sandbox])
-            args.extend(
-                [
-                    "exec",
-                    "--json",
-                    "--color",
-                    "never",
-                    "--skip-git-repo-check",
-                    "resume",
-                ]
-            )
+            args.append("resume")
             if effective_model:
                 args.extend(["-m", effective_model])
             if requested_reasoning_effort:

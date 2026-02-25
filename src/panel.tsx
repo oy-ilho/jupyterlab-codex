@@ -543,7 +543,8 @@ type ReasoningOptionValue = '__config__' | string;
 const MAX_REASONING_EFFORT_BARS = 4;
 const SANDBOX_OPTIONS = [
   { label: 'Default permission', value: 'workspace-write' },
-  { label: 'Full access', value: 'danger-full-access' }
+  { label: 'Full access', value: 'danger-full-access' },
+  { label: 'Read only', value: 'read-only' }
 ] as const;
 type SandboxMode = (typeof SANDBOX_OPTIONS)[number]['value'];
 const AUTO_SAVE_STORAGE_KEY = 'jupyterlab-codex:auto-save-before-send';
@@ -707,6 +708,14 @@ function findReasoningLabel(value: string, options: readonly ReasoningOption[]):
 
 function isKnownSandboxMode(value: string): value is SandboxMode {
   return SANDBOX_OPTIONS.some(option => option.value === value);
+}
+
+function coerceSandboxMode(value: unknown): SandboxMode | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const normalized = value.trim().toLowerCase().replace(/_/g, '-');
+  return isKnownSandboxMode(normalized) ? normalized : null;
 }
 
 function coerceNotebookMode(value: unknown): NotebookMode | null {
@@ -1805,7 +1814,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const wsRef = useRef<WebSocket | null>(null);
   const runToSessionKeyRef = useRef<Map<string, string>>(new Map());
   const activeSessionKeyByPathRef = useRef<Map<string, string>>(new Map());
-  const pendingPermissionThreadResetRef = useRef<Map<string, SandboxMode>>(new Map());
   const sessionThreadSyncIdRef = useRef<string>(createSessionEventId());
   const lastRateLimitsRefreshRef = useRef<number>(0);
   const pendingRefreshPathsRef = useRef<Set<string>>(new Set());
@@ -2247,6 +2255,21 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         commandPath: normalizedCommandPath || undefined
       })
     );
+  }
+
+  function syncEffectiveSandboxFromStatus(sessionKey: string, rawMode: unknown): void {
+    if (!sessionKey) {
+      return;
+    }
+    const currentSessionKey = currentNotebookSessionKeyRef.current || '';
+    if (!currentSessionKey || currentSessionKey !== sessionKey) {
+      return;
+    }
+    const nextMode = coerceSandboxMode(rawMode);
+    if (!nextMode) {
+      return;
+    }
+    setSandboxMode(prev => (prev === nextMode ? prev : nextMode));
   }
 
   function deleteAllSessionsOnServer(): boolean {
@@ -2835,6 +2858,9 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       }
 
       if (msg.type === 'status') {
+        if (targetSessionKey) {
+          syncEffectiveSandboxFromStatus(targetSessionKey, msg.effectiveSandbox);
+        }
         const sessionId = typeof msg.sessionId === 'string' && msg.sessionId.trim() ? msg.sessionId.trim() : '';
         const history = coerceSessionHistory(msg.history);
         if (targetSessionKey && (sessionId || history.length > 0)) {
@@ -3293,29 +3319,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     const includeCellOutputKey =
       includeActiveCell && includeActiveCellOutput && notebookMode === 'ipynb';
     const cellOutput = includeCellOutputKey ? getActiveCellOutput(props.notebooks) : '';
-    let session = ensureSession(notebookPath, sessionKey);
-    const pendingPermissionMode = pendingPermissionThreadResetRef.current.get(sessionKey);
-    if (pendingPermissionMode && pendingPermissionMode === sandboxMode) {
-      const resetSession = createThreadResetSession(notebookPath, sessionKey, createSessionEventId());
-      updateSessions(prev => {
-        const next = new Map(prev);
-        next.set(sessionKey, resetSession);
-        return next;
-      });
-      activeSessionKeyByPathRef.current.set(notebookPath, sessionKey);
-      clearRunMappingForSessionKey(sessionKey);
-      sendStartSession(resetSession, notebookPath, sessionKey, { forceNewThread: true });
-      emitSessionThreadEvent(sessionKey, notebookPath, resetSession.threadId);
-      appendMessage(
-        sessionKey,
-        'system',
-        `Started a new thread to apply permission: ${
-          sandboxMode === 'danger-full-access' ? 'Full access' : 'Default permission'
-        }.`
-      );
-      pendingPermissionThreadResetRef.current.delete(sessionKey);
-      session = resetSession;
-    }
+    const session = ensureSession(notebookPath, sessionKey);
+    const sandboxForSend = sandboxMode;
 
     const content = trimmed || (hasImages ? 'Please analyze the attached image(s).' : '');
     let images: { name: string; dataUrl: string }[] | undefined;
@@ -3341,7 +3346,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       commandPath: commandPath.trim() || undefined,
       model: selectedModel || undefined,
       reasoningEffort: selectedReasoningEffort || undefined,
-      sandbox: sandboxMode,
+      sandbox: sandboxForSend,
       images
     };
     if (includeSelectionKey) {
@@ -3992,14 +3997,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 	                    type="button"
 	                    className={`jp-CodexMenuItem ${sandboxMode === option.value ? 'is-active' : ''}`}
 	                    onClick={() => {
-	                      const previousSandbox = sandboxMode;
 	                      setSandboxMode(option.value);
-	                      const currentSessionKey = currentNotebookSessionKeyRef.current || '';
-	                      if (currentSessionKey && previousSandbox !== option.value) {
-	                        const next = new Map(pendingPermissionThreadResetRef.current);
-	                        next.set(currentSessionKey, option.value);
-	                        pendingPermissionThreadResetRef.current = next;
-	                      }
 	                      setPermissionMenuOpen(false);
 	                    }}
 	                  >

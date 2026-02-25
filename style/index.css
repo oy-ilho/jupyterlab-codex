@@ -770,6 +770,7 @@
 .jp-CodexChat-assistant {
   align-self: flex-start;
   border: 0;
+  background: transparent;
   padding-left: 0;
   padding-right: 0;
 }
