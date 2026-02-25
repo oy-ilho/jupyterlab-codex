@@ -103,6 +103,7 @@ class SessionStore:
         selection: str,
         cell_output: str,
         cwd: str | None = None,
+        notebook_mode: str = "",
     ) -> str:
         messages = self.load_messages(session_id)
         meta = self._load_meta(session_id)
@@ -110,6 +111,7 @@ class SessionStore:
         notebook_os_path = meta.get("notebook_os_path", "")
         paired_path = meta.get("paired_path", "")
         paired_os_path = meta.get("paired_os_path", "")
+        mode = _normalize_notebook_mode(notebook_mode, notebook_path, notebook_os_path)
 
         if not paired_path and not paired_os_path:
             paired_path, paired_os_path = _derive_paired_paths(notebook_path, notebook_os_path)
@@ -126,7 +128,7 @@ class SessionStore:
         if cwd:
             parts.append(f"System: Current working directory: {cwd}")
 
-        if paired_os_path:
+        if mode == "ipynb" and paired_os_path:
             parts.extend(
                 [
                     f"System: Jupytext paired file (absolute path): {paired_os_path}",
@@ -134,7 +136,7 @@ class SessionStore:
                     "System: The notebook will prompt reload when the paired file changes on disk.",
                 ]
             )
-        elif paired_path:
+        elif mode == "ipynb" and paired_path:
             parts.extend(
                 [
                     f"System: Jupytext paired file (Jupyter path): {paired_path}",
@@ -142,18 +144,53 @@ class SessionStore:
                     "System: The notebook will prompt reload when the paired file changes on disk.",
                 ]
             )
+        elif mode == "jupytext_py":
+            target = notebook_os_path or notebook_path or "<notebook>.py"
+            parts.extend(
+                [
+                    "System: Current file mode: Jupytext Python notebook script (.py).",
+                    f"System: IMPORTANT - Edit this file directly: {target}",
+                ]
+            )
+        elif mode == "plain_py":
+            target = notebook_os_path or notebook_path or "<script>.py"
+            parts.extend(
+                [
+                    "System: Current file mode: Plain Python script (.py).",
+                    f"System: IMPORTANT - Edit this file directly: {target}",
+                ]
+            )
 
-        parts.extend(
-            [
-                "",
-                "System: Instructions:",
+        if mode == "ipynb":
+            instructions = [
                 "System: 1. For code changes, modify the paired file directly using file editing tools.",
                 "System: 2. Keep edits minimal and aligned with the user request.",
                 "System: 3. The 'Current Cell Content' shows what the user is currently viewing/editing.",
                 "System: 4. If you cannot proceed due to sandbox/permission restrictions, say so explicitly and ask the user to switch Permission (shield icon) to 'Full access' and retry. If authentication is required, tell them to run `codex login` in a terminal first.",
-                "",
             ]
-        )
+        elif mode == "jupytext_py":
+            instructions = [
+                "System: 1. For code changes, modify the current .py file directly using file editing tools.",
+                "System: 2. Preserve existing Jupytext structure and metadata (YAML header and # %% cell markers) unless the user asks to change them.",
+                "System: 3. The 'Current Cell Content' is a notebook cell snippet from the .py file.",
+                "System: 4. If you cannot proceed due to sandbox/permission restrictions, say so explicitly and ask the user to switch Permission (shield icon) to 'Full access' and retry. If authentication is required, tell them to run `codex login` in a terminal first.",
+            ]
+        elif mode == "plain_py":
+            instructions = [
+                "System: 1. For code changes, modify the current .py file directly using file editing tools.",
+                "System: 2. Do not introduce Jupytext YAML headers or notebook cell markers (for example, # %%) unless the user explicitly requests it.",
+                "System: 3. If no context snippet is provided, inspect files directly before making edits.",
+                "System: 4. If you cannot proceed due to sandbox/permission restrictions, say so explicitly and ask the user to switch Permission (shield icon) to 'Full access' and retry. If authentication is required, tell them to run `codex login` in a terminal first.",
+            ]
+        else:
+            instructions = [
+                "System: 1. For code changes, inspect files directly and edit the correct target file.",
+                "System: 2. Keep edits minimal and aligned with the user request.",
+                "System: 3. The provided context snippet, if any, may be partial.",
+                "System: 4. If you cannot proceed due to sandbox/permission restrictions, say so explicitly and ask the user to switch Permission (shield icon) to 'Full access' and retry. If authentication is required, tell them to run `codex login` in a terminal first.",
+            ]
+
+        parts.extend(["", "System: Instructions:", *instructions, ""])
 
         if messages:
             parts.append("Conversation:")
@@ -163,12 +200,15 @@ class SessionStore:
                 parts.append(f"{role.title()}: {content}")
             parts.append("")
 
-        if selection:
+        include_selection = mode in {"ipynb", "jupytext_py", "plain_py"}
+        include_cell_output = mode == "ipynb"
+
+        if include_selection and selection:
             parts.append("Current Cell Content:")
             parts.append(selection)
             parts.append("")
 
-        if cell_output:
+        if include_cell_output and cell_output:
             parts.append("Current Cell Output:")
             parts.append(cell_output)
             parts.append("")
@@ -357,12 +397,33 @@ def _derive_paired_paths(notebook_path: str, notebook_os_path: str) -> Tuple[str
     paired_path = ""
     paired_os_path = ""
 
-    if notebook_path.endswith(".ipynb"):
+    notebook_path_lower = (notebook_path or "").lower()
+    notebook_os_path_lower = (notebook_os_path or "").lower()
+
+    if notebook_path_lower.endswith(".ipynb"):
         paired_path = notebook_path[:-6] + ".py"
-    if notebook_os_path.endswith(".ipynb"):
+    elif notebook_path_lower.endswith(".py"):
+        paired_path = notebook_path[:-3] + ".ipynb"
+    if notebook_os_path_lower.endswith(".ipynb"):
         paired_os_path = notebook_os_path[:-6] + ".py"
+    elif notebook_os_path_lower.endswith(".py"):
+        paired_os_path = notebook_os_path[:-3] + ".ipynb"
 
     return paired_path, paired_os_path
+
+
+def _normalize_notebook_mode(raw_mode: str, notebook_path: str, notebook_os_path: str) -> str:
+    mode = (raw_mode or "").strip().lower()
+    if mode in {"ipynb", "jupytext_py", "plain_py"}:
+        return mode
+
+    path = (notebook_path or "").strip().lower()
+    os_path = (notebook_os_path or "").strip().lower()
+    if path.endswith(".ipynb") or os_path.endswith(".ipynb"):
+        return "ipynb"
+    if path.endswith(".py") or os_path.endswith(".py"):
+        return "plain_py"
+    return "unsupported"
 
 
 def _now_iso() -> str:

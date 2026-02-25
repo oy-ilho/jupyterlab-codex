@@ -39,6 +39,13 @@ _NOISY_STDERR_PATTERNS = (
 _AUTH_REQUIRED_HINT = (
     "Authentication required: open a terminal and run `codex` (or `codex login`) to sign in, then retry."
 )
+_PY_CELL_MARKER_RE = re.compile(r"^\s*#\s*%%(?:\s|$|\[)")
+_PY_JUPYTEXT_HEADER_HINTS = (
+    "jupytext:",
+    "formats:",
+    "format_name:",
+    "text_representation:",
+)
 
 
 def _strip_noisy_stderr_lines(text: str) -> str:
@@ -226,7 +233,7 @@ class CodexWSHandler(WebSocketHandler):
                 continue
             history.append({"role": role, "content": content})
 
-        paired_ok, paired_path, paired_os_path, paired_message = _compute_pairing_status(
+        paired_ok, paired_path, paired_os_path, paired_message, notebook_mode = _compute_pairing_status(
             notebook_path, notebook_os_path
         )
         self.write_message(
@@ -242,6 +249,7 @@ class CodexWSHandler(WebSocketHandler):
                     "pairedPath": paired_path,
                     "pairedOsPath": paired_os_path,
                     "pairedMessage": paired_message,
+                    "notebookMode": notebook_mode,
                 }
             )
         )
@@ -254,7 +262,11 @@ class CodexWSHandler(WebSocketHandler):
         content = payload.get("content", "")
         session_context_key = _coerce_session_context_key(payload.get("sessionContextKey"))
         selection = payload.get("selection", "")
+        if not isinstance(selection, str):
+            selection = str(selection) if selection is not None else ""
         cell_output = payload.get("cellOutput", "")
+        if not isinstance(cell_output, str):
+            cell_output = str(cell_output) if cell_output is not None else ""
         images_payload = payload.get("images")
         notebook_path = payload.get("notebookPath", "")
         requested_model_raw = payload.get("model")
@@ -300,7 +312,7 @@ class CodexWSHandler(WebSocketHandler):
                 name = item.get("name")
                 images.append({"dataUrl": data_url, "name": name if isinstance(name, str) else ""})
 
-        paired_ok, paired_path, paired_os_path, paired_message = _compute_pairing_status(
+        paired_ok, paired_path, paired_os_path, paired_message, notebook_mode = _compute_pairing_status(
             notebook_path, notebook_os_path
         )
         if not paired_ok:
@@ -318,6 +330,7 @@ class CodexWSHandler(WebSocketHandler):
                         "pairedPath": paired_path,
                         "pairedOsPath": paired_os_path,
                         "pairedMessage": paired_message,
+                        "notebookMode": notebook_mode,
                     }
                 )
             )
@@ -334,6 +347,7 @@ class CodexWSHandler(WebSocketHandler):
                         "pairedPath": paired_path,
                         "pairedOsPath": paired_os_path,
                         "pairedMessage": paired_message,
+                        "notebookMode": notebook_mode,
                     }
                 )
             )
@@ -351,7 +365,14 @@ class CodexWSHandler(WebSocketHandler):
         watch_paths = _refresh_watch_paths(notebook_os_path)
         before_mtimes = _capture_mtimes(watch_paths)
 
-        prompt = self._store.build_prompt(session_id, content, selection, cell_output, cwd=cwd)
+        prompt = self._store.build_prompt(
+            session_id,
+            content,
+            selection,
+            cell_output,
+            cwd=cwd,
+            notebook_mode=notebook_mode,
+        )
         self._store.append_message(session_id, "user", content)
 
         async def _run():
@@ -368,6 +389,7 @@ class CodexWSHandler(WebSocketHandler):
                         "pairedPath": paired_path,
                         "pairedOsPath": paired_os_path,
                         "pairedMessage": paired_message,
+                        "notebookMode": notebook_mode,
                     }
                 )
             )
@@ -476,6 +498,7 @@ class CodexWSHandler(WebSocketHandler):
                             "pairedPath": paired_path,
                             "pairedOsPath": paired_os_path,
                             "pairedMessage": paired_message,
+                            "notebookMode": notebook_mode,
                         }
                     )
                 )
@@ -492,6 +515,7 @@ class CodexWSHandler(WebSocketHandler):
                             "pairedPath": paired_path,
                             "pairedOsPath": paired_os_path,
                             "pairedMessage": paired_message,
+                            "notebookMode": notebook_mode,
                         }
                     )
                 )
@@ -512,6 +536,7 @@ class CodexWSHandler(WebSocketHandler):
                             "pairedPath": paired_path,
                             "pairedOsPath": paired_os_path,
                             "pairedMessage": paired_message,
+                            "notebookMode": notebook_mode,
                         }
                     )
                 )
@@ -528,6 +553,7 @@ class CodexWSHandler(WebSocketHandler):
                             "pairedPath": paired_path,
                             "pairedOsPath": paired_os_path,
                             "pairedMessage": paired_message,
+                            "notebookMode": notebook_mode,
                         }
                     )
                 )
@@ -545,6 +571,7 @@ class CodexWSHandler(WebSocketHandler):
                     "pairedPath": paired_path,
                     "pairedOsPath": paired_os_path,
                     "pairedMessage": paired_message,
+                    "notebookMode": notebook_mode,
                 }
                 if suggested_command_path := hint.get("suggestedCommandPath"):
                     error_payload["suggestedCommandPath"] = suggested_command_path
@@ -562,6 +589,7 @@ class CodexWSHandler(WebSocketHandler):
                             "pairedPath": paired_path,
                             "pairedOsPath": paired_os_path,
                             "pairedMessage": paired_message,
+                            "notebookMode": notebook_mode,
                         }
                     )
                 )
@@ -575,6 +603,11 @@ class CodexWSHandler(WebSocketHandler):
                             "sessionContextKey": session_context_key,
                             "notebookPath": notebook_path,
                             "message": str(exc),
+                            "pairedOk": paired_ok,
+                            "pairedPath": paired_path,
+                            "pairedOsPath": paired_os_path,
+                            "pairedMessage": paired_message,
+                            "notebookMode": notebook_mode,
                         }
                     )
                 )
@@ -591,6 +624,7 @@ class CodexWSHandler(WebSocketHandler):
                             "pairedPath": paired_path,
                             "pairedOsPath": paired_os_path,
                             "pairedMessage": paired_message,
+                            "notebookMode": notebook_mode,
                         }
                     )
                 )
@@ -1011,6 +1045,7 @@ def _refresh_watch_paths(notebook_os_path: str) -> list[str]:
 
     absolute = os.path.abspath(notebook_os_path)
     root, ext = os.path.splitext(absolute)
+    ext = ext.lower()
     paths = [absolute]
     if ext == ".ipynb":
         paths.append(f"{root}.py")
@@ -1019,48 +1054,131 @@ def _refresh_watch_paths(notebook_os_path: str) -> list[str]:
     return paths
 
 
-def _compute_pairing_status(notebook_path: str, notebook_os_path: str) -> tuple[bool, str, str, str]:
-    """
-    This extension assumes a Jupytext paired workflow: <notebook>.ipynb <-> <notebook>.py.
+def _read_file_prefix_lines(
+    path: str,
+    *,
+    max_lines: int = 240,
+    max_chars: int = 128_000,
+) -> list[str]:
+    if not path:
+        return []
 
-    We treat the session as "paired" only when the derived paired file exists on disk.
+    lines: list[str] = []
+    total_chars = 0
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            for _ in range(max_lines):
+                line = handle.readline()
+                if not line:
+                    break
+                lines.append(line)
+                total_chars += len(line)
+                if total_chars >= max_chars:
+                    break
+    except OSError:
+        return []
+
+    return lines
+
+
+def _has_jupytext_yaml_header(lines: list[str]) -> bool:
+    if not lines:
+        return False
+
+    idx = 0
+    while idx < len(lines) and not lines[idx].strip():
+        idx += 1
+    if idx >= len(lines) or lines[idx].strip() != "# ---":
+        return False
+
+    header_lines: list[str] = []
+    for line in lines[idx + 1 : idx + 120]:
+        stripped = line.strip()
+        if stripped == "# ---":
+            break
+        # Jupytext YAML headers are comment blocks. Abort if code appears before closing marker.
+        if stripped and not line.lstrip().startswith("#"):
+            return False
+        header_lines.append(line)
+
+    if not header_lines:
+        return False
+
+    normalized = "\n".join(part.lstrip("#").strip().lower() for part in header_lines)
+    return any(hint in normalized for hint in _PY_JUPYTEXT_HEADER_HINTS)
+
+
+def _detect_python_notebook_mode(notebook_os_path: str) -> str:
+    lines = _read_file_prefix_lines(notebook_os_path)
+    if not lines:
+        return "plain_py"
+
+    if _has_jupytext_yaml_header(lines):
+        return "jupytext_py"
+
+    if any(_PY_CELL_MARKER_RE.match(line) for line in lines):
+        return "jupytext_py"
+
+    return "plain_py"
+
+
+def _compute_pairing_status(notebook_path: str, notebook_os_path: str) -> tuple[bool, str, str, str, str]:
+    """
+    Determine run gating status and notebook mode.
+
+    Supported modes:
+    - ipynb: requires a paired .py file to exist.
+    - jupytext_py: .py file with Jupytext metadata/cell markers.
+    - plain_py: regular .py script opened as a notebook.
     """
     nb_path = (notebook_path or "").strip()
     nb_os_path = (notebook_os_path or "").strip()
+    nb_path_lower = nb_path.lower()
+    nb_os_path_lower = nb_os_path.lower()
 
     paired_path = ""
-    if nb_path.endswith(".ipynb"):
+    if nb_path_lower.endswith(".ipynb"):
         paired_path = nb_path[:-6] + ".py"
+    elif nb_path_lower.endswith(".py"):
+        paired_path = nb_path[:-3] + ".ipynb"
 
     paired_os_path = ""
-    if nb_os_path.endswith(".ipynb"):
+    if nb_os_path_lower.endswith(".ipynb"):
         paired_os_path = nb_os_path[:-6] + ".py"
+    elif nb_os_path_lower.endswith(".py"):
+        paired_os_path = nb_os_path[:-3] + ".ipynb"
 
     # If we cannot resolve OS paths (e.g. non-local content manager), be conservative and block.
-    if nb_path.endswith(".ipynb") and not paired_os_path:
+    if (nb_path_lower.endswith(".ipynb") or nb_os_path_lower.endswith(".ipynb")) and not paired_os_path:
         return (
             False,
             paired_path,
             "",
             "Jupytext paired file is required, but the server could not resolve a local path for this notebook.",
+            "ipynb",
         )
 
-    if nb_path.endswith(".ipynb"):
+    if nb_path_lower.endswith(".ipynb") or nb_os_path_lower.endswith(".ipynb"):
         exists = bool(paired_os_path) and os.path.isfile(paired_os_path)
         if exists:
-            return True, paired_path, paired_os_path, ""
+            return True, paired_path, paired_os_path, "", "ipynb"
         message = (
             "Jupytext paired file not found. This extension requires a paired .py file.\n"
             f"Expected: {paired_os_path or paired_path or '<notebook>.py'}"
         )
-        return False, paired_path, paired_os_path, message
+        return False, paired_path, paired_os_path, message, "ipynb"
+
+    if nb_path_lower.endswith(".py") or nb_os_path_lower.endswith(".py"):
+        notebook_mode = _detect_python_notebook_mode(nb_os_path)
+        return True, paired_path, paired_os_path, "", notebook_mode
 
     # Unknown/unsupported path types: block to avoid telling Codex to edit the wrong thing.
     return (
         False,
         paired_path,
         paired_os_path,
-        "Jupytext paired workflow is required, but this file type is not supported.",
+        "Only .ipynb and .py notebook documents are supported.",
+        "unsupported",
     )
 
 

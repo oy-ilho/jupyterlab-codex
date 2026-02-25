@@ -462,6 +462,8 @@ type CliDefaultsSnapshot = {
   availableModels?: ModelCatalogEntry[];
 };
 
+type NotebookMode = 'ipynb' | 'jupytext_py' | 'plain_py' | 'unsupported';
+
 type NotebookSession = {
   threadId: string;
   messages: ChatEntry[];
@@ -474,6 +476,7 @@ type NotebookSession = {
   pairedPath: string;
   pairedOsPath: string;
   pairedMessage: string;
+  notebookMode: NotebookMode | null;
 };
 
 type SessionThreadSyncEvent = {
@@ -667,6 +670,24 @@ function isKnownSandboxMode(value: string): value is SandboxMode {
   return SANDBOX_OPTIONS.some(option => option.value === value);
 }
 
+function coerceNotebookMode(value: unknown): NotebookMode | null {
+  if (value === 'ipynb' || value === 'jupytext_py' || value === 'plain_py' || value === 'unsupported') {
+    return value;
+  }
+  return null;
+}
+
+function inferNotebookModeFromPath(path: string): NotebookMode {
+  const normalized = (path || '').trim().toLowerCase();
+  if (normalized.endsWith('.ipynb')) {
+    return 'ipynb';
+  }
+  if (normalized.endsWith('.py')) {
+    return 'plain_py';
+  }
+  return 'unsupported';
+}
+
 function makeSessionKey(path: string): string {
   const normalizedPath = (path || '').trim();
   if (!normalizedPath) {
@@ -858,6 +879,7 @@ function createSession(
     pairedPath: '',
     pairedOsPath: '',
     pairedMessage: '',
+    notebookMode: null,
   };
 }
 
@@ -2358,6 +2380,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       pairedPath: string;
       pairedOsPath: string;
       pairedMessage: string;
+      notebookMode: NotebookMode | null;
     }
   ): void {
     const targetSessionKey = sessionKey || currentNotebookSessionKeyRef.current || '';
@@ -2369,7 +2392,11 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       const next = new Map(prev);
       const session =
         next.get(targetSessionKey) ?? createSession('', `Session started`, { sessionKey: targetSessionKey });
-      next.set(targetSessionKey, { ...session, ...pairing });
+      next.set(targetSessionKey, {
+        ...session,
+        ...pairing,
+        notebookMode: pairing.notebookMode ?? session.notebookMode,
+      });
       return next;
     });
   }
@@ -2512,7 +2539,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     if (context.model.dirty) {
       const result = await showDialog({
         title: 'Notebook has unsaved changes',
-        body: 'Codex updated the paired file. Reload notebook now? (Unsaved changes will be lost.)',
+        body: 'Codex updated notebook source files. Reload notebook now? (Unsaved changes will be lost.)',
         buttons: [Dialog.cancelButton(), Dialog.okButton({ label: 'Reload' })]
       });
       if (!result.button.accept) {
@@ -2788,8 +2815,9 @@ function CodexChat(props: CodexChatProps): JSX.Element {
           const pairedPath = typeof msg.pairedPath === 'string' ? msg.pairedPath : '';
           const pairedOsPath = typeof msg.pairedOsPath === 'string' ? msg.pairedOsPath : '';
           const pairedMessage = typeof msg.pairedMessage === 'string' ? msg.pairedMessage : '';
-          if (pairedOk !== null || pairedPath || pairedOsPath || pairedMessage) {
-            setSessionPairing(targetSessionKey, { pairedOk, pairedPath, pairedOsPath, pairedMessage });
+          const notebookMode = coerceNotebookMode(msg.notebookMode);
+          if (pairedOk !== null || pairedPath || pairedOsPath || pairedMessage || notebookMode !== null) {
+            setSessionPairing(targetSessionKey, { pairedOk, pairedPath, pairedOsPath, pairedMessage, notebookMode });
           }
         }
         if (msg.state === 'running' && targetSessionKey) {
@@ -2845,8 +2873,9 @@ function CodexChat(props: CodexChatProps): JSX.Element {
           const pairedPath = typeof msg.pairedPath === 'string' ? msg.pairedPath : '';
           const pairedOsPath = typeof msg.pairedOsPath === 'string' ? msg.pairedOsPath : '';
           const pairedMessage = typeof msg.pairedMessage === 'string' ? msg.pairedMessage : '';
-          if (pairedOk !== null || pairedPath || pairedOsPath || pairedMessage) {
-            setSessionPairing(targetSessionKey, { pairedOk, pairedPath, pairedOsPath, pairedMessage });
+          const notebookMode = coerceNotebookMode(msg.notebookMode);
+          if (pairedOk !== null || pairedPath || pairedOsPath || pairedMessage || notebookMode !== null) {
+            setSessionPairing(targetSessionKey, { pairedOk, pairedPath, pairedOsPath, pairedMessage, notebookMode });
           }
         }
         if (targetSessionKey) {
@@ -2865,8 +2894,9 @@ function CodexChat(props: CodexChatProps): JSX.Element {
           const pairedPath = typeof msg.pairedPath === 'string' ? msg.pairedPath : '';
           const pairedOsPath = typeof msg.pairedOsPath === 'string' ? msg.pairedOsPath : '';
           const pairedMessage = typeof msg.pairedMessage === 'string' ? msg.pairedMessage : '';
-          if (pairedOk !== null || pairedPath || pairedOsPath || pairedMessage) {
-            setSessionPairing(targetSessionKey, { pairedOk, pairedPath, pairedOsPath, pairedMessage });
+          const notebookMode = coerceNotebookMode(msg.notebookMode);
+          if (pairedOk !== null || pairedPath || pairedOsPath || pairedMessage || notebookMode !== null) {
+            setSessionPairing(targetSessionKey, { pairedOk, pairedPath, pairedOsPath, pairedMessage, notebookMode });
           }
         }
         const exitCode = typeof msg.exitCode === 'number' ? msg.exitCode : null;
@@ -3179,9 +3209,24 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       }
     }
 
-    const selection = includeActiveCell ? getActiveCellText(props.notebooks) : '';
-    const cellOutput =
-      includeActiveCell && includeActiveCellOutput ? getActiveCellOutput(props.notebooks) : '';
+    const notebookMode = current?.notebookMode ?? inferNotebookModeFromPath(notebookPath);
+    let includeSelectionKey = false;
+    let selection = '';
+    if (includeActiveCell) {
+      if (notebookMode === 'plain_py') {
+        const selectedText = getSelectedTextFromActiveCell(props.notebooks);
+        if (selectedText) {
+          includeSelectionKey = true;
+          selection = selectedText;
+        }
+      } else {
+        includeSelectionKey = true;
+        selection = getActiveCellText(props.notebooks);
+      }
+    }
+    const includeCellOutputKey =
+      includeActiveCell && includeActiveCellOutput && notebookMode === 'ipynb';
+    const cellOutput = includeCellOutputKey ? getActiveCellOutput(props.notebooks) : '';
     const session = ensureSession(notebookPath, sessionKey);
 
     const content = trimmed || (hasImages ? 'Please analyze the attached image(s).' : '');
@@ -3199,22 +3244,26 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       }
     }
 
-    socket.send(
-      JSON.stringify({
-        type: 'send',
-        sessionId: session.threadId,
-        sessionContextKey: sessionKey,
-        content,
-        selection,
-        cellOutput,
-        notebookPath,
-        commandPath: commandPath.trim() || undefined,
-        model: selectedModel || undefined,
-        reasoningEffort: selectedReasoningEffort || undefined,
-        sandbox: sandboxMode,
-        images
-      })
-    );
+    const sendPayload: Record<string, unknown> = {
+      type: 'send',
+      sessionId: session.threadId,
+      sessionContextKey: sessionKey,
+      content,
+      notebookPath,
+      commandPath: commandPath.trim() || undefined,
+      model: selectedModel || undefined,
+      reasoningEffort: selectedReasoningEffort || undefined,
+      sandbox: sandboxMode,
+      images
+    };
+    if (includeSelectionKey) {
+      sendPayload.selection = selection;
+    }
+    if (includeCellOutputKey) {
+      sendPayload.cellOutput = cellOutput;
+    }
+
+    socket.send(JSON.stringify(sendPayload));
 
     const imageCount = pendingImagesRef.current.length;
     updateSessions(prev => {
@@ -4035,6 +4084,49 @@ function getActiveCellText(notebooks: INotebookTracker): string {
   }
   const activeCell = widget.content.activeCell;
   return activeCell ? activeCell.model.sharedModel.getSource() : '';
+}
+
+function getSelectedTextFromActiveCell(notebooks: INotebookTracker): string {
+  const widget = notebooks.currentWidget;
+  if (!widget) {
+    return '';
+  }
+  const activeCell = widget.content.activeCell;
+  if (!activeCell) {
+    return '';
+  }
+
+  try {
+    const editor: any = (activeCell as any).editor;
+    if (!editor || typeof editor.getSelection !== 'function' || typeof editor.getOffsetAt !== 'function') {
+      return '';
+    }
+
+    const range = editor.getSelection();
+    if (!range || !range.start || !range.end) {
+      return '';
+    }
+
+    const startOffset = Number(editor.getOffsetAt(range.start));
+    const endOffset = Number(editor.getOffsetAt(range.end));
+    if (!Number.isFinite(startOffset) || !Number.isFinite(endOffset)) {
+      return '';
+    }
+
+    const from = Math.max(0, Math.min(startOffset, endOffset));
+    const to = Math.max(0, Math.max(startOffset, endOffset));
+    if (to <= from) {
+      return '';
+    }
+
+    const source = activeCell.model.sharedModel.getSource();
+    if (!source) {
+      return '';
+    }
+    return source.slice(from, to);
+  } catch {
+    return '';
+  }
 }
 
 const ACTIVE_CELL_OUTPUT_MAX_CHARS = 6000;

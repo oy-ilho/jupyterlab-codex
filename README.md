@@ -23,8 +23,11 @@ Follow this order for the easiest setup.
 2. Start JupyterLab again.
 3. Confirm `Codex` appears in the right sidebar.
 
-4) Create Jupytext pairs (`.ipynb` <-> `.py`)
-- This extension requires a Jupytext paired workflow.
+4) Notebook modes (`.ipynb` / `.py`)
+- `.ipynb` mode: requires a same-name paired `.py` file.
+- `.py` mode: works with or without a paired `.ipynb`.
+  - `jupytext_py`: detected when Jupytext metadata/header or `# %%` cell markers are present.
+  - `plain_py`: detected for regular Python scripts without Jupytext markers.
 
 ### A. Start from `.ipynb`
 1. Open the notebook.
@@ -38,7 +41,9 @@ Follow this order for the easiest setup.
 3. Select `.ipynb`.
 4. Confirm a same-name `.ipynb` file exists.
 
-Note: For Codex sidebar usage, the paired `.ipynb` and `.py` should both exist with the same base name.
+Note:
+- In `.ipynb` mode, the paired `.py` file must exist with the same base name.
+- In `.py` mode, pairing is optional.
 
 A JupyterLab 4 sidebar extension that connects to Codex CLI (`codex exec --json`) and provides a chat-style assistant UI.
 
@@ -52,8 +57,10 @@ The backend runs `codex` as a local subprocess per request, streams JSONL events
 - Threaded sessions by notebook path
 - Model / Reasoning Effort / Sandbox selection in the UI
 - Optional inclusion of active cell text
-- Designed for a Jupytext paired workflow (`.ipynb` <-> `.py`)
-  - execution is disabled if the paired `.py` file is missing
+- Mode-aware behavior by file type
+  - `.ipynb`: requires paired `.py`; sends active cell context and optional active cell output
+  - `.py` (`jupytext_py`): sends active cell context, preserves Jupytext structure/markers
+  - `.py` (`plain_py`): sends `selection` only when text is explicitly selected, and avoids introducing Jupytext markers unless requested
 - Conversation/session logs: `~/.jupyter/codex-sessions/`
 - Optional usage snapshot: best-effort scan of recent `~/.codex/sessions/`
 
@@ -136,6 +143,11 @@ jupyter lab
 - Include active cell output
 - Model / Reasoning Effort / Permission
 
+Mode-specific context rules:
+- `cellOutput` is sent only in `.ipynb` mode.
+- In `.py` modes, `cellOutput` is not sent (`cellOutput` key is omitted).
+- In `plain_py` mode, `selection` is sent only when text is explicitly selected; otherwise the `selection` key is omitted.
+
 ## Configuration
 Server-side defaults can also be set via environment variables:
 - `JUPYTERLAB_CODEX_MODEL`: default model when unset in UI/command
@@ -212,8 +224,11 @@ Selected UI values are passed as CLI args.
 2. JupyterLab 재실행
 3. 우측 사이드바에 `Codex` 패널이 보이는지 확인
 
-4) Jupytext 페어링 만들기 (`.ipynb` <-> `.py`)
-- 이 확장은 Jupytext 페어링 워크플로우를 전제로 합니다.
+4) 문서 모드(`.ipynb` / `.py`)
+- `.ipynb` 모드: 같은 이름의 페어 `.py` 파일이 필요합니다.
+- `.py` 모드: 페어 `.ipynb`가 없어도 동작합니다.
+  - `jupytext_py`: Jupytext 메타데이터/헤더 또는 `# %%` 셀 마커가 있으면 감지
+  - `plain_py`: Jupytext 마커가 없는 일반 Python 스크립트로 감지
 
 ### A. `.ipynb` 파일에서 시작할 때
 1. 노트북(`.ipynb`) 열기
@@ -227,7 +242,9 @@ Selected UI values are passed as CLI args.
 3. `.ipynb` 포맷으로 페어링
 4. 같은 이름의 `.ipynb` 파일이 생성되었는지 확인
 
-참고: Codex 사이드바 사용 시에는 같은 이름의 `.ipynb`와 `.py` 페어가 모두 있어야 합니다.
+참고:
+- `.ipynb` 모드에서는 같은 이름의 페어 `.py`가 반드시 있어야 합니다.
+- `.py` 모드에서는 페어링이 선택 사항입니다.
 
 JupyterLab 4 우측 사이드바에서 Codex CLI(`codex exec --json`)를 채팅 UI로 사용할 수 있게 해주는 확장입니다.
 
@@ -241,7 +258,10 @@ JupyterLab 4 우측 사이드바에서 Codex CLI(`codex exec --json`)를 채팅 
 - 노트북 경로 기준으로 스레드(세션) 분리
 - 모델 / Reasoning Effort / 샌드박스 권한을 UI에서 선택
 - 활성 셀 텍스트를 프롬프트에 포함할지 선택
-- `.ipynb` ↔ `.py`(Jupytext paired) 워크플로우를 전제로 동작(페어링된 `.py`가 없으면 실행이 비활성화됨)
+- 파일 타입별 모드 동작
+  - `.ipynb`: 페어 `.py`가 필요하며, active cell/context 및 active cell output을 전송
+  - `.py` (`jupytext_py`): active cell context를 전송하고 Jupytext 구조/마커를 보존
+  - `.py` (`plain_py`): 텍스트를 명시적으로 선택한 경우에만 `selection`을 전송하고, 요청 없이는 Jupytext 마커를 추가하지 않음
 - 세션 로그 저장: `~/.jupyter/codex-sessions/`
 - (가능한 경우) Codex 사용량 스냅샷 표시: `~/.codex/sessions/` 를 best-effort로 스캔
 
@@ -335,6 +355,11 @@ jupyter lab
 - Include active cell: 활성 셀 텍스트를 프롬프트에 포함
 - Include active cell output: 활성 셀 output(텍스트 위주)을 프롬프트에 포함
 - Model / Reasoning Effort / Permission(샌드박스)
+
+모드별 컨텍스트 전송 규칙:
+- `cellOutput`은 `.ipynb` 모드에서만 전송됩니다.
+- `.py` 모드에서는 `cellOutput` key 자체를 보내지 않습니다.
+- `plain_py` 모드에서는 텍스트를 명시적으로 선택한 경우에만 `selection` key를 보내며, 선택이 없으면 key를 보내지 않습니다.
 
 ## 설정(옵션)
 서버 측 기본값은 환경 변수로도 지정할 수 있습니다.
