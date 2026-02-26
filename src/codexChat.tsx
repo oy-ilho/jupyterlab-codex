@@ -565,6 +565,7 @@ type ReasoningOption = {
   value: string;
 };
 type ReasoningOptionValue = '__config__' | string;
+const DEFAULT_REASONING_EFFORT = 'medium';
 const MAX_REASONING_EFFORT_BARS = 4;
 const SANDBOX_OPTIONS = [
   { label: 'Default permission', value: 'workspace-write' },
@@ -690,6 +691,14 @@ function buildReasoningOptions(rawModels: unknown, selectedModel: string): Reaso
   }
 
   return Array.from(deduped.values());
+}
+
+function resolveFallbackReasoningEffort(options: readonly ReasoningOption[]): string {
+  const medium = options.find(option => coerceReasoningEffort(option.value) === DEFAULT_REASONING_EFFORT);
+  if (medium) {
+    return medium.value;
+  }
+  return options[0]?.value ?? DEFAULT_REASONING_EFFORT;
 }
 
 function findReasoningLabel(value: string, options: readonly ReasoningOption[]): string {
@@ -2042,10 +2051,21 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     if (reasoningEffort === '__config__') {
       return;
     }
-    if (!reasoningOptions.some(option => option.value === reasoningEffort)) {
+    if (reasoningOptions.length > 0 && !reasoningOptions.some(option => option.value === reasoningEffort)) {
       setCurrentSessionReasoningEffort('__config__');
     }
   }, [reasoningEffort, reasoningOptions]);
+
+  useEffect(() => {
+    if (reasoningEffort !== '__config__') {
+      return;
+    }
+    if (coerceReasoningEffort(autoReasoningEffort || '')) {
+      return;
+    }
+    const fallbackReasoning = resolveFallbackReasoningEffort(reasoningOptions);
+    setCurrentSessionReasoningEffort(fallbackReasoning);
+  }, [reasoningEffort, autoReasoningEffort, reasoningOptions]);
 
   useEffect(() => {
     if (modelOption === '__config__') {
@@ -3590,7 +3610,9 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     const selectedModelForSend =
       modelForSend === '__config__' ? (autoModel || '').trim() : modelForSend.trim();
     const selectedReasoningForSend =
-      reasoningForSend === '__config__' ? coerceReasoningEffort(autoReasoningEffort || '') : reasoningForSend;
+      reasoningForSend === '__config__'
+        ? coerceReasoningEffort(autoReasoningEffort || '') || resolveFallbackReasoningEffort(reasoningOptions)
+        : reasoningForSend;
     if (!selectedModelForSend) {
       appendMessage(
         sessionKey,
