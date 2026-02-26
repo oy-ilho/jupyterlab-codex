@@ -928,10 +928,7 @@ function normalizeStoredSelectionPreviewEntry(
     typeof previewObj.locationLabel === 'string' ? previewObj.locationLabel.trim() : '';
   const previewText =
     typeof previewObj.previewText === 'string'
-      ? truncateEnd(
-          previewObj.previewText.replace(/\s+/g, ' ').trim(),
-          MESSAGE_SELECTION_PREVIEW_STORED_MAX_CHARS
-        )
+      ? truncateEnd(normalizeSelectionPreviewText(previewObj.previewText), MESSAGE_SELECTION_PREVIEW_STORED_MAX_CHARS)
       : '';
   if (!locationLabel || !previewText) {
     return { contentHash, preview: null };
@@ -1040,7 +1037,7 @@ function coerceSelectionPreview(value: unknown): SelectionPreview | undefined {
   const locationLabel = typeof raw.locationLabel === 'string' ? raw.locationLabel.trim() : '';
   const previewText =
     typeof raw.previewText === 'string'
-      ? truncateEnd(raw.previewText.replace(/\s+/g, ' ').trim(), MESSAGE_SELECTION_PREVIEW_STORED_MAX_CHARS)
+      ? truncateEnd(normalizeSelectionPreviewText(raw.previewText), MESSAGE_SELECTION_PREVIEW_STORED_MAX_CHARS)
       : '';
   if (!locationLabel || !previewText) {
     return undefined;
@@ -1849,6 +1846,10 @@ function renderMarkdownToSafeHtml(markdown: string): string {
   }
 }
 
+function normalizeSelectionPreviewText(text: string): string {
+  return (text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+}
+
 function normalizeMathDelimiters(markdown: string): string {
   const normalizedEscapedBlock = markdown.replace(
     /(^|[^\\])\\\[([\s\S]*?)\\\]/g,
@@ -1950,6 +1951,19 @@ function MessageText(props: { text: string; canCopyCode?: boolean }): JSX.Elemen
         return <div key={idx} className="jp-CodexMarkdown" dangerouslySetInnerHTML={{ __html: html }} />;
       })}
     </div>
+  );
+}
+
+function SelectionPreviewCode(props: { code: string }): JSX.Element {
+  const displayCode = formatSelectionPreviewTextForDisplay(props.code);
+  const highlightedCode = useMemo(
+    () => renderHighlightedCodeToSafeHtml(displayCode, ''),
+    [displayCode]
+  );
+  return (
+    <pre className="jp-CodexCodeBlock jp-CodexChat-selectionCode">
+      <code className="hljs" dangerouslySetInnerHTML={{ __html: highlightedCode }} />
+    </pre>
   );
 }
 
@@ -4384,9 +4398,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         {selectionPopover && (
           <div className="jp-CodexChat-selectionCard" role="note" aria-label="Selected text context">
             <div className="jp-CodexChat-selectionMeta">{selectionPopover.preview.locationLabel}</div>
-            <div className="jp-CodexChat-selectionText">
-              {formatSelectionPreviewTextForDisplay(selectionPopover.preview.previewText)}
-            </div>
+            <SelectionPreviewCode code={selectionPopover.preview.previewText} />
           </div>
         )}
       </PortalMenu>
@@ -5121,7 +5133,7 @@ function toSelectionPreview(context: SelectedContext | null): SelectionPreview |
   if (!context) {
     return undefined;
   }
-  const normalized = context.text.replace(/\s+/g, ' ').trim();
+  const normalized = normalizeSelectionPreviewText(context.text);
   if (!normalized) {
     return undefined;
   }
@@ -5133,7 +5145,7 @@ function toSelectionPreview(context: SelectedContext | null): SelectionPreview |
 }
 
 function formatSelectionPreviewTextForDisplay(previewText: string): string {
-  return truncateEnd((previewText || '').trim(), MESSAGE_SELECTION_PREVIEW_DISPLAY_MAX_CHARS);
+  return truncateEnd(normalizeSelectionPreviewText(previewText), MESSAGE_SELECTION_PREVIEW_DISPLAY_MAX_CHARS);
 }
 
 function toFallbackSelectionPreview(
@@ -5141,7 +5153,7 @@ function toFallbackSelectionPreview(
   notebookMode: NotebookMode,
   text: string
 ): SelectionPreview | undefined {
-  const normalized = (text || '').replace(/\s+/g, ' ').trim();
+  const normalized = normalizeSelectionPreviewText(text);
   if (!normalized) {
     return undefined;
   }

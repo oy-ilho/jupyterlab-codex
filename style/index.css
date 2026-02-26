@@ -1005,6 +1005,19 @@
   word-break: break-word;
 }
 
+.jp-CodexChat-selectionCode {
+  margin-top: 6px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--cdx-border) 78%, transparent);
+  background: color-mix(in srgb, var(--cdx-surface) 86%, var(--cdx-surface-2));
+  padding: 8px 10px;
+  overflow: auto;
+}
+
+.jp-CodexChat-selectionCode code.hljs {
+  white-space: pre;
+}
+
 .jp-CodexChat-message.has-selection-preview {
   overflow: visible;
 }

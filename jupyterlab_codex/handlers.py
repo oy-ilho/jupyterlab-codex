@@ -102,7 +102,7 @@ def _coerce_ui_selection_preview(value: Any) -> Dict[str, str] | None:
         return None
 
     location = re.sub(r"\s+", " ", location_raw).strip()
-    preview_text = re.sub(r"\s+", " ", preview_raw).strip()
+    preview_text = preview_raw.replace("\r\n", "\n").replace("\r", "\n").strip()
     if not location or not preview_text:
         return None
 

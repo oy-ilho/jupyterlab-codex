@@ -659,7 +659,8 @@ def _sanitize_ui_payload(raw: Dict[str, Any] | None) -> Dict[str, Any]:
 
     location = _sanitize_message(location_raw.strip(), _DEFAULT_UI_LABEL_MAX_CHARS)
     preview_text = _sanitize_message(
-        re.sub(r"\s+", " ", preview_text_raw).strip(), _DEFAULT_UI_PREVIEW_MAX_CHARS
+        preview_text_raw.replace("\r\n", "\n").replace("\r", "\n").strip(),
+        _DEFAULT_UI_PREVIEW_MAX_CHARS,
     )
     if not location or not preview_text:
         return {}
