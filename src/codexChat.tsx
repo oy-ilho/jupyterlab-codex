@@ -273,6 +273,8 @@ function PortalMenu(props: {
   role?: 'dialog' | 'menu';
   align?: 'left' | 'right';
   ariaLabel?: string;
+  constrainHeightToViewport?: boolean;
+  viewportMargin?: number;
   onMouseEnter?: () => void;
   onMouseLeave?: () => void;
   children: React.ReactNode;
@@ -285,6 +287,8 @@ function PortalMenu(props: {
     role = 'dialog',
     align = 'left',
     ariaLabel,
+    constrainHeightToViewport = false,
+    viewportMargin,
     onMouseEnter,
     onMouseLeave,
     children
@@ -307,27 +311,59 @@ function PortalMenu(props: {
         return;
       }
 
-      const margin = 8;
+      const margin = Math.max(0, Math.floor(viewportMargin ?? 8));
       const offset = 10;
-      const viewportW = window.innerWidth;
-      const viewportH = window.innerHeight;
+      const viewportW = window.visualViewport?.width ?? window.innerWidth;
+      const viewportH = window.visualViewport?.height ?? window.innerHeight;
+      const viewportLeft = window.visualViewport?.offsetLeft ?? 0;
+      const viewportTop = window.visualViewport?.offsetTop ?? 0;
+      const bubbleEl = anchor.closest('.jp-CodexChat-message');
+      let bubbleMarginY = 0;
+      if (bubbleEl && bubbleEl instanceof HTMLElement) {
+        const bubbleStyle = window.getComputedStyle(bubbleEl);
+        const bubbleMarginTop = Number.parseFloat(bubbleStyle.marginTop) || 0;
+        const bubbleMarginBottom = Number.parseFloat(bubbleStyle.marginBottom) || 0;
+        bubbleMarginY = Math.max(0, Math.max(bubbleMarginTop, bubbleMarginBottom));
+      }
+      const viewportEdgePadding = margin + Math.round(bubbleMarginY);
       const anchorRect = anchor.getBoundingClientRect();
       const popRect = popover.getBoundingClientRect();
+      const maxHeight = Math.max(80, Math.floor(viewportH - viewportEdgePadding * 2));
+      const effectiveHeight = constrainHeightToViewport
+        ? Math.min(popRect.height, maxHeight)
+        : popRect.height;
 
       // Default: above, aligned to the anchor.
       let left = align === 'right' ? anchorRect.right - popRect.width : anchorRect.left;
-      left = clampNumber(left, margin, Math.max(margin, viewportW - popRect.width - margin));
+      left = clampNumber(
+        left,
+        viewportLeft + margin,
+        Math.max(viewportLeft + margin, viewportLeft + viewportW - popRect.width - margin)
+      );
 
-      let top = anchorRect.top - offset - popRect.height;
+      let top = anchorRect.top - offset - effectiveHeight;
       const belowTop = anchorRect.bottom + offset;
-      if (top < margin && belowTop + popRect.height + margin <= viewportH) {
+      const minTop = viewportTop + viewportEdgePadding;
+      const maxBottom = viewportTop + viewportH;
+      if (top < minTop && belowTop + effectiveHeight + viewportEdgePadding <= maxBottom) {
         top = belowTop;
       }
-      top = clampNumber(top, margin, Math.max(margin, viewportH - popRect.height - margin));
+      top = clampNumber(
+        top,
+        minTop,
+        Math.max(minTop, maxBottom - effectiveHeight - viewportEdgePadding)
+      );
 
       setStyle({
         left: Math.round(left),
         top: Math.round(top),
+        ...(constrainHeightToViewport
+          ? {
+              maxHeight: `${maxHeight}px`,
+              overflowY: 'auto',
+              overflowX: 'auto'
+            }
+          : {}),
         visibility: 'visible'
       });
     };
@@ -343,7 +379,7 @@ function PortalMenu(props: {
       window.removeEventListener('resize', onResize);
       window.removeEventListener('scroll', onScroll, true);
     };
-  }, [open, anchorRef, popoverRef]);
+  }, [open, anchorRef, popoverRef, align, constrainHeightToViewport, viewportMargin]);
 
   if (!open) {
     return null;
@@ -608,8 +644,8 @@ const SESSION_KEY_SEPARATOR = '\u0000';
 const MAX_IMAGE_ATTACHMENTS = 4;
 const MAX_IMAGE_ATTACHMENT_BYTES = 4 * 1024 * 1024; // Avoid huge WebSocket payloads.
 const MAX_IMAGE_ATTACHMENT_TOTAL_BYTES = 6 * 1024 * 1024;
-const MESSAGE_SELECTION_PREVIEW_DISPLAY_MAX_CHARS = 1000;
-const MESSAGE_SELECTION_PREVIEW_STORED_MAX_CHARS = 1000;
+const MESSAGE_SELECTION_PREVIEW_DISPLAY_MAX_CHARS = 500;
+const MESSAGE_SELECTION_PREVIEW_STORED_MAX_CHARS = 500;
 const MAX_STORED_SELECTION_PREVIEW_THREADS = 80;
 const MAX_STORED_SELECTION_PREVIEW_MESSAGES_PER_THREAD = 10;
 const READ_ONLY_PERMISSION_WARNING = 'Code changes are not available with the current permission (Read only).';
@@ -4180,6 +4216,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         popoverRef={selectionPopoverRef}
         className="jp-CodexChat-selectionPopover"
         ariaLabel="Message context"
+        constrainHeightToViewport={true}
+        viewportMargin={20}
         role="dialog"
         align="right"
       >

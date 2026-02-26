@@ -1729,6 +1729,15 @@
   --cdx-good: var(--jp-success-color1, #22c55e);
   --cdx-warn: var(--jp-warn-color1, #f97316);
   --cdx-bad: var(--jp-error-color1, #ef4444);
+  --cdx-code-text: var(--cdx-text);
+  --cdx-code-comment: #6b7280;
+  --cdx-code-keyword: #7c3aed;
+  --cdx-code-string: #0f766e;
+  --cdx-code-number: #b45309;
+  --cdx-code-function: #0f766e;
+  --cdx-code-variable: #1d4ed8;
+  --cdx-code-operator: #334155;
+  --cdx-code-title: #0f172a;
 
   --cdx-radius: 14px;
   --cdx-radius-sm: 10px;
@@ -1746,11 +1755,40 @@
   color: var(--cdx-text);
 }
 
+.jp-mod-theme-light .jp-CodexMenuPortal {
+  --cdx-code-text: #0f172a;
+  --cdx-code-comment: #6b7280;
+  --cdx-code-keyword: #7c3aed;
+  --cdx-code-string: #0f766e;
+  --cdx-code-number: #b45309;
+  --cdx-code-function: #0f766e;
+  --cdx-code-variable: #1d4ed8;
+  --cdx-code-operator: #334155;
+  --cdx-code-title: #0f172a;
+}
+
+.jp-mod-theme-dark .jp-CodexMenuPortal {
+  --cdx-code-text: #e2e8f0;
+  --cdx-code-comment: #94a3b8;
+  --cdx-code-keyword: #c084fc;
+  --cdx-code-string: #5eead4;
+  --cdx-code-number: #fbbf24;
+  --cdx-code-function: #4ade80;
+  --cdx-code-variable: #93c5fd;
+  --cdx-code-operator: #cbd5e1;
+  --cdx-code-title: #f8fafc;
+}
+
 .jp-CodexMenu.jp-CodexChat-selectionPopover {
   min-width: min(18ch, calc(100vw - 24px)) !important;
   width: fit-content !important;
   max-width: min(600px, calc(100vw - 24px)) !important;
+  max-height: calc(100vh - 48px) !important;
+  max-height: calc(100dvh - 48px) !important;
   padding: 8px !important;
+  overflow: auto !important;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .jp-CodexUsageBtn {

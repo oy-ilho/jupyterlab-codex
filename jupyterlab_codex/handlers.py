@@ -120,7 +120,7 @@ def _coerce_ui_preview(value: Any) -> Dict[str, str] | None:
 
     return {
         "locationLabel": location[:80],
-        "previewText": preview_text[:1000],
+        "previewText": preview_text[:500],
     }
 
 
