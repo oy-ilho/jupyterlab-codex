@@ -415,6 +415,20 @@ function CheckIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
   );
 }
 
+function FileIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" {...props}>
+      <path
+        d="M8 3h6l5 5v10.5A2.5 2.5 0 0 1 16.5 21h-9A2.5 2.5 0 0 1 5 18.5v-13A2.5 2.5 0 0 1 7.5 3H8Z"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinejoin="round"
+      />
+      <path d="M14 3v5h5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 function XIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
   return (
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" {...props}>
@@ -1534,6 +1548,133 @@ function humanizeToken(value: string): string {
     .join(' ');
 }
 
+function fileNameFromPath(path: string): string {
+  const raw = (path || '').trim();
+  if (!raw) {
+    return '';
+  }
+  const normalized = raw.replace(/\\/g, '/');
+  const parts = normalized.split('/').filter(Boolean);
+  return parts[parts.length - 1] || normalized;
+}
+
+function extractFileChangePaths(item: any): string[] {
+  if (!item || typeof item !== 'object') {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  const paths: string[] = [];
+  const push = (value: unknown): void => {
+    if (typeof value !== 'string') {
+      return;
+    }
+    const path = value.trim();
+    if (!path || seen.has(path)) {
+      return;
+    }
+    seen.add(path);
+    paths.push(path);
+  };
+
+  const directKeys = [
+    'path',
+    'filename',
+    'filePath',
+    'file_path',
+    'targetPath',
+    'target_path',
+    'newPath',
+    'new_path',
+    'oldPath',
+    'old_path',
+    'sourcePath',
+    'source_path',
+    'destinationPath',
+    'destination_path'
+  ];
+  for (const key of directKeys) {
+    push(item[key]);
+  }
+
+  const nestedObjectKeys = ['file', 'target', 'source', 'destination'];
+  for (const key of nestedObjectKeys) {
+    const nested = item[key];
+    if (!nested || typeof nested !== 'object') {
+      continue;
+    }
+    push((nested as any).path);
+    push((nested as any).filename);
+    push((nested as any).filePath);
+    push((nested as any).file_path);
+  }
+
+  const listKeys = ['paths', 'files', 'changes', 'edits'];
+  for (const key of listKeys) {
+    const list = item[key];
+    if (!Array.isArray(list)) {
+      continue;
+    }
+    for (const entry of list) {
+      if (typeof entry === 'string') {
+        push(entry);
+        continue;
+      }
+      if (!entry || typeof entry !== 'object') {
+        continue;
+      }
+      push((entry as any).path);
+      push((entry as any).filename);
+      push((entry as any).filePath);
+      push((entry as any).file_path);
+      push((entry as any).targetPath);
+      push((entry as any).target_path);
+      push((entry as any).newPath);
+      push((entry as any).new_path);
+      push((entry as any).oldPath);
+      push((entry as any).old_path);
+    }
+  }
+
+  // Fallback: recursively scan nested objects for path-like keys.
+  if (paths.length === 0) {
+    const queue: unknown[] = [item];
+    let visited = 0;
+    while (queue.length > 0 && visited < 300) {
+      const current = queue.shift();
+      visited += 1;
+      if (!current || typeof current !== 'object') {
+        continue;
+      }
+      if (Array.isArray(current)) {
+        for (const value of current) {
+          queue.push(value);
+        }
+        continue;
+      }
+
+      for (const [rawKey, value] of Object.entries(current as Record<string, unknown>)) {
+        const key = rawKey.trim().toLowerCase();
+        if (
+          typeof value === 'string' &&
+          (key === 'filename' ||
+            key.endsWith('path') ||
+            key.endsWith('_path') ||
+            key.endsWith('filepath') ||
+            key.endsWith('file_path'))
+        ) {
+          push(value);
+        }
+        if (value && typeof value === 'object') {
+          queue.push(value);
+        }
+      }
+    }
+  }
+
+  return paths;
+}
+
 function summarizeCodexEvent(payload: any): {
   progress: string;
   progressKind: ProgressKind;
@@ -1609,8 +1750,12 @@ function summarizeCodexEvent(payload: any): {
         detail = detail ? `${detail}\n(exit ${exitCode})` : `(exit ${exitCode})`;
       }
     } else if (itemType === 'file_change') {
-      title = phase === 'started' ? 'Update file' : phase === 'completed' ? 'File updated' : 'File change';
-      detail = path || '';
+      const filePaths = extractFileChangePaths(item);
+      const primaryPath = filePaths[0] || path || '';
+      const fileName = fileNameFromPath(primaryPath);
+      const baseTitle = phase === 'started' ? 'Update file' : phase === 'completed' ? 'File updated' : 'File change';
+      title = fileName ? `${baseTitle}: ${fileName}` : baseTitle;
+      detail = filePaths.length > 0 ? filePaths.join('\n') : path || '';
     } else if (itemType === 'reasoning') {
       title = phase === 'started' ? 'Reasoning' : phase === 'completed' ? 'Reasoning step' : 'Reasoning';
       detail = toolName ? `(${toolName})` : '';
@@ -4144,7 +4289,9 @@ function CodexChat(props: CodexChatProps): JSX.Element {
               isExpandable ? ' is-expandable' : ''
             } is-${item.category}${item.phase ? ` is-${item.phase}` : ''}`;
             const icon =
-              item.phase === 'completed' ? (
+              item.category === 'file' ? (
+                <FileIcon width={14} height={14} />
+              ) : item.phase === 'completed' ? (
                 <CheckIcon width={14} height={14} />
               ) : item.phase === 'started' ? (
                 <span className="jp-CodexActivityDot" />
