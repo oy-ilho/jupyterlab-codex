@@ -689,7 +689,10 @@ class SessionStore:
             if record.get("role") != "user":
                 continue
             ui = record.get("ui")
-            if isinstance(ui, dict) and isinstance(ui.get("selectionPreview"), dict):
+            if isinstance(ui, dict) and (
+                isinstance(ui.get("selectionPreview"), dict)
+                or isinstance(ui.get("cellOutputPreview"), dict)
+            ):
                 ui_indices.append(idx)
 
         if len(ui_indices) <= keep_latest:
@@ -819,12 +822,25 @@ def _sanitize_ui_payload(raw: Dict[str, Any] | None) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         return {}
 
-    preview_raw = raw.get("selectionPreview")
-    if not isinstance(preview_raw, dict):
+    payload: Dict[str, Any] = {}
+
+    selection_preview = _sanitize_ui_preview(raw.get("selectionPreview"))
+    if selection_preview:
+        payload["selectionPreview"] = selection_preview
+
+    cell_output_preview = _sanitize_ui_preview(raw.get("cellOutputPreview"))
+    if cell_output_preview:
+        payload["cellOutputPreview"] = cell_output_preview
+
+    return payload
+
+
+def _sanitize_ui_preview(raw: Any) -> Dict[str, str]:
+    if not isinstance(raw, dict):
         return {}
 
-    location_raw = preview_raw.get("locationLabel")
-    preview_text_raw = preview_raw.get("previewText")
+    location_raw = raw.get("locationLabel")
+    preview_text_raw = raw.get("previewText")
     if not isinstance(location_raw, str) or not isinstance(preview_text_raw, str):
         return {}
 
@@ -836,12 +852,7 @@ def _sanitize_ui_payload(raw: Dict[str, Any] | None) -> Dict[str, Any]:
     if not location or not preview_text:
         return {}
 
-    return {
-        "selectionPreview": {
-            "locationLabel": location,
-            "previewText": preview_text,
-        }
-    }
+    return {"locationLabel": location, "previewText": preview_text}
 
 
 def _sanitize_sensitive_values(raw: str) -> str:

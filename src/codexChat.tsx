@@ -439,9 +439,13 @@ type SelectionPreview = {
   locationLabel: string;
   previewText: string;
 };
+type MessageContextPreview = {
+  selectionPreview?: SelectionPreview;
+  cellOutputPreview?: SelectionPreview;
+};
 type StoredSelectionPreviewEntry = {
   contentHash: string;
-  preview: SelectionPreview | null;
+  preview: MessageContextPreview | null;
 };
 type ChatEntry =
   | {
@@ -451,6 +455,7 @@ type ChatEntry =
       text: string;
       attachments?: ChatAttachments;
       selectionPreview?: SelectionPreview;
+      cellOutputPreview?: SelectionPreview;
     }
   | {
       kind: 'run-divider';
@@ -872,25 +877,16 @@ function normalizeStoredSelectionPreviewEntry(
   }
 
   const previewRaw = raw.preview;
-  if (!previewRaw || typeof previewRaw !== 'object') {
+  if (!previewRaw) {
     return { contentHash, preview: null };
   }
-  const previewObj = previewRaw as Record<string, unknown>;
-  const locationLabel =
-    typeof previewObj.locationLabel === 'string' ? previewObj.locationLabel.trim() : '';
-  const previewText =
-    typeof previewObj.previewText === 'string'
-      ? truncateEnd(normalizeSelectionPreviewText(previewObj.previewText), MESSAGE_SELECTION_PREVIEW_STORED_MAX_CHARS)
-      : '';
-  if (!locationLabel || !previewText) {
+  const preview = coerceMessageContextPreview(previewRaw);
+  if (!preview) {
     return { contentHash, preview: null };
   }
   return {
     contentHash,
-    preview: {
-      locationLabel,
-      previewText
-    }
+    preview
   };
 }
 
@@ -933,7 +929,7 @@ function readStoredSelectionPreviewsByThread(): Map<string, StoredSelectionPrevi
 function persistStoredSelectionPreviewsByThread(
   previewsByThread: Map<string, StoredSelectionPreviewEntry[]>
 ): void {
-  const serialized: Record<string, Array<{ contentHash: string; preview?: SelectionPreview }>> = {};
+  const serialized: Record<string, Array<{ contentHash: string; preview?: MessageContextPreview }>> = {};
   const entries = Array.from(previewsByThread.entries()).slice(-MAX_STORED_SELECTION_PREVIEW_THREADS);
   for (const [threadId, threadEntries] of entries) {
     if (!threadId || !Array.isArray(threadEntries) || threadEntries.length <= 0) {
@@ -997,17 +993,45 @@ function coerceSelectionPreview(value: unknown): SelectionPreview | undefined {
   return { locationLabel, previewText };
 }
 
+function coerceMessageContextPreview(value: unknown): MessageContextPreview | undefined {
+  if (!value || typeof value !== 'object') {
+    return undefined;
+  }
+  const raw = value as Record<string, unknown>;
+  const selectionPreview = coerceSelectionPreview(raw.selectionPreview);
+  const cellOutputPreview = coerceSelectionPreview(raw.cellOutputPreview);
+  if (selectionPreview || cellOutputPreview) {
+    return {
+      ...(selectionPreview ? { selectionPreview } : {}),
+      ...(cellOutputPreview ? { cellOutputPreview } : {})
+    };
+  }
+
+  // Legacy format: a single preview object was stored as selection preview.
+  const legacySelectionPreview = coerceSelectionPreview(raw);
+  if (legacySelectionPreview) {
+    return { selectionPreview: legacySelectionPreview };
+  }
+  return undefined;
+}
+
 function coerceSessionHistory(
   raw: any
 ): Array<{
   role: TextRole;
   content: string;
   selectionPreview?: SelectionPreview;
+  cellOutputPreview?: SelectionPreview;
 }> {
   if (!Array.isArray(raw)) {
     return [];
   }
-  const result: Array<{ role: TextRole; content: string; selectionPreview?: SelectionPreview }> = [];
+  const result: Array<{
+    role: TextRole;
+    content: string;
+    selectionPreview?: SelectionPreview;
+    cellOutputPreview?: SelectionPreview;
+  }> = [];
   for (const item of raw) {
     if (!item || typeof item !== 'object') {
       continue;
@@ -1018,7 +1042,8 @@ function coerceSessionHistory(
       continue;
     }
     const selectionPreview = coerceSelectionPreview((item as any).selectionPreview);
-    result.push({ role, content, selectionPreview });
+    const cellOutputPreview = coerceSelectionPreview((item as any).cellOutputPreview);
+    result.push({ role, content, selectionPreview, cellOutputPreview });
   }
   return result;
 }
@@ -1964,7 +1989,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const [permissionMenuOpen, setPermissionMenuOpen] = useState(false);
   const [selectionPopover, setSelectionPopover] = useState<{
     messageId: string;
-    preview: SelectionPreview;
+    preview: MessageContextPreview;
   } | null>(null);
   const storedSelectionPreviewsRef = useRef<Map<string, StoredSelectionPreviewEntry[]>>(
     readStoredSelectionPreviewsByThread()
@@ -2030,6 +2055,20 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       setCurrentSessionModelOption('__config__');
     }
   }, [modelOption, modelOptions]);
+
+  useEffect(() => {
+    if (modelOption !== '__config__') {
+      return;
+    }
+    if ((autoModel || '').trim()) {
+      return;
+    }
+    const firstModel = modelOptions[0]?.value;
+    if (!firstModel) {
+      return;
+    }
+    setCurrentSessionModelOption(firstModel);
+  }, [modelOption, autoModel, modelOptions]);
 
   function saveCurrentInputDraft(value: string): void {
     const sessionKey = currentNotebookSessionKeyRef.current || '';
@@ -2265,7 +2304,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 
   function toggleSelectionPopover(
     messageId: string,
-    preview: SelectionPreview,
+    preview: MessageContextPreview,
     event: React.MouseEvent<HTMLButtonElement>
   ): void {
     if (!messageId) {
@@ -2297,7 +2336,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   function appendStoredSelectionPreviewEntry(
     threadId: string,
     content: string,
-    preview: SelectionPreview | undefined
+    preview: MessageContextPreview | undefined
   ): void {
     const normalizedThreadId = (threadId || '').trim();
     if (!normalizedThreadId) {
@@ -3533,6 +3572,17 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     const includeCellOutputKey =
       includeActiveCell && includeActiveCellOutput && notebookMode === 'ipynb';
     const cellOutput = includeCellOutputKey ? getActiveCellOutput(activeWidget) : '';
+    const messageCellOutputPreview =
+      includeCellOutputKey && cellOutput
+        ? toCellOutputPreview(selectedContext, activeWidget, notebookMode, cellOutput)
+        : undefined;
+    const messageContextPreview: MessageContextPreview | undefined =
+      messageSelectionPreview || messageCellOutputPreview
+        ? {
+            ...(messageSelectionPreview ? { selectionPreview: messageSelectionPreview } : {}),
+            ...(messageCellOutputPreview ? { cellOutputPreview: messageCellOutputPreview } : {})
+          }
+        : undefined;
     const session = ensureSession(notebookPath, sessionKey);
     const modelForSend = current?.selectedModelOption ?? modelOption;
     const reasoningForSend = current?.selectedReasoningEffort ?? reasoningEffort;
@@ -3587,11 +3637,12 @@ function CodexChat(props: CodexChatProps): JSX.Element {
           ...(includeSelectionKey ? { selection } : {}),
           ...(includeCellOutputKey ? { cellOutput } : {}),
           ...(images ? { images } : {}),
-          ...(messageSelectionPreview ? { uiSelectionPreview: messageSelectionPreview } : {})
+          ...(messageSelectionPreview ? { uiSelectionPreview: messageSelectionPreview } : {}),
+          ...(messageCellOutputPreview ? { uiCellOutputPreview: messageCellOutputPreview } : {})
         })
       )
     );
-    appendStoredSelectionPreviewEntry(session.threadId, content, messageSelectionPreview);
+    appendStoredSelectionPreviewEntry(session.threadId, content, messageContextPreview);
 
     const imageCount = pendingImagesRef.current.length;
     const showReadOnlyWarning = sandboxForSend === 'read-only';
@@ -3617,7 +3668,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
           role: 'user',
           text: content,
           attachments: imageCount > 0 ? { images: imageCount } : undefined,
-          selectionPreview: messageSelectionPreview
+          selectionPreview: messageSelectionPreview,
+          cellOutputPreview: messageCellOutputPreview
         }
       ];
       next.set(sessionKey, {
@@ -3751,6 +3803,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     typeof contextUsedPercent === 'number' && Number.isFinite(contextUsedPercent)
       ? `${Math.round(clampNumber(contextUsedPercent, 0, 100))}%`
       : 'Unknown';
+  const hasContextUsageSnapshot = rateLimits?.contextWindow != null;
 
   useLayoutEffect(() => {
     const target = notebookLabelRef.current;
@@ -3963,14 +4016,19 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 	                    ? ' is-success'
 	                    : ''
 	                  : '';
-	              const imageCount = entry.attachments?.images ?? 0;
+		              const imageCount = entry.attachments?.images ?? 0;
                 const selectionPreview = entry.selectionPreview;
+                const cellOutputPreview = entry.cellOutputPreview;
                 const hasSelectionPreview =
                   entry.role === 'user' &&
                   Boolean(selectionPreview?.locationLabel && selectionPreview?.previewText);
-                const isSelectionPreviewOpen = hasSelectionPreview && selectionPopover?.messageId === entry.id;
+                const hasCellOutputPreview =
+                  entry.role === 'user' &&
+                  Boolean(cellOutputPreview?.locationLabel && cellOutputPreview?.previewText);
+                const hasContextPreview = hasSelectionPreview || hasCellOutputPreview;
+                const isSelectionPreviewOpen = hasContextPreview && selectionPopover?.messageId === entry.id;
                 const messageClassName = `jp-CodexChat-message jp-CodexChat-${entry.role}${systemVariant}${
-                  hasSelectionPreview ? ' has-selection-preview' : ''
+                  hasContextPreview ? ' has-selection-preview' : ''
                 }${isSelectionPreviewOpen ? ' is-selection-open' : ''}`;
 	              return (
 	                <div
@@ -3991,12 +4049,21 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 	                      </span>
 	                    </div>
 	                  )}
-                    {hasSelectionPreview && selectionPreview && (
+                    {hasContextPreview && (
                       <button
                         type="button"
                         className={`jp-CodexChat-selectionToggle${isSelectionPreviewOpen ? ' is-open' : ''}`}
-                        onClick={event => toggleSelectionPopover(entry.id, selectionPreview, event)}
-                        aria-label={isSelectionPreviewOpen ? 'Hide selected text context' : 'Show selected text context'}
+                        onClick={event =>
+                          toggleSelectionPopover(
+                            entry.id,
+                            {
+                              ...(selectionPreview ? { selectionPreview } : {}),
+                              ...(cellOutputPreview ? { cellOutputPreview } : {})
+                            },
+                            event
+                          )
+                        }
+                        aria-label={isSelectionPreviewOpen ? 'Hide message context' : 'Show message context'}
                       >
                         <PlusIcon width="1em" height="1em" />
                       </button>
@@ -4090,14 +4157,24 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         anchorRef={selectionPopoverAnchorRef}
         popoverRef={selectionPopoverRef}
         className="jp-CodexChat-selectionPopover"
-        ariaLabel="Selected text context"
+        ariaLabel="Message context"
         role="dialog"
         align="right"
       >
         {selectionPopover && (
-          <div className="jp-CodexChat-selectionCard" role="note" aria-label="Selected text context">
-            <div className="jp-CodexChat-selectionMeta">{selectionPopover.preview.locationLabel}</div>
-            <SelectionPreviewCode code={selectionPopover.preview.previewText} />
+          <div className="jp-CodexChat-selectionCard" role="note" aria-label="Message context">
+            {selectionPopover.preview.selectionPreview && (
+              <div className="jp-CodexChat-contextSection">
+                <div className="jp-CodexChat-selectionMeta">{selectionPopover.preview.selectionPreview.locationLabel}</div>
+                <SelectionPreviewCode code={selectionPopover.preview.selectionPreview.previewText} />
+              </div>
+            )}
+            {selectionPopover.preview.cellOutputPreview && (
+              <div className="jp-CodexChat-contextSection">
+                <div className="jp-CodexChat-selectionMeta">{selectionPopover.preview.cellOutputPreview.locationLabel}</div>
+                <SelectionPreviewCode code={selectionPopover.preview.cellOutputPreview.previewText} />
+              </div>
+            )}
           </div>
         )}
       </PortalMenu>
@@ -4328,40 +4405,42 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                   </button>
                 ))}
               </PortalMenu>
-              <div className="jp-CodexContextWrap">
-                <button
-                  type="button"
-                  className={`jp-CodexIconBtn jp-CodexContextBtn${usageIsStale ? ' is-stale' : ''}`}
-                  aria-label={
-                    contextUsedTokens == null || contextLeftTokens == null
-                      ? 'Context window usage unavailable'
-                      : `Context window: used ${contextUsedLabel} tokens, left ${contextLeftLabel} tokens`
-                  }
-                  title={
-                    contextUsedTokens == null || contextLeftTokens == null
-                      ? 'Context window usage unavailable'
-                      : `Used ${contextUsedLabel} / left ${contextLeftLabel}`
-                  }
-                >
-                  <ContextWindowIcon level={contextLevel} width={20} height={20} />
-                </button>
-                <div className="jp-CodexContextPopover" role="tooltip">
-                  <div className="jp-CodexContextPopoverTitle">Context window</div>
-                  <div className="jp-CodexContextPopoverRow">
-                    <span>Used</span>
-                    <strong>{contextUsedLabel}</strong>
-                  </div>
-                  <div className="jp-CodexContextPopoverRow">
-                    <span>Left</span>
-                    <strong>{contextLeftLabel}</strong>
-                  </div>
-                  <div className="jp-CodexContextPopoverMeta">
-                    {contextWindowTokens == null
-                      ? 'Window size unavailable'
-                      : `Window: ${contextWindowLabel} tokens (${contextUsedPercentLabel} used)`}
+              {hasContextUsageSnapshot && (
+                <div className="jp-CodexContextWrap">
+                  <button
+                    type="button"
+                    className={`jp-CodexIconBtn jp-CodexContextBtn${usageIsStale ? ' is-stale' : ''}`}
+                    aria-label={
+                      contextUsedTokens == null || contextLeftTokens == null
+                        ? 'Context window usage unavailable'
+                        : `Context window: used ${contextUsedLabel} tokens, left ${contextLeftLabel} tokens`
+                    }
+                    title={
+                      contextUsedTokens == null || contextLeftTokens == null
+                        ? 'Context window usage unavailable'
+                        : `Used ${contextUsedLabel} / left ${contextLeftLabel}`
+                    }
+                  >
+                    <ContextWindowIcon level={contextLevel} width={20} height={20} />
+                  </button>
+                  <div className="jp-CodexContextPopover" role="tooltip">
+                    <div className="jp-CodexContextPopoverTitle">Context window</div>
+                    <div className="jp-CodexContextPopoverRow">
+                      <span>Used</span>
+                      <strong>{contextUsedLabel}</strong>
+                    </div>
+                    <div className="jp-CodexContextPopoverRow">
+                      <span>Left</span>
+                      <strong>{contextLeftLabel}</strong>
+                    </div>
+                    <div className="jp-CodexContextPopoverMeta">
+                      {contextWindowTokens == null
+                        ? 'Window size unavailable'
+                        : `Window: ${contextWindowLabel} tokens (${contextUsedPercentLabel} used)`}
+                    </div>
                   </div>
                 </div>
-              </div>
+              )}
             </div>
 
 	            <div className="jp-CodexComposer-toolbarRight">
@@ -4858,6 +4937,26 @@ function toFallbackSelectionPreview(
   }
   return {
     locationLabel: inferLocationLabelFromWidget(widget, notebookMode),
+    previewText: truncateEnd(normalized, MESSAGE_SELECTION_PREVIEW_STORED_MAX_CHARS)
+  };
+}
+
+function toCellOutputPreview(
+  context: SelectedContext | null,
+  widget: DocumentWidgetLike | null,
+  notebookMode: NotebookMode,
+  outputText: string
+): SelectionPreview | undefined {
+  const normalized = normalizeSelectionPreviewText(outputText);
+  if (!normalized) {
+    return undefined;
+  }
+  const locationBase =
+    context?.kind === 'cell'
+      ? `Cell ${context.number}`
+      : inferLocationLabelFromWidget(widget, notebookMode);
+  return {
+    locationLabel: `${locationBase} Output`,
     previewText: truncateEnd(normalized, MESSAGE_SELECTION_PREVIEW_STORED_MAX_CHARS)
   };
 }

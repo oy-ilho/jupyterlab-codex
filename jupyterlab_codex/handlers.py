@@ -104,7 +104,7 @@ def _coerce_bool_flag(value: Any) -> bool:
     return False
 
 
-def _coerce_ui_selection_preview(value: Any) -> Dict[str, str] | None:
+def _coerce_ui_preview(value: Any) -> Dict[str, str] | None:
     if not isinstance(value, dict):
         return None
 
@@ -122,6 +122,14 @@ def _coerce_ui_selection_preview(value: Any) -> Dict[str, str] | None:
         "locationLabel": location[:80],
         "previewText": preview_text[:1000],
     }
+
+
+def _coerce_ui_selection_preview(value: Any) -> Dict[str, str] | None:
+    return _coerce_ui_preview(value)
+
+
+def _coerce_ui_cell_output_preview(value: Any) -> Dict[str, str] | None:
+    return _coerce_ui_preview(value)
 
 
 def _build_command_not_found_hint(requested_path: str) -> dict[str, str]:
@@ -306,6 +314,9 @@ class CodexWSHandler(WebSocketHandler):
                 selection_preview = _coerce_ui_selection_preview(ui.get("selectionPreview"))
                 if selection_preview:
                     entry["selectionPreview"] = selection_preview
+                cell_output_preview = _coerce_ui_cell_output_preview(ui.get("cellOutputPreview"))
+                if cell_output_preview:
+                    entry["cellOutputPreview"] = cell_output_preview
             history.append(entry)
 
         paired_ok, paired_path, paired_os_path, paired_message, notebook_mode = _compute_pairing_status(
@@ -343,6 +354,7 @@ class CodexWSHandler(WebSocketHandler):
         if not isinstance(cell_output, str):
             cell_output = str(cell_output) if cell_output is not None else ""
         ui_selection_preview = _coerce_ui_selection_preview(payload.get("uiSelectionPreview"))
+        ui_cell_output_preview = _coerce_ui_cell_output_preview(payload.get("uiCellOutputPreview"))
         images_payload = payload.get("images")
         notebook_path = payload.get("notebookPath", "")
         requested_model_raw = payload.get("model")
@@ -563,7 +575,11 @@ class CodexWSHandler(WebSocketHandler):
                 nonlocal user_message_logged
                 if user_message_logged:
                     return
-                ui_payload = {"selectionPreview": ui_selection_preview} if ui_selection_preview else None
+                ui_payload = {}
+                if ui_selection_preview:
+                    ui_payload["selectionPreview"] = ui_selection_preview
+                if ui_cell_output_preview:
+                    ui_payload["cellOutputPreview"] = ui_cell_output_preview
                 self._store.append_message(session_id, "user", content, ui=ui_payload)
                 user_message_logged = True
 

@@ -63,6 +63,7 @@ def parse_client_message(raw: Any) -> Tuple[str, Dict[str, Any]]:
                 "cellOutput": _coerce_string(raw.get("cellOutput")),
                 "images": raw.get("images") if isinstance(raw.get("images"), list) else [],
                 "uiSelectionPreview": raw.get("uiSelectionPreview"),
+                "uiCellOutputPreview": raw.get("uiCellOutputPreview"),
             },
         )
 

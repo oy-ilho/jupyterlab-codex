@@ -987,6 +987,12 @@
   background: color-mix(in srgb, var(--cdx-surface-2) 82%, transparent);
 }
 
+.jp-CodexChat-contextSection + .jp-CodexChat-contextSection {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--cdx-border) 66%, transparent);
+}
+
 .jp-CodexChat-selectionMeta {
   font-family: var(--cdx-mono);
   font-size: 11px;

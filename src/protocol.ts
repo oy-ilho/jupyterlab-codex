@@ -58,7 +58,12 @@ export interface ServerStatusMessage extends ServerMessageBase {
   notebookMode?: string;
   sessionResolution?: string;
   sessionResolutionNotice?: string;
-  history?: Array<{ role: 'user' | 'assistant' | 'system'; content: string; selectionPreview?: SelectionPreview }>;
+  history?: Array<{
+    role: 'user' | 'assistant' | 'system';
+    content: string;
+    selectionPreview?: SelectionPreview;
+    cellOutputPreview?: SelectionPreview;
+  }>;
   effectiveSandbox?: string;
 }
 
@@ -147,6 +152,7 @@ export interface ParsedClientSendMessage {
   cellOutput: string;
   images: unknown[];
   uiSelectionPreview?: unknown;
+  uiCellOutputPreview?: unknown;
 }
 
 export interface ParsedClientDeleteSessionMessage {
@@ -213,6 +219,7 @@ export interface ClientSendMessage {
   cellOutput?: string;
   images?: { name: string; dataUrl: string }[];
   uiSelectionPreview?: unknown;
+  uiCellOutputPreview?: unknown;
 }
 
 export interface ClientCancelMessage {
@@ -484,6 +491,7 @@ export function buildSendMessage(input: {
   cellOutput?: string;
   images?: { name: string; dataUrl: string }[];
   uiSelectionPreview?: unknown;
+  uiCellOutputPreview?: unknown;
 }): ClientSendMessage {
   return {
     type: 'send',
@@ -498,7 +506,8 @@ export function buildSendMessage(input: {
     ...(input.selection ? { selection: input.selection } : {}),
     ...(input.cellOutput ? { cellOutput: input.cellOutput } : {}),
     ...(input.images ? { images: input.images } : {}),
-    ...(input.uiSelectionPreview ? { uiSelectionPreview: input.uiSelectionPreview } : {})
+    ...(input.uiSelectionPreview ? { uiSelectionPreview: input.uiSelectionPreview } : {}),
+    ...(input.uiCellOutputPreview ? { uiCellOutputPreview: input.uiCellOutputPreview } : {})
   };
 }
 

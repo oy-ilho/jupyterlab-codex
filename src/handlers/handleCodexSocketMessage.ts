@@ -24,6 +24,7 @@ type ChatEntry =
   text: string;
   attachments?: unknown;
   selectionPreview?: unknown;
+  cellOutputPreview?: unknown;
 }
   | {
   kind: 'run-divider';
@@ -100,6 +101,7 @@ export interface HistoryEntry {
   role: 'user' | 'assistant' | 'system';
   content: string;
   selectionPreview?: unknown;
+  cellOutputPreview?: unknown;
 }
 
 export interface CliDefaults {
@@ -259,27 +261,32 @@ export function handleCodexSocketMessage(
               const restoredEntries = history.map(item => {
                 const text = context.normalizeSystemText(item.role, item.content);
                 let selectionPreview: unknown;
+                let cellOutputPreview: unknown;
                 if (item.role === 'user') {
                   selectionPreview = item.selectionPreview;
-              if (!selectionPreview) {
-                const contentHash = context.hashSelectionPreviewContent(item.content);
-                while (storedUserCursor < storedUserEntries.length) {
-                  const candidate = storedUserEntries[storedUserCursor];
-                  storedUserCursor += 1;
-                  if (!candidate || candidate.contentHash !== contentHash) {
-                    continue;
+                  cellOutputPreview = item.cellOutputPreview;
+                  if (!selectionPreview && !cellOutputPreview) {
+                    const contentHash = context.hashSelectionPreviewContent(item.content);
+                    while (storedUserCursor < storedUserEntries.length) {
+                      const candidate = storedUserEntries[storedUserCursor];
+                      storedUserCursor += 1;
+                      if (!candidate || candidate.contentHash !== contentHash) {
+                        continue;
+                      }
+                      const storedPreview = splitStoredMessagePreview(candidate.preview);
+                      selectionPreview = storedPreview.selectionPreview;
+                      cellOutputPreview = storedPreview.cellOutputPreview;
+                      break;
+                    }
                   }
-                  selectionPreview = candidate.preview ?? undefined;
-                  break;
-                }
-              }
                 }
                 return {
                   kind: 'text' as const,
                   id: crypto.randomUUID(),
                   role: item.role,
                   text,
-                  selectionPreview
+                  selectionPreview,
+                  cellOutputPreview
                 };
               });
           nextMessages = [introEntry, ...restoredEntries];
@@ -443,4 +450,30 @@ function truncateEnd(input: string, maxLength: number): string {
   }
   const text = String(input);
   return text.length <= maxLength ? text : `${text.slice(0, maxLength)}...`;
+}
+
+function splitStoredMessagePreview(value: unknown): {
+  selectionPreview?: unknown;
+  cellOutputPreview?: unknown;
+} {
+  if (!value || typeof value !== 'object') {
+    return {};
+  }
+
+  const raw = value as Record<string, unknown>;
+  const hasNestedPreview =
+    Object.prototype.hasOwnProperty.call(raw, 'selectionPreview') ||
+    Object.prototype.hasOwnProperty.call(raw, 'cellOutputPreview');
+  if (hasNestedPreview) {
+    return {
+      selectionPreview: raw.selectionPreview,
+      cellOutputPreview: raw.cellOutputPreview
+    };
+  }
+
+  // Legacy format: a single preview object was stored directly as selectionPreview.
+  if (Object.prototype.hasOwnProperty.call(raw, 'locationLabel') && Object.prototype.hasOwnProperty.call(raw, 'previewText')) {
+    return { selectionPreview: raw };
+  }
+  return {};
 }
