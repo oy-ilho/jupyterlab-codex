@@ -3972,7 +3972,10 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const includeCellOutputForNextSend =
     includeActiveCellForNextSend && includeActiveCellOutput && composerNotebookMode === 'ipynb';
   const showCellAttachmentBadge =
-    includeActiveCellForNextSend && currentNotebookPath.length > 0 && currentSession?.pairedOk !== false;
+    includeActiveCellForNextSend &&
+    composerNotebookMode !== 'plain_py' &&
+    currentNotebookPath.length > 0 &&
+    currentSession?.pairedOk !== false;
   const canSend =
     status === 'ready' &&
     currentNotebookPath.length > 0 &&
