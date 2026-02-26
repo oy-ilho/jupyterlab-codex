@@ -1284,7 +1284,7 @@
   box-shadow: none;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 2px;
 }
 
 .jp-CodexComposer:focus-within {
@@ -1296,13 +1296,13 @@
   width: 100%;
   box-sizing: border-box;
   resize: none;
-  min-height: calc(1.55em + 12px);
-  max-height: calc(1.55em * 3 + 12px);
+  min-height: calc(1.45em + 8px);
+  max-height: calc(1.45em * 3 + 8px);
   border: 0;
   border-radius: 14px;
-  padding: 6px 10px;
+  padding: 4px 10px;
   font-size: 13px;
-  line-height: 1.55;
+  line-height: 1.45;
   background: transparent;
   color: var(--cdx-text);
   outline: none;
@@ -1321,16 +1321,18 @@
   display: flex;
   align-items: center;
   max-height: 0;
+  margin-bottom: 0;
   opacity: 0;
   transform: translateY(-4px) scale(0.98);
   transform-origin: left center;
   overflow: hidden;
   pointer-events: none;
-  transition: max-height 170ms ease, opacity 170ms ease, transform 170ms ease;
+  transition: max-height 170ms ease, margin-bottom 170ms ease, opacity 170ms ease, transform 170ms ease;
 }
 
 .jp-CodexComposer-cellAttachmentWrap.is-visible {
   max-height: 28px;
+  margin-bottom: 6px;
   opacity: 1;
   transform: translateY(0) scale(1);
   pointer-events: auto;
@@ -1344,7 +1346,7 @@
   max-width: 100%;
   padding: 4px 8px;
   border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--cdx-accent) 28%, var(--cdx-border));
+  border: none;
   background: color-mix(in srgb, var(--cdx-accent) 9%, var(--cdx-surface));
   color: color-mix(in srgb, var(--cdx-accent) 80%, var(--cdx-text));
   font-size: 11px;
@@ -1442,7 +1444,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding-top: 8px;
+  padding-top: 0;
 }
 
 .jp-CodexComposer-toolbarLeft {
