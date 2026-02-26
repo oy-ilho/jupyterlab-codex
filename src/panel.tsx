@@ -219,7 +219,7 @@ function ContextWindowIcon(
   const { level, ...svgProps } = props;
   const clamped =
     typeof level === 'number' && Number.isFinite(level) ? Math.min(1, Math.max(0, level)) : null;
-  const radius = 6.8;
+  const radius = 7.3;
   const circumference = 2 * Math.PI * radius;
   const fillRatio = clamped == null ? 0.35 : Math.max(0.05, clamped);
   const fillLength = circumference * fillRatio;
@@ -228,13 +228,13 @@ function ContextWindowIcon(
 
   return (
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" {...svgProps}>
-      <circle cx="12" cy="12" r={radius} stroke="currentColor" strokeWidth="2.2" opacity={0.22} />
+      <circle cx="12" cy="12" r={radius} stroke="currentColor" strokeWidth="2.8" opacity={0.22} />
       <circle
         cx="12"
         cy="12"
         r={radius}
         stroke="currentColor"
-        strokeWidth="2.2"
+        strokeWidth="2.8"
         strokeLinecap="round"
         strokeDasharray={`${fillLength} ${gapLength}`}
         strokeDashoffset={circumference * 0.25}
@@ -4109,7 +4109,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                       : `Used ${contextUsedLabel} / left ${contextLeftLabel}`
                   }
                 >
-                  <ContextWindowIcon level={contextLevel} width={17} height={17} />
+                  <ContextWindowIcon level={contextLevel} width={20} height={20} />
                 </button>
                 <div className="jp-CodexContextPopover" role="tooltip">
                   <div className="jp-CodexContextPopoverTitle">Context window</div>
