@@ -223,6 +223,35 @@ class SessionStore:
         meta = self._load_meta(session_id)
         return meta.get("notebook_path", "")
 
+    def session_matches_notebook(
+        self, session_id: str, notebook_path: str, notebook_os_path: str = ""
+    ) -> bool:
+        """
+        Validate whether an existing session id belongs to the current notebook.
+        """
+        normalized_session_id = (session_id or "").strip()
+        if not normalized_session_id:
+            return False
+        if not self._logging_enabled:
+            return True
+
+        meta = self._load_meta(normalized_session_id)
+        if not isinstance(meta, dict) or not meta:
+            return False
+
+        normalized_notebook_path = (notebook_path or "").strip()
+        normalized_notebook_os_path = (notebook_os_path or "").strip()
+        stored_notebook_path = (meta.get("notebook_path") or "").strip()
+        stored_notebook_os_path = (meta.get("notebook_os_path") or "").strip()
+
+        if normalized_notebook_path and stored_notebook_path == normalized_notebook_path:
+            return True
+        if normalized_notebook_os_path and stored_notebook_os_path == normalized_notebook_os_path:
+            return True
+        if not normalized_notebook_path and not normalized_notebook_os_path:
+            return True
+        return False
+
     def resolve_session_for_notebook(self, notebook_path: str, notebook_os_path: str = "") -> str:
         if not self._logging_enabled:
             return ""

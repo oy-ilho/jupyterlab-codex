@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import hashlib
 import json
 import os
 import shutil
@@ -214,16 +215,41 @@ class CodexWSHandler(WebSocketHandler):
         notebook_os_path = self._resolve_notebook_os_path(notebook_path)
 
         resolved_session_id = requested_session_id
+        session_resolution = "client"
+        session_resolution_notice = ""
+        mapped_session_id = self._store.resolve_session_for_notebook(notebook_path, notebook_os_path)
         if force_new_thread:
-            previous_session_id = self._store.resolve_session_for_notebook(notebook_path, notebook_os_path)
+            session_resolution = "force-new"
+            previous_session_id = mapped_session_id
             if previous_session_id and previous_session_id != resolved_session_id:
                 self._store.delete_session(previous_session_id)
             if not resolved_session_id:
                 resolved_session_id = str(uuid.uuid4())
+                session_resolution = "new"
         else:
-            resolved_session_id = self._store.resolve_session_for_notebook(notebook_path, notebook_os_path) or resolved_session_id
-            if not resolved_session_id:
-                resolved_session_id = str(uuid.uuid4())
+            # Prefer the client-provided thread id when available, but validate
+            # that it belongs to the current notebook before trusting it.
+            if resolved_session_id:
+                requested_matches_notebook = self._store.session_matches_notebook(
+                    resolved_session_id, notebook_path, notebook_os_path
+                )
+                if requested_matches_notebook:
+                    session_resolution = "client"
+                else:
+                    if mapped_session_id and mapped_session_id != resolved_session_id:
+                        resolved_session_id = mapped_session_id
+                        session_resolution = "mapping-on-mismatch"
+                    else:
+                        resolved_session_id = str(uuid.uuid4())
+                        session_resolution = "new-on-mismatch"
+                    session_resolution_notice = (
+                        "Thread mismatch detected. Switched to a notebook-matched thread to avoid context loss."
+                    )
+            else:
+                resolved_session_id = mapped_session_id or ""
+                session_resolution = "mapping" if resolved_session_id else "new"
+                if not resolved_session_id:
+                    resolved_session_id = str(uuid.uuid4())
 
         self._store.ensure_session(resolved_session_id, notebook_path, notebook_os_path)
         if notebook_path:
@@ -249,6 +275,7 @@ class CodexWSHandler(WebSocketHandler):
             "sessionId": resolved_session_id,
             "notebookPath": notebook_path,
             "sessionContextKey": session_context_key,
+            "sessionResolution": session_resolution,
             "history": history,
             "pairedOk": paired_ok,
             "pairedPath": paired_path,
@@ -256,6 +283,8 @@ class CodexWSHandler(WebSocketHandler):
             "pairedMessage": paired_message,
             "notebookMode": notebook_mode,
         }
+        if session_resolution_notice:
+            status_payload["sessionResolutionNotice"] = session_resolution_notice
         effective_sandbox = load_effective_sandbox_for_thread(resolved_session_id)
         if effective_sandbox:
             status_payload["effectiveSandbox"] = effective_sandbox
@@ -387,7 +416,7 @@ class CodexWSHandler(WebSocketHandler):
             if candidate and os.path.isdir(candidate):
                 cwd = candidate
         watch_paths = _refresh_watch_paths(notebook_os_path)
-        before_mtimes = _capture_mtimes(watch_paths)
+        before_file_signatures = _capture_file_signatures(watch_paths)
 
         prompt = self._store.build_prompt(
             session_id,
@@ -615,7 +644,7 @@ class CodexWSHandler(WebSocketHandler):
                 _append_user_message_once()
                 if assistant_buffer:
                     self._store.append_message(session_id, "assistant", "".join(assistant_buffer))
-                file_changed = _has_path_changes(before_mtimes, _capture_mtimes(watch_paths))
+                file_changed = _has_path_changes(before_file_signatures, _capture_file_signatures(watch_paths))
                 self.write_message(
                     json.dumps(
                         {
@@ -640,7 +669,7 @@ class CodexWSHandler(WebSocketHandler):
                 )
             except asyncio.CancelledError:
                 _append_user_message_once()
-                file_changed = _has_path_changes(before_mtimes, _capture_mtimes(watch_paths))
+                file_changed = _has_path_changes(before_file_signatures, _capture_file_signatures(watch_paths))
                 self.write_message(
                     json.dumps(
                         {
@@ -1417,17 +1446,21 @@ def _compute_pairing_status(notebook_path: str, notebook_os_path: str) -> tuple[
     )
 
 
-def _capture_mtimes(paths: list[str]) -> Dict[str, float | None]:
-    mtimes: Dict[str, float | None] = {}
+def _capture_file_signatures(paths: list[str]) -> Dict[str, str | None]:
+    signatures: Dict[str, str | None] = {}
     for path in paths:
         try:
-            mtimes[path] = os.path.getmtime(path)
+            digest = hashlib.sha256()
+            with open(path, "rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            signatures[path] = digest.hexdigest()
         except OSError:
-            mtimes[path] = None
-    return mtimes
+            signatures[path] = None
+    return signatures
 
 
-def _has_path_changes(before: Dict[str, float | None], after: Dict[str, float | None]) -> bool:
+def _has_path_changes(before: Dict[str, str | None], after: Dict[str, str | None]) -> bool:
     keys = set(before.keys()) | set(after.keys())
     for key in keys:
         if before.get(key) != after.get(key):

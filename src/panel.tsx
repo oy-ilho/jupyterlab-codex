@@ -521,6 +521,10 @@ type NotebookSession = {
   pairedOsPath: string;
   pairedMessage: string;
   notebookMode: NotebookMode | null;
+  selectedModelOption: ModelOptionValue;
+  selectedReasoningEffort: ReasoningOptionValue;
+  selectedSandboxMode: SandboxMode;
+  effectiveSandboxMode: SandboxMode | null;
   conversationMode: ConversationMode;
 };
 
@@ -553,6 +557,22 @@ const SANDBOX_OPTIONS = [
   { label: 'Read only', value: 'read-only' }
 ] as const;
 type SandboxMode = (typeof SANDBOX_OPTIONS)[number]['value'];
+
+function readDefaultModelOption(): ModelOptionValue {
+  const savedModel = readStoredModel();
+  if (savedModel && savedModel !== '__config__' && savedModel !== '__custom__') {
+    return savedModel;
+  }
+  return '__config__';
+}
+
+function readDefaultReasoningEffortOption(): ReasoningOptionValue {
+  return readStoredReasoningEffort();
+}
+
+function readDefaultSandboxModeOption(): SandboxMode {
+  return readStoredSandboxMode();
+}
 const AUTO_SAVE_STORAGE_KEY = 'jupyterlab-codex:auto-save-before-send';
 const MODEL_STORAGE_KEY = 'jupyterlab-codex:model';
 const COMMAND_PATH_STORAGE_KEY = 'jupyterlab-codex:command-path';
@@ -942,6 +962,10 @@ function createSession(
     pairedOsPath: '',
     pairedMessage: '',
     notebookMode: null,
+    selectedModelOption: readDefaultModelOption(),
+    selectedReasoningEffort: readDefaultReasoningEffortOption(),
+    selectedSandboxMode: readDefaultSandboxModeOption(),
+    effectiveSandboxMode: null,
     conversationMode: 'resume',
   };
 }
@@ -1792,17 +1816,11 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const currentNotebookSessionKeyRef = useRef<string>('');
   const [cliDefaults, setCliDefaults] = useState<CliDefaultsSnapshot>({ model: null, reasoningEffort: null });
   const [modelOptions, setModelOptions] = useState<ModelOption[]>(() => FALLBACK_MODEL_OPTIONS);
-  const [modelOption, setModelOption] = useState<ModelOptionValue>(() => {
-    const savedModel = readStoredModel();
-    if (savedModel && savedModel !== '__config__' && savedModel !== '__custom__') {
-      return savedModel;
-    }
-    return '__config__';
-  });
+  const [modelOption, setModelOption] = useState<ModelOptionValue>(() => readDefaultModelOption());
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningOptionValue>(() =>
-    readStoredReasoningEffort()
+    readDefaultReasoningEffortOption()
   );
-  const [sandboxMode, setSandboxMode] = useState<SandboxMode>(() => readStoredSandboxMode());
+  const [sandboxMode, setSandboxMode] = useState<SandboxMode>(() => readDefaultSandboxModeOption());
   const [commandPath, setCommandPath] = useState<string>(() => readStoredCommandPath());
   const [autoSaveBeforeSend, setAutoSaveBeforeSend] = useState<boolean>(() => readStoredAutoSave());
   const [includeActiveCell, setIncludeActiveCell] = useState<boolean>(() => readStoredIncludeActiveCell());
@@ -1854,7 +1872,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const storedThreadCount = useMemo<number>(() => getStoredSessionThreadCount(), [sessions]);
   const selectedModel = modelOption === '__config__' ? '' : modelOption;
-  const selectedReasoningEffort = reasoningEffort === '__config__' ? '' : reasoningEffort;
   const autoModel = cliDefaults.model;
   const autoReasoningEffort = cliDefaults.reasoningEffort;
   const reasoningModel = modelOption === '__config__' ? (autoModel || '') : modelOption;
@@ -1873,7 +1890,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       return;
     }
     if (!reasoningOptions.some(option => option.value === reasoningEffort)) {
-      setReasoningEffort('__config__');
+      setCurrentSessionReasoningEffort('__config__');
     }
   }, [reasoningEffort, reasoningOptions]);
 
@@ -1882,7 +1899,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       return;
     }
     if (!modelOptions.some(option => option.value === modelOption)) {
-      setModelOption('__config__');
+      setCurrentSessionModelOption('__config__');
     }
   }, [modelOption, modelOptions]);
 
@@ -1938,6 +1955,22 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     currentNotebookSessionKeyRef.current = currentNotebookSessionKey;
     persistStoredSessionThreads(sessions);
   }, [sessions, currentNotebookSessionKey]);
+
+  useEffect(() => {
+    const sessionKey = currentNotebookSessionKey || '';
+    if (!sessionKey) {
+      return;
+    }
+    const session = sessions.get(sessionKey);
+    if (!session) {
+      return;
+    }
+    setModelOption(prev => (prev === session.selectedModelOption ? prev : session.selectedModelOption));
+    setReasoningEffort(prev =>
+      prev === session.selectedReasoningEffort ? prev : session.selectedReasoningEffort
+    );
+    setSandboxMode(prev => (prev === session.selectedSandboxMode ? prev : session.selectedSandboxMode));
+  }, [currentNotebookSessionKey, sessions]);
 
   useEffect(() => {
     pendingImagesRef.current = pendingImages;
@@ -2092,11 +2125,74 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     }
 
     const created = createSession(normalizedPath, `Session started`, { sessionKey: effectiveSessionKey });
+    const seeded: NotebookSession = {
+      ...created,
+      selectedModelOption: modelOption,
+      selectedReasoningEffort: reasoningEffort,
+      selectedSandboxMode: sandboxMode,
+    };
     const next = new Map(sessionsRef.current);
-    next.set(effectiveSessionKey, created);
+    next.set(effectiveSessionKey, seeded);
     activeSessionKeyByPathRef.current.set(normalizedPath, effectiveSessionKey);
     replaceSessions(next);
-    return created;
+    return seeded;
+  }
+
+  function updateSessionSelection(
+    sessionKey: string,
+    selection: Partial<
+      Pick<
+        NotebookSession,
+        'selectedModelOption' | 'selectedReasoningEffort' | 'selectedSandboxMode' | 'effectiveSandboxMode'
+      >
+    >
+  ): void {
+    const targetSessionKey = sessionKey || currentNotebookSessionKeyRef.current || '';
+    if (!targetSessionKey) {
+      return;
+    }
+    updateSessions(prev => {
+      const next = new Map(prev);
+      const existing =
+        next.get(targetSessionKey) ?? createSession('', `Session started`, { sessionKey: targetSessionKey });
+      const selectedModelOption = selection.selectedModelOption ?? existing.selectedModelOption;
+      const selectedReasoningEffort =
+        selection.selectedReasoningEffort ?? existing.selectedReasoningEffort;
+      const selectedSandboxMode = selection.selectedSandboxMode ?? existing.selectedSandboxMode;
+      const effectiveSandboxMode =
+        selection.effectiveSandboxMode ?? existing.effectiveSandboxMode;
+      if (
+        selectedModelOption === existing.selectedModelOption &&
+        selectedReasoningEffort === existing.selectedReasoningEffort &&
+        selectedSandboxMode === existing.selectedSandboxMode &&
+        effectiveSandboxMode === existing.effectiveSandboxMode
+      ) {
+        return prev;
+      }
+      next.set(targetSessionKey, {
+        ...existing,
+        selectedModelOption,
+        selectedReasoningEffort,
+        selectedSandboxMode,
+        effectiveSandboxMode,
+      });
+      return next;
+    });
+  }
+
+  function setCurrentSessionModelOption(nextValue: ModelOptionValue): void {
+    setModelOption(nextValue);
+    updateSessionSelection(currentNotebookSessionKeyRef.current || '', { selectedModelOption: nextValue });
+  }
+
+  function setCurrentSessionReasoningEffort(nextValue: ReasoningOptionValue): void {
+    setReasoningEffort(nextValue);
+    updateSessionSelection(currentNotebookSessionKeyRef.current || '', { selectedReasoningEffort: nextValue });
+  }
+
+  function setCurrentSessionSandboxMode(nextValue: SandboxMode): void {
+    setSandboxMode(nextValue);
+    updateSessionSelection(currentNotebookSessionKeyRef.current || '', { selectedSandboxMode: nextValue });
   }
 
   function requestRateLimitsRefresh(force = false): void {
@@ -2277,15 +2373,11 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     if (!sessionKey) {
       return;
     }
-    const currentSessionKey = currentNotebookSessionKeyRef.current || '';
-    if (!currentSessionKey || currentSessionKey !== sessionKey) {
-      return;
-    }
     const nextMode = coerceSandboxMode(rawMode);
     if (!nextMode) {
       return;
     }
-    setSandboxMode(prev => (prev === nextMode ? prev : nextMode));
+    updateSessionSelection(sessionKey, { effectiveSandboxMode: nextMode });
   }
 
   function deleteAllSessionsOnServer(): boolean {
@@ -2920,6 +3012,11 @@ function CodexChat(props: CodexChatProps): JSX.Element {
           syncEffectiveSandboxFromStatus(targetSessionKey, msg.effectiveSandbox);
           setSessionConversationMode(targetSessionKey, msg.runMode);
         }
+        const sessionResolutionNotice =
+          typeof msg.sessionResolutionNotice === 'string' ? msg.sessionResolutionNotice.trim() : '';
+        if (targetSessionKey && sessionResolutionNotice && !runId) {
+          appendMessage(targetSessionKey, 'system', sessionResolutionNotice);
+        }
         const sessionId = typeof msg.sessionId === 'string' && msg.sessionId.trim() ? msg.sessionId.trim() : '';
         const history = coerceSessionHistory(msg.history);
         if (targetSessionKey && (sessionId || history.length > 0)) {
@@ -3186,7 +3283,13 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       }
     }
 
-    const newSession = createThreadResetSession(path, sessionKey, createSessionEventId());
+    const newSessionBase = createThreadResetSession(path, sessionKey, createSessionEventId());
+    const newSession: NotebookSession = {
+      ...newSessionBase,
+      selectedModelOption: modelOption,
+      selectedReasoningEffort: reasoningEffort,
+      selectedSandboxMode: sandboxMode,
+    };
     updateSessions(prev => {
       const next = new Map(prev);
       next.set(sessionKey, newSession);
@@ -3396,7 +3499,11 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       includeActiveCell && includeActiveCellOutput && notebookMode === 'ipynb';
     const cellOutput = includeCellOutputKey ? getActiveCellOutput(activeWidget) : '';
     const session = ensureSession(notebookPath, sessionKey);
-    const sandboxForSend = sandboxMode;
+    const modelForSend = current?.selectedModelOption ?? modelOption;
+    const reasoningForSend = current?.selectedReasoningEffort ?? reasoningEffort;
+    const sandboxForSend = current?.selectedSandboxMode ?? sandboxMode;
+    const selectedModelForSend = modelForSend === '__config__' ? '' : modelForSend;
+    const selectedReasoningForSend = reasoningForSend === '__config__' ? '' : reasoningForSend;
 
     const content = trimmed || (hasImages ? 'Please analyze the attached image(s).' : '');
     let images: { name: string; dataUrl: string }[] | undefined;
@@ -3420,8 +3527,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       content,
       notebookPath,
       commandPath: commandPath.trim() || undefined,
-      model: selectedModel || undefined,
-      reasoningEffort: selectedReasoningEffort || undefined,
+      model: selectedModelForSend || undefined,
+      reasoningEffort: selectedReasoningForSend || undefined,
       sandbox: sandboxForSend,
       images
     };
@@ -3488,21 +3595,24 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     currentNotebookPath.length > 0 &&
     currentSession?.pairedOk !== false;
   const runningSummary = status === 'running' ? progress || 'Working...' : '';
+  const activeModelOption = currentSession?.selectedModelOption ?? modelOption;
+  const activeReasoningEffort = currentSession?.selectedReasoningEffort ?? reasoningEffort;
+  const activeSandboxMode = currentSession?.selectedSandboxMode ?? sandboxMode;
   const autoModelLabel = autoModel
     ? findModelLabel(autoModel, modelOptions)
     : 'Auto';
   const selectedModelLabel =
-    modelOption === '__config__'
+    activeModelOption === '__config__'
       ? autoModelLabel
-      : findModelLabel(modelOption, modelOptions);
+      : findModelLabel(activeModelOption, modelOptions);
   const autoReasoningLabel = autoReasoningEffort
     ? findReasoningLabel(autoReasoningEffort, reasoningOptions)
     : 'Auto';
   const selectedReasoningLabel =
-    reasoningEffort === '__config__'
+    activeReasoningEffort === '__config__'
       ? autoReasoningLabel
-      : findReasoningLabel(reasoningEffort, reasoningOptions);
-  const selectedSandboxLabel = SANDBOX_OPTIONS.find(option => option.value === sandboxMode)?.label ?? 'Permission';
+      : findReasoningLabel(activeReasoningEffort, reasoningOptions);
+  const selectedSandboxLabel = SANDBOX_OPTIONS.find(option => option.value === activeSandboxMode)?.label ?? 'Permission';
   const notificationPermission = getBrowserNotificationPermission();
   const notificationsUnsupported = notificationPermission === 'unsupported';
   const minimumNotifyDurationLabel =
@@ -3965,9 +4075,9 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                 )}
                 {modelOptions.map(option => {
                   const inferred =
-                    modelOption === '__config__' && autoModel && modelOptions.some(option => option.value === autoModel)
+                    activeModelOption === '__config__' && autoModel && modelOptions.some(option => option.value === autoModel)
                       ? (autoModel as ModelOptionValue)
-                      : modelOption;
+                      : activeModelOption;
                   const isActive = inferred === option.value;
                   return (
                     <button
@@ -3975,7 +4085,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                       type="button"
                       className={`jp-CodexMenuItem ${isActive ? 'is-active' : ''}`}
                       onClick={() => {
-                        setModelOption(option.value);
+                        setCurrentSessionModelOption(option.value);
                         setModelMenuOpen(false);
                       }}
                     >
@@ -4007,9 +4117,9 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                 >
                   <ReasoningEffortIcon
                     effort={
-                      (reasoningEffort === '__config__' && autoReasoningEffort
+                      (activeReasoningEffort === '__config__' && autoReasoningEffort
                         ? autoReasoningEffort
-                        : reasoningEffort) as ReasoningOptionValue
+                        : activeReasoningEffort) as ReasoningOptionValue
                     }
                     effortOptions={reasoningOptions}
                     width={17}
@@ -4030,7 +4140,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                 )}
                 {reasoningOptions.map(option => {
                   const inferred =
-                    reasoningEffort === '__config__' && autoReasoningEffort ? autoReasoningEffort : reasoningEffort;
+                    activeReasoningEffort === '__config__' && autoReasoningEffort ? autoReasoningEffort : activeReasoningEffort;
                   const isActive = inferred === option.value;
                   return (
                     <button
@@ -4038,7 +4148,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                       type="button"
                       className={`jp-CodexMenuItem ${isActive ? 'is-active' : ''}`}
                       onClick={() => {
-                        setReasoningEffort(option.value);
+                        setCurrentSessionReasoningEffort(option.value);
                         setReasoningMenuOpen(false);
                       }}
                     >
@@ -4054,7 +4164,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 	              <div className="jp-CodexMenuWrap" ref={permissionMenuWrapRef}>
 	                <button
 	                  type="button"
-	                  className={`jp-CodexIconBtn jp-CodexPermissionBtn${permissionMenuOpen ? ' is-open' : ''}${sandboxMode === 'danger-full-access' ? ' is-danger' : ''}${sandboxMode === 'read-only' ? ' is-warning' : ''}`}
+	                  className={`jp-CodexIconBtn jp-CodexPermissionBtn${permissionMenuOpen ? ' is-open' : ''}${activeSandboxMode === 'danger-full-access' ? ' is-danger' : ''}${activeSandboxMode === 'read-only' ? ' is-warning' : ''}`}
 	                  ref={permissionBtnRef}
                   onClick={() => {
                     setPermissionMenuOpen(open => !open);
@@ -4083,14 +4193,14 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 	                  <button
 	                    key={option.value}
 	                    type="button"
-	                    className={`jp-CodexMenuItem ${sandboxMode === option.value ? 'is-active' : ''}`}
+	                    className={`jp-CodexMenuItem ${activeSandboxMode === option.value ? 'is-active' : ''}`}
 	                    onClick={() => {
-	                      setSandboxMode(option.value);
+	                      setCurrentSessionSandboxMode(option.value);
 	                      setPermissionMenuOpen(false);
 	                    }}
 	                  >
                     <span className="jp-CodexMenuItemLabel">{option.label}</span>
-                    {sandboxMode === option.value && <CheckIcon className="jp-CodexMenuCheck" width={16} height={16} />}
+                    {activeSandboxMode === option.value && <CheckIcon className="jp-CodexMenuCheck" width={16} height={16} />}
                   </button>
                 ))}
               </PortalMenu>
