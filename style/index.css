@@ -123,7 +123,7 @@
   justify-self: end;
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 0;
 }
 
 @container (max-width: 420px) {
@@ -142,7 +142,7 @@
   }
 
   .jp-CodexChat-header-actions {
-    gap: 6px;
+    gap: 0;
   }
 
   .jp-CodexChat-notebook {
