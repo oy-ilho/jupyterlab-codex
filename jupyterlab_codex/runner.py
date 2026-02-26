@@ -407,21 +407,28 @@ class CodexRunner:
                 cleaned.append(token)
                 idx += 1
 
-            insertion_index = cleaned.index("-") if "-" in cleaned else len(cleaned)
+            stdin_insertion_index = cleaned.index("-") if "-" in cleaned else len(cleaned)
             if requested_resume_session_id and "resume" not in cleaned:
-                cleaned[insertion_index:insertion_index] = ["resume", requested_resume_session_id]
-                insertion_index = cleaned.index("-") if "-" in cleaned else len(cleaned)
+                cleaned[stdin_insertion_index:stdin_insertion_index] = [
+                    "resume",
+                    requested_resume_session_id,
+                ]
+            options_insertion_index = (
+                cleaned.index("resume")
+                if "resume" in cleaned
+                else (cleaned.index("-") if "-" in cleaned else len(cleaned))
+            )
             to_insert: List[str] = []
             if requested_images:
                 to_insert.extend(["--image", *requested_images])
-            if requested_sandbox and not requested_resume_session_id:
+            if requested_sandbox:
                 to_insert.extend(["-s", requested_sandbox])
             if requested_model:
                 to_insert.extend(["-m", requested_model])
             if requested_reasoning_effort:
                 to_insert.extend(["-c", f'model_reasoning_effort="{requested_reasoning_effort}"'])
 
-            cleaned[insertion_index:insertion_index] = to_insert
+            cleaned[options_insertion_index:options_insertion_index] = to_insert
             return cleaned
 
         effective_model = requested_model or self._default_model
