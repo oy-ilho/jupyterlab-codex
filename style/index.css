@@ -1742,7 +1742,7 @@
 
 .jp-CodexMenu.jp-CodexChat-selectionPopover {
   min-width: min(18ch, calc(100vw - 24px)) !important;
-  width: min(600px, calc(100vw - 24px)) !important;
+  width: fit-content !important;
   max-width: min(600px, calc(100vw - 24px)) !important;
   padding: 8px !important;
 }
