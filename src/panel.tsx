@@ -11,6 +11,15 @@ import { marked } from 'marked';
 import markedKatex from 'marked-katex-extension';
 import DOMPurify from 'dompurify';
 import hljs from 'highlight.js/lib/common';
+import {
+  type ModelCatalogEntry,
+  parseModelCatalog,
+  parseServerMessage,
+  buildCancelMessage,
+  buildDeleteAllSessionsMessage,
+  buildSendMessage,
+  buildStartSessionMessage
+} from './protocol';
 
 marked.use(
   markedKatex({
@@ -496,13 +505,6 @@ type CodexRateLimitsSnapshot = {
   contextWindow: ContextWindowSnapshot | null;
 };
 
-type ModelCatalogEntry = {
-  model: string;
-  displayName: string;
-  reasoningEfforts?: string[];
-  defaultReasoningEffort?: string;
-};
-
 type CodexChatProps = {
   app: JupyterFrontEnd;
   notebooks: INotebookTracker;
@@ -630,57 +632,8 @@ function coerceReasoningEffortEntry(value: unknown): string {
   return '';
 }
 
-function readModelCatalog(rawModels: unknown): ModelCatalogEntry[] {
-  if (!Array.isArray(rawModels)) {
-    return [];
-  }
-
-  const seen = new Set<string>();
-  const catalog: ModelCatalogEntry[] = [];
-  for (const item of rawModels) {
-    if (!item || typeof item !== 'object') {
-      continue;
-    }
-    const rawModel = (item as { model?: unknown }).model;
-    const rawDisplayName = (item as { displayName?: unknown }).displayName;
-    const rawDefaultReasoningEffort = (item as { defaultReasoningEffort?: unknown }).defaultReasoningEffort;
-    const rawReasoningEfforts =
-      (item as { reasoningEfforts?: unknown }).reasoningEfforts ??
-      (item as { supportedReasoningEfforts?: unknown }).supportedReasoningEfforts;
-    if (typeof rawModel !== 'string') {
-      continue;
-    }
-    const model = rawModel.trim();
-    if (!model || seen.has(model)) {
-      continue;
-    }
-    seen.add(model);
-
-    const displayName = typeof rawDisplayName === 'string' && rawDisplayName.trim() ? rawDisplayName.trim() : model;
-    const defaultReasoningEffort = coerceReasoningEffortEntry(rawDefaultReasoningEffort);
-    const reasoningEfforts = Array.isArray(rawReasoningEfforts)
-      ? rawReasoningEfforts.reduce<string[]>((acc, effortCandidate: unknown) => {
-          const effort = coerceReasoningEffortEntry(effortCandidate);
-          if (!effort || acc.includes(effort)) {
-            return acc;
-          }
-          acc.push(effort);
-          return acc;
-        }, [])
-      : [];
-    catalog.push({
-      model,
-      displayName,
-      ...(reasoningEfforts.length > 0 ? { reasoningEfforts } : {}),
-      ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
-    });
-  }
-
-  return catalog;
-}
-
 function readModelOptions(rawModels: unknown): ModelOption[] {
-  const catalog = readModelCatalog(rawModels);
+  const catalog = parseModelCatalog(rawModels);
   return catalog.map(entry => ({ label: entry.displayName, value: entry.model }));
 }
 
@@ -712,7 +665,7 @@ function getReasoningEffortBars(
 }
 
 function buildReasoningOptions(rawModels: unknown, selectedModel: string): ReasoningOption[] {
-  const catalog = readModelCatalog(rawModels);
+  const catalog = parseModelCatalog(rawModels);
   const normalizedModel = selectedModel.trim();
   const modelByName = catalog.find(item => item.model === normalizedModel);
   const reasons =
@@ -2659,14 +2612,15 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     const normalizedCommandPath = commandPath.trim();
 
     socket.send(
-      JSON.stringify({
-        type: 'start_session',
-        sessionId: session.threadId,
-        notebookPath,
-        sessionContextKey: sessionKey,
-        forceNewThread: options?.forceNewThread === true,
-        commandPath: normalizedCommandPath || undefined
-      })
+      JSON.stringify(
+        buildStartSessionMessage({
+          sessionId: session.threadId,
+          sessionContextKey: sessionKey,
+          notebookPath,
+          forceNewThread: options?.forceNewThread === true,
+          commandPath: normalizedCommandPath || undefined
+        })
+      )
     );
   }
 
@@ -2687,7 +2641,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       return false;
     }
     try {
-      socket.send(JSON.stringify({ type: 'delete_all_sessions' }));
+      socket.send(JSON.stringify(buildDeleteAllSessionsMessage()));
       return true;
     } catch {
       return false;
@@ -3253,15 +3207,14 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     };
 
     socket.onmessage = event => {
-      let msg: any;
-      try {
-        msg = JSON.parse(event.data);
-      } catch (err) {
+      const msg = parseServerMessage(event.data);
+      if (msg === null) {
         appendMessage(currentNotebookSessionKeyRef.current || '', 'system', `Invalid message: ${String(event.data)}`);
         return;
       }
 
-      const runId = typeof msg.runId === 'string' ? msg.runId : '';
+      const genericMessage = msg as { runId?: string; error?: string; message?: string };
+      const runId = typeof genericMessage.runId === 'string' ? genericMessage.runId : '';
       const targetSessionKey = resolveMessageSessionKey(msg);
 
       if (msg.type === 'cli_defaults') {
@@ -3273,8 +3226,9 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         const reasoningEffort = reasoningIsPresent
           ? coerceReasoningEffort(typeof msg.reasoningEffort === 'string' ? msg.reasoningEffort : '')
           : null;
-        const availableModels = Array.isArray(msg.availableModels) ? msg.availableModels : undefined;
-        const normalizedAvailableModels = availableModels ? readModelCatalog(availableModels) : undefined;
+        const normalizedAvailableModels = availableModelsIsPresent
+          ? parseModelCatalog(msg.availableModels)
+          : undefined;
         setCliDefaults(prev => ({
           model: modelIsPresent ? model : prev.model,
           reasoningEffort: reasoningIsPresent ? reasoningEffort : prev.reasoningEffort,
@@ -3485,8 +3439,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         }
         if (!cancelled && exitCode !== null && exitCode !== 0) {
           const explicitError =
-            (typeof msg.error === 'string' && msg.error.trim()) ||
-            (typeof msg.message === 'string' && msg.message.trim()) ||
+            (typeof genericMessage.error === 'string' && genericMessage.error.trim()) ||
+            (typeof genericMessage.message === 'string' && genericMessage.message.trim()) ||
             '';
           const trimmedError = explicitError ? truncateEnd(explicitError, 600) : '';
           const failureMessage = trimmedError
@@ -3645,7 +3599,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     }
 
     setSessionProgress(sessionKey, 'Cancelling...');
-    socket.send(JSON.stringify({ type: 'cancel', runId }));
+    socket.send(JSON.stringify(buildCancelMessage(runId)));
   }
 
   function clearPendingImages(): void {
@@ -3869,29 +3823,24 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       }
     }
 
-    const sendPayload: Record<string, unknown> = {
-      type: 'send',
-      sessionId: session.threadId,
-      sessionContextKey: sessionKey,
-      content,
-      notebookPath,
-      commandPath: commandPath.trim() || undefined,
-      model: selectedModelForSend,
-      reasoningEffort: selectedReasoningForSend,
-      sandbox: sandboxForSend,
-      images
-    };
-    if (includeSelectionKey) {
-      sendPayload.selection = selection;
-    }
-    if (includeCellOutputKey) {
-      sendPayload.cellOutput = cellOutput;
-    }
-    if (messageSelectionPreview) {
-      sendPayload.uiSelectionPreview = messageSelectionPreview;
-    }
-
-    socket.send(JSON.stringify(sendPayload));
+    socket.send(
+      JSON.stringify(
+        buildSendMessage({
+          sessionId: session.threadId,
+          sessionContextKey: sessionKey,
+          content,
+          notebookPath,
+          commandPath: commandPath.trim(),
+          model: selectedModelForSend,
+          reasoningEffort: selectedReasoningForSend,
+          sandbox: sandboxForSend,
+          ...(includeSelectionKey ? { selection } : {}),
+          ...(includeCellOutputKey ? { cellOutput } : {}),
+          ...(images ? { images } : {}),
+          ...(messageSelectionPreview ? { uiSelectionPreview: messageSelectionPreview } : {})
+        })
+      )
+    );
     appendStoredSelectionPreviewEntry(session.threadId, content, messageSelectionPreview);
 
     const imageCount = pendingImagesRef.current.length;
