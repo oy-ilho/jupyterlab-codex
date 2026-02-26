@@ -1,18 +1,24 @@
 import json
 import os
 import re
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
+from uuid import uuid4
 
 
 _TRUE_VALUES = {"1", "true", "y", "yes", "on"}
 _FALSE_VALUES = {"0", "false", "n", "no", "off"}
 _DEFAULT_SESSION_RETENTION_DAYS = 30
+_DEFAULT_SESSION_MAX_MESSAGES = 300
+_DEFAULT_SESSION_MAX_BYTES = 2_000_000
+_DEFAULT_SESSION_PRUNE_INTERVAL_MINUTES = 15
 _DEFAULT_MAX_MESSAGE_CHARS = 12000
 _DEFAULT_UI_LABEL_MAX_CHARS = 80
 _DEFAULT_UI_PREVIEW_MAX_CHARS = 1000
 _DEFAULT_UI_PREVIEW_MAX_ITEMS_PER_SESSION = 10
+_SESSION_FILE_VERSION = 1
 
 _SENSITIVE_PATTERNS = [
     (
@@ -28,6 +34,10 @@ _SENSITIVE_PATTERNS = [
 
 
 class SessionStore:
+    """Session persistence with bounded growth and recoverable file handling."""
+
+    _file_lock = threading.RLock()
+
     def __init__(self, base_dir: str | None = None):
         root = base_dir or os.path.join(os.path.expanduser("~"), ".jupyter", "codex-sessions")
         self._base = Path(root)
@@ -35,25 +45,46 @@ class SessionStore:
             os.environ.get("JUPYTERLAB_CODEX_SESSION_LOGGING"), default=True
         )
         self._retention_days = _as_non_negative_int(
-            os.environ.get("JUPYTERLAB_CODEX_SESSION_RETENTION_DAYS"), _DEFAULT_SESSION_RETENTION_DAYS
+            os.environ.get("JUPYTERLAB_CODEX_SESSION_RETENTION_DAYS"),
+            _DEFAULT_SESSION_RETENTION_DAYS,
         )
         self._max_message_chars = _as_positive_int(
             os.environ.get("JUPYTERLAB_CODEX_SESSION_MAX_MESSAGE_CHARS"), _DEFAULT_MAX_MESSAGE_CHARS
         )
+        self._max_messages_per_session = _as_positive_int(
+            os.environ.get("JUPYTERLAB_CODEX_SESSION_MAX_MESSAGES"),
+            _DEFAULT_SESSION_MAX_MESSAGES,
+        )
+        self._max_session_bytes = _as_non_negative_int(
+            os.environ.get("JUPYTERLAB_CODEX_SESSION_MAX_BYTES"),
+            _DEFAULT_SESSION_MAX_BYTES,
+        )
+        self._prune_interval = timedelta(
+            minutes=_as_positive_int(
+                os.environ.get("JUPYTERLAB_CODEX_SESSION_PRUNE_INTERVAL_MINUTES"),
+                _DEFAULT_SESSION_PRUNE_INTERVAL_MINUTES,
+            )
+        )
+        self._last_global_prune = datetime.min.replace(tzinfo=timezone.utc)
+
         if self._logging_enabled:
             self._base.mkdir(parents=True, exist_ok=True)
-            self.prune_expired_sessions()
+            with self._file_lock:
+                self._prune_expired_sessions_locked()
 
     def ensure_session(self, session_id: str, notebook_path: str, notebook_os_path: str = "") -> None:
         if not self._logging_enabled:
             return
+        if not session_id:
+            return
 
-        meta_path = self._meta_path(session_id)
-        if meta_path.exists():
+        existing_meta = self._load_meta(session_id)
+        if existing_meta:
             return
 
         paired_path, paired_os_path = _derive_paired_paths(notebook_path, notebook_os_path)
         meta = {
+            "schema_version": _SESSION_FILE_VERSION,
             "session_id": session_id,
             "notebook_path": notebook_path,
             "notebook_os_path": notebook_os_path,
@@ -61,112 +92,77 @@ class SessionStore:
             "paired_os_path": paired_os_path,
             "created_at": _now_iso(),
             "updated_at": _now_iso(),
+            "retention_days": self._retention_days,
+            "max_messages_per_session": self._max_messages_per_session,
         }
-        meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        with self._file_lock:
+            self._write_meta_atomic(self._meta_path(session_id), meta)
 
     def append_message(
         self, session_id: str, role: str, content: str, ui: Dict[str, Any] | None = None
     ) -> None:
         if not self._logging_enabled:
             return
+        if not session_id:
+            return
 
+        normalized_role = role if role in {"system", "user", "assistant"} else "system"
         record = {
-            "role": role,
+            "role": normalized_role,
             "content": _sanitize_message(content, self._max_message_chars),
             "timestamp": _now_iso(),
         }
         ui_payload = _sanitize_ui_payload(ui)
         if ui_payload:
             record["ui"] = ui_payload
-        with self._jsonl_path(session_id).open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record))
-            handle.write("\n")
-        self._touch_meta(session_id)
-        if role == "user" and ui_payload:
-            self._prune_user_ui_previews(
-                session_id, keep_latest=_DEFAULT_UI_PREVIEW_MAX_ITEMS_PER_SESSION
-            )
-        self.prune_expired_sessions()
+
+        with self._file_lock:
+            path = self._jsonl_path(session_id)
+            try:
+                with path.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(record))
+                    handle.write("\n")
+            except OSError:
+                return
+
+            self._touch_meta_locked(session_id)
+            self._enforce_session_limits_locked(session_id)
+            if self._is_global_prune_due():
+                self._prune_expired_sessions_locked()
 
     def load_messages(self, session_id: str) -> List[Dict[str, Any]]:
         if not self._logging_enabled:
+            return []
+        if not session_id:
             return []
 
         path = self._jsonl_path(session_id)
         if not path.exists():
             return []
 
-        messages = []
-        with path.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    messages.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
+        messages: List[Dict[str, Any]] = []
+        with self._file_lock:
+            try:
+                with path.open("r", encoding="utf-8") as handle:
+                    for line in handle:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            payload = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if isinstance(payload, dict):
+                            messages.append(payload)
+            except OSError:
+                return []
         return messages
 
     def _prune_user_ui_previews(self, session_id: str, keep_latest: int) -> None:
         if keep_latest <= 0:
             return
-
-        path = self._jsonl_path(session_id)
-        if not path.exists():
-            return
-
-        try:
-            raw_lines = path.read_text(encoding="utf-8").splitlines()
-        except OSError:
-            return
-
-        records: List[Dict[str, Any]] = []
-        for line in raw_lines:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                item = json.loads(line)
-            except json.JSONDecodeError:
-                return
-            if not isinstance(item, dict):
-                return
-            records.append(item)
-
-        if not records:
-            return
-
-        ui_indices: List[int] = []
-        for idx, record in enumerate(records):
-            if record.get("role") != "user":
-                continue
-            ui = record.get("ui")
-            if (
-                isinstance(ui, dict)
-                and isinstance(ui.get("selectionPreview"), dict)
-            ):
-                ui_indices.append(idx)
-
-        if len(ui_indices) <= keep_latest:
-            return
-
-        changed = False
-        for idx in ui_indices[: len(ui_indices) - keep_latest]:
-            if "ui" in records[idx]:
-                records[idx].pop("ui", None)
-                changed = True
-
-        if not changed:
-            return
-
-        try:
-            with path.open("w", encoding="utf-8") as handle:
-                for record in records:
-                    handle.write(json.dumps(record))
-                    handle.write("\n")
-        except OSError:
-            return
+        with self._file_lock:
+            self._trim_session_records_locked(session_id, keep_ui_previews=keep_latest)
 
     def build_prompt(
         self,
@@ -336,57 +332,61 @@ class SessionStore:
         latest_session_id = ""
         latest_updated_at = None
 
-        for path in self._base.glob("*.meta.json"):
-            session_id = path.stem.removesuffix(".meta")
-            try:
-                meta = json.loads(path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, IOError):
-                continue
-            if not isinstance(meta, dict):
-                continue
+        with self._file_lock:
+            for path in self._base.glob("*.meta.json"):
+                session_id = path.stem.removesuffix(".meta")
+                try:
+                    meta = json.loads(path.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, IOError):
+                    continue
+                if not isinstance(meta, dict):
+                    continue
 
-            matched = False
-            path_match = (meta.get("notebook_path") or "").strip()
-            os_path_match = (meta.get("notebook_os_path") or "").strip()
-            if normalized_notebook_path and path_match == normalized_notebook_path:
-                matched = True
-            if not matched and normalized_notebook_os_path and os_path_match == normalized_notebook_os_path:
-                matched = True
-            if not matched:
-                continue
+                matched = False
+                path_match = (meta.get("notebook_path") or "").strip()
+                os_path_match = (meta.get("notebook_os_path") or "").strip()
+                if normalized_notebook_path and path_match == normalized_notebook_path:
+                    matched = True
+                if not matched and normalized_notebook_os_path and os_path_match == normalized_notebook_os_path:
+                    matched = True
+                if not matched:
+                    continue
 
-            updated_at = meta.get("updated_at") or meta.get("created_at")
-            parsed_updated_at = _parse_iso_datetime(updated_at)
-            if parsed_updated_at is None:
-                continue
-            if latest_updated_at is None or parsed_updated_at > latest_updated_at:
-                latest_updated_at = parsed_updated_at
-                latest_session_id = session_id
+                updated_at = meta.get("updated_at") or meta.get("created_at")
+                parsed_updated_at = _parse_iso_datetime(updated_at)
+                if parsed_updated_at is None:
+                    continue
+                if latest_updated_at is None or parsed_updated_at > latest_updated_at:
+                    latest_updated_at = parsed_updated_at
+                    latest_session_id = session_id
 
         return latest_session_id
 
     def delete_session(self, session_id: str) -> None:
         if not self._logging_enabled:
             return
-
         normalized_session_id = (session_id or "").strip()
         if not normalized_session_id:
             return
 
-        self._delete_session_files(normalized_session_id)
+        with self._file_lock:
+            self._delete_session_files(normalized_session_id)
 
     def delete_all_sessions(self) -> tuple[int, int]:
         if not self._logging_enabled:
             return (0, 0)
+        if not self._base.exists():
+            return (0, 0)
 
         deleted_count = 0
         failed_count = 0
-        for path in self._base.glob("*.meta.json"):
-            session_id = path.stem.removesuffix(".meta")
-            if self._delete_session_files(session_id):
-                deleted_count += 1
-            else:
-                failed_count += 1
+        with self._file_lock:
+            for path in self._base.glob("*.meta.json"):
+                session_id = path.stem.removesuffix(".meta")
+                if self._delete_session_files(session_id):
+                    deleted_count += 1
+                else:
+                    failed_count += 1
 
         return (deleted_count, failed_count)
 
@@ -395,26 +395,29 @@ class SessionStore:
     ) -> None:
         if not self._logging_enabled:
             return
+        if not session_id:
+            return
 
-        meta_path = self._meta_path(session_id)
-        if meta_path.exists():
-            try:
-                meta = json.loads(meta_path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, IOError):
-                meta = {}
-        else:
-            meta = {
-                "session_id": session_id,
-                "created_at": _now_iso(),
-            }
+        with self._file_lock:
+            meta = self._load_meta(session_id)
+            if not meta:
+                meta = {
+                    "session_id": session_id,
+                    "created_at": _now_iso(),
+                    "schema_version": _SESSION_FILE_VERSION,
+                }
 
-        paired_path, paired_os_path = _derive_paired_paths(notebook_path, notebook_os_path)
-        meta["notebook_path"] = notebook_path
-        meta["notebook_os_path"] = notebook_os_path
-        meta["paired_path"] = paired_path
-        meta["paired_os_path"] = paired_os_path
-        meta["updated_at"] = _now_iso()
-        meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+            paired_path, paired_os_path = _derive_paired_paths(notebook_path, notebook_os_path)
+            meta["session_id"] = session_id
+            meta["notebook_path"] = notebook_path
+            meta["notebook_os_path"] = notebook_os_path
+            meta["paired_path"] = paired_path
+            meta["paired_os_path"] = paired_os_path
+            meta["schema_version"] = _SESSION_FILE_VERSION
+            meta["updated_at"] = _now_iso()
+            meta["retention_days"] = self._retention_days
+            meta["max_messages_per_session"] = self._max_messages_per_session
+            self._write_meta_atomic(self._meta_path(session_id), meta)
 
     def close_session(self, session_id: str) -> None:
         if not self._logging_enabled:
@@ -434,63 +437,76 @@ class SessionStore:
         if not self._logging_enabled:
             return new_id
 
-        old_jsonl = self._jsonl_path(old_id)
-        new_jsonl = self._jsonl_path(new_id)
-        if old_jsonl.exists():
-            if new_jsonl.exists():
+        with self._file_lock:
+            old_jsonl = self._jsonl_path(old_id)
+            new_jsonl = self._jsonl_path(new_id)
+            if old_jsonl.exists():
+                if new_jsonl.exists():
+                    try:
+                        with old_jsonl.open("r", encoding="utf-8") as source, new_jsonl.open(
+                            "a", encoding="utf-8"
+                        ) as target:
+                            for line in source:
+                                if not line:
+                                    continue
+                                if line.endswith("\n"):
+                                    target.write(line)
+                                else:
+                                    target.write(f"{line}\n")
+                        old_jsonl.unlink()
+                    except OSError:
+                        pass
+                else:
+                    try:
+                        old_jsonl.rename(new_jsonl)
+                    except OSError:
+                        pass
+
+            merged_meta: Dict[str, Any] = {}
+            for candidate in (self._meta_path(new_id), self._meta_path(old_id)):
+                if not candidate.exists():
+                    continue
                 try:
-                    with old_jsonl.open("r", encoding="utf-8") as source, new_jsonl.open(
-                        "a", encoding="utf-8"
-                    ) as target:
-                        for line in source:
-                            if not line:
-                                continue
-                            if line.endswith("\n"):
-                                target.write(line)
-                            else:
-                                target.write(f"{line}\n")
-                    old_jsonl.unlink()
+                    loaded = json.loads(candidate.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, IOError):
+                    continue
+                if isinstance(loaded, dict):
+                    merged_meta.update(loaded)
+
+            if merged_meta:
+                merged_meta["session_id"] = new_id
+                merged_meta["updated_at"] = _now_iso()
+                merged_meta["schema_version"] = _SESSION_FILE_VERSION
+                merged_meta["retention_days"] = self._retention_days
+                merged_meta["max_messages_per_session"] = self._max_messages_per_session
+                try:
+                    self._write_meta_atomic(self._meta_path(new_id), merged_meta)
                 except OSError:
                     pass
-            else:
+
+            old_meta = self._meta_path(old_id)
+            new_meta = self._meta_path(new_id)
+            if old_meta != new_meta and old_meta.exists():
                 try:
-                    old_jsonl.rename(new_jsonl)
+                    old_meta.unlink()
                 except OSError:
                     pass
 
-        merged_meta: Dict[str, Any] = {}
-        for candidate in (self._meta_path(new_id), self._meta_path(old_id)):
-            if not candidate.exists():
-                continue
-            try:
-                loaded = json.loads(candidate.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, IOError):
-                continue
-            if isinstance(loaded, dict):
-                merged_meta.update(loaded)
-
-        if merged_meta:
-            merged_meta["session_id"] = new_id
-            merged_meta["updated_at"] = _now_iso()
-            try:
-                self._meta_path(new_id).write_text(json.dumps(merged_meta, indent=2), encoding="utf-8")
-            except IOError:
-                pass
-
-        old_meta = self._meta_path(old_id)
-        new_meta = self._meta_path(new_id)
-        if old_meta != new_meta and old_meta.exists():
-            try:
-                old_meta.unlink()
-            except OSError:
-                pass
+            # Ensure the policy metadata is present even for files created before this change.
+            if new_meta.exists():
+                self._enforce_session_limits_locked(new_id, skip_size_limit=True)
 
         return new_id
 
     def _touch_meta(self, session_id: str) -> None:
         if not self._logging_enabled:
             return
+        if not session_id:
+            return
+        with self._file_lock:
+            self._touch_meta_locked(session_id)
 
+    def _touch_meta_locked(self, session_id: str) -> None:
         meta_path = self._meta_path(session_id)
         if not meta_path.exists():
             return
@@ -498,25 +514,43 @@ class SessionStore:
         try:
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, IOError):
-            return
+            meta = {
+                "session_id": session_id,
+                "created_at": _now_iso(),
+                "schema_version": _SESSION_FILE_VERSION,
+            }
+        if not isinstance(meta, dict):
+            meta = {
+                "session_id": session_id,
+                "created_at": _now_iso(),
+                "schema_version": _SESSION_FILE_VERSION,
+            }
 
         meta["updated_at"] = _now_iso()
-        meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        meta["schema_version"] = _SESSION_FILE_VERSION
+        meta["retention_days"] = self._retention_days
+        self._write_meta_atomic(meta_path, meta)
 
     def _load_meta(self, session_id: str) -> Dict[str, str]:
         if not self._logging_enabled:
             return {}
+        if not session_id:
+            return {}
 
         meta_path = self._meta_path(session_id)
         if not meta_path.exists():
             return {}
 
-        try:
-            meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, IOError):
-            return {}
+        with self._file_lock:
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, IOError):
+                return {}
 
-        return meta if isinstance(meta, dict) else {}
+            if not isinstance(meta, dict):
+                return {}
+
+            return meta
 
     def _jsonl_path(self, session_id: str) -> Path:
         return self._base / f"{session_id}.jsonl"
@@ -528,23 +562,160 @@ class SessionStore:
         if not self._logging_enabled or self._retention_days <= 0:
             return
 
+        with self._file_lock:
+            self._prune_expired_sessions_locked()
+            self._last_global_prune = datetime.now(timezone.utc)
+
+    def _prune_expired_sessions_locked(self) -> None:
+        if self._retention_days <= 0:
+            return
+
         now = datetime.now(timezone.utc)
         cutoff = now - timedelta(days=self._retention_days)
+        active_session_ids = set()
+
         for path in self._base.glob("*.meta.json"):
             session_id = path.stem.removesuffix(".meta")
             try:
                 meta = json.loads(path.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, IOError):
+                self._delete_session_files(session_id)
                 continue
             if not isinstance(meta, dict):
+                self._delete_session_files(session_id)
                 continue
 
             updated_at = meta.get("updated_at") or meta.get("created_at")
             when = _parse_iso_datetime(updated_at)
             if not when:
-                continue
-            if when < cutoff:
                 self._delete_session_files(session_id)
+                continue
+            if when >= cutoff:
+                active_session_ids.add(session_id)
+                continue
+
+            self._delete_session_files(session_id)
+
+        for path in self._base.glob("*.jsonl"):
+            if path.stem not in active_session_ids:
+                self._delete_session_files(path.stem)
+
+        self._last_global_prune = datetime.now(timezone.utc)
+
+    def _is_global_prune_due(self) -> bool:
+        now = datetime.now(timezone.utc)
+        if now - self._last_global_prune < self._prune_interval:
+            return False
+        return True
+
+    def _enforce_session_limits_locked(self, session_id: str, skip_size_limit: bool = False) -> None:
+        path = self._jsonl_path(session_id)
+        if not path.exists():
+            return
+
+        if not skip_size_limit:
+            should_check_size = self._max_session_bytes > 0 and path.stat().st_size > self._max_session_bytes
+        else:
+            should_check_size = False
+
+        records, invalid_count = _read_jsonl_records(path)
+        if not records and invalid_count == 0:
+            return
+
+        original_records = list(records)
+
+        if self._max_messages_per_session > 0:
+            records = records[-self._max_messages_per_session :]
+
+        self._trim_user_ui_previews(records, _DEFAULT_UI_PREVIEW_MAX_ITEMS_PER_SESSION)
+        if self._max_session_bytes > 0:
+            self._trim_records_to_byte_budget(records, self._max_session_bytes)
+
+        changed = (len(records) != len(original_records)) or (invalid_count > 0) or should_check_size
+        if not changed:
+            return
+
+        if not self._write_jsonl_records(path, records):
+            return
+
+    def _trim_session_records_locked(self, session_id: str, keep_ui_previews: int) -> None:
+        if keep_ui_previews <= 0:
+            return
+        path = self._jsonl_path(session_id)
+        if not path.exists():
+            return
+
+        records, invalid_count = _read_jsonl_records(path)
+        if not records and invalid_count == 0:
+            return
+
+        original_records = list(records)
+        self._trim_user_ui_previews(records, keep_ui_previews)
+        if self._max_messages_per_session > 0:
+            records = records[-self._max_messages_per_session :]
+
+        if self._max_session_bytes > 0:
+            self._trim_records_to_byte_budget(records, self._max_session_bytes)
+
+        if records == original_records and invalid_count == 0:
+            return
+
+        self._write_jsonl_records(path, records)
+
+    def _trim_records_to_byte_budget(self, records: List[Dict[str, Any]], max_bytes: int) -> None:
+        if max_bytes <= 0:
+            return
+
+        if not records:
+            return
+
+        serialized_sizes = [len(json.dumps(record)) for record in records]
+        total_bytes = sum(length + 1 for length in serialized_sizes)
+
+        if total_bytes <= max_bytes:
+            return
+
+        while total_bytes > max_bytes and records:
+            removed = serialized_sizes.pop(0) + 1
+            records.pop(0)
+            total_bytes -= removed
+
+    def _trim_user_ui_previews(self, records: List[Dict[str, Any]], keep_latest: int) -> None:
+        if keep_latest <= 0:
+            return
+
+        ui_indices: List[int] = []
+        for idx, record in enumerate(records):
+            if record.get("role") != "user":
+                continue
+            ui = record.get("ui")
+            if isinstance(ui, dict) and isinstance(ui.get("selectionPreview"), dict):
+                ui_indices.append(idx)
+
+        if len(ui_indices) <= keep_latest:
+            return
+
+        for idx in ui_indices[: len(ui_indices) - keep_latest]:
+            if "ui" in records[idx]:
+                records[idx].pop("ui", None)
+
+    def _write_jsonl_records(self, path: Path, records: List[Dict[str, Any]]) -> bool:
+        tmp_path = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+        try:
+            with tmp_path.open("w", encoding="utf-8") as handle:
+                for record in records:
+                    handle.write(json.dumps(record))
+                    handle.write("\n")
+            tmp_path.replace(path)
+            return True
+        except OSError:
+            return False
+
+    def _write_meta_atomic(self, path: Path, meta: Dict[str, Any]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+        tmp_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        tmp_path.replace(path)
 
     def _delete_session_files(self, session_id: str) -> bool:
         deleted_any = False
@@ -690,3 +861,28 @@ def _truncate_text(raw: str, max_chars: int) -> str:
     if max_chars <= 3:
         return raw[:max_chars]
     return f"{raw[: max_chars - 3]}..."
+
+
+def _read_jsonl_records(path: Path) -> Tuple[List[Dict[str, Any]], int]:
+    records: List[Dict[str, Any]] = []
+    removed_invalid_count = 0
+
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    removed_invalid_count += 1
+                    continue
+                if isinstance(payload, dict):
+                    records.append(payload)
+                else:
+                    removed_invalid_count += 1
+    except OSError:
+        return [], 1
+
+    return records, removed_invalid_count
