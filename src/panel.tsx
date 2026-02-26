@@ -1821,7 +1821,7 @@ function renderHighlightedCodeToSafeHtml(code: string, lang: string): string {
   try {
     return DOMPurify.sanitize(highlighted, { USE_PROFILES: { html: true } });
   } catch {
-    return highlighted;
+    return escapeHtml(highlighted);
   }
 }
 
@@ -1842,7 +1842,7 @@ function renderMarkdownToSafeHtml(markdown: string): string {
   try {
     return DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
   } catch {
-    return html;
+    return escapeHtml(markdown).replace(/\n/g, '<br />');
   }
 }
 
