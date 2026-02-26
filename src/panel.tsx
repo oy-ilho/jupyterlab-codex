@@ -2774,7 +2774,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 
     try {
       await context.revert();
-      appendMessage(sessionKey, 'system', 'Document was refreshed after Codex file updates.');
+      appendMessage(sessionKey, 'system', 'Document refreshed due to file changes.');
       pendingRefreshPathsRef.current.delete(sessionKey);
     } catch (err) {
       appendMessage(sessionKey, 'system', `Failed to refresh document: ${String(err)}`);
