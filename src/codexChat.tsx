@@ -3273,8 +3273,10 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       }
     }
 
+    const viewState = captureDocumentViewState(widget);
     try {
       await context.revert();
+      restoreDocumentViewState(widget, viewState);
       appendMessage(sessionKey, 'system', 'Document refreshed due to file changes.');
       pendingRefreshPathsRef.current.delete(sessionKey);
     } catch (err) {
@@ -4906,6 +4908,109 @@ function findDocumentWidgetByPath(
 
 function isNotebookWidget(widget: DocumentWidgetLike | null): boolean {
   return Boolean(widget && widget.content && 'activeCell' in widget.content);
+}
+
+type DocumentViewState = {
+  scrollTop: number;
+  scrollLeft: number;
+  activeCellIndex: number | null;
+};
+
+function isScrollableElement(element: HTMLElement | null): element is HTMLElement {
+  if (!element) {
+    return false;
+  }
+  return element.scrollHeight > element.clientHeight + 1 || element.scrollWidth > element.clientWidth + 1;
+}
+
+function isHTMLElement(value: unknown): value is HTMLElement {
+  return Boolean(value && value instanceof HTMLElement);
+}
+
+function querySelectorIncludingSelf(root: HTMLElement, selector: string): HTMLElement | null {
+  if (root.matches(selector)) {
+    return root;
+  }
+  return root.querySelector(selector) as HTMLElement | null;
+}
+
+function getPrimaryDocumentScrollContainer(widget: DocumentWidgetLike | null): HTMLElement | null {
+  const contentNode = (widget as any)?.content?.node;
+  const widgetNode = (widget as any)?.node;
+  const roots = [contentNode, widgetNode].filter(isHTMLElement);
+  if (roots.length === 0) {
+    return null;
+  }
+
+  const candidates = [
+    '.jp-WindowedPanel-outer',
+    '.jp-Notebook .jp-WindowedPanel-outer',
+    '.jp-NotebookPanel-notebook .jp-WindowedPanel-outer',
+    '.jp-FileEditor .cm-scroller',
+    '.jp-FileEditor .jp-CodeMirrorEditor',
+    '.cm-scroller',
+    '.jp-FileEditor'
+  ];
+
+  for (const root of roots) {
+    for (const selector of candidates) {
+      const node = querySelectorIncludingSelf(root, selector);
+      if (isScrollableElement(node)) {
+        return node;
+      }
+    }
+  }
+
+  for (const root of roots) {
+    if (isScrollableElement(root)) {
+      return root;
+    }
+  }
+
+  return null;
+}
+
+function captureDocumentViewState(widget: DocumentWidgetLike | null): DocumentViewState {
+  const scrollContainer = getPrimaryDocumentScrollContainer(widget);
+  const notebookContent: any = isNotebookWidget(widget) ? (widget as any).content : null;
+  const rawActiveCellIndex = Number(notebookContent?.activeCellIndex);
+  const activeCellIndex = Number.isFinite(rawActiveCellIndex) ? Math.max(0, Math.floor(rawActiveCellIndex)) : null;
+  return {
+    scrollTop: scrollContainer?.scrollTop ?? 0,
+    scrollLeft: scrollContainer?.scrollLeft ?? 0,
+    activeCellIndex
+  };
+}
+
+function restoreDocumentViewState(widget: DocumentWidgetLike | null, viewState: DocumentViewState): void {
+  if (isNotebookWidget(widget) && viewState.activeCellIndex !== null) {
+    try {
+      const notebookContent: any = (widget as any).content;
+      const cellsLengthRaw = Number(notebookContent?.widgets?.length);
+      if (Number.isFinite(cellsLengthRaw) && cellsLengthRaw > 0) {
+        const maxIndex = Math.floor(cellsLengthRaw) - 1;
+        notebookContent.activeCellIndex = Math.max(0, Math.min(viewState.activeCellIndex, maxIndex));
+      }
+    } catch {
+      // Ignore active-cell restore failures.
+    }
+  }
+
+  const applyScroll = () => {
+    const scrollContainer = getPrimaryDocumentScrollContainer(widget);
+    if (!scrollContainer) {
+      return;
+    }
+    scrollContainer.scrollTop = viewState.scrollTop;
+    scrollContainer.scrollLeft = viewState.scrollLeft;
+  };
+
+  applyScroll();
+  window.requestAnimationFrame(() => {
+    applyScroll();
+    window.requestAnimationFrame(applyScroll);
+  });
+  window.setTimeout(applyScroll, 120);
 }
 
 function getActiveCellText(widget: DocumentWidgetLike | null): string {
