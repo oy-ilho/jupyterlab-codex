@@ -11,7 +11,7 @@ const plugin: JupyterFrontEndPlugin<void> = {
   autoStart: true,
   requires: [ICommandPalette, INotebookTracker],
   activate: (app: JupyterFrontEnd, palette: ICommandPalette, notebooks: INotebookTracker) => {
-    const panel = new CodexPanel(notebooks);
+    const panel = new CodexPanel(app, notebooks);
     panel.id = 'jupyterlab-codex-sidebar';
     panel.title.caption = 'Codex';
     panel.title.label = 'Codex';

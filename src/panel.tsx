@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ReactWidget, Dialog, showDialog } from '@jupyterlab/apputils';
+import type { JupyterFrontEnd } from '@jupyterlab/application';
 import { INotebookTracker } from '@jupyterlab/notebook';
 import { ServerConnection } from '@jupyterlab/services';
 import { URLExt } from '@jupyterlab/coreutils';
@@ -385,16 +386,18 @@ function XIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
 }
 
 export class CodexPanel extends ReactWidget {
+  private _app: JupyterFrontEnd;
   private _notebooks: INotebookTracker;
 
-  constructor(notebooks: INotebookTracker) {
+  constructor(app: JupyterFrontEnd, notebooks: INotebookTracker) {
     super();
+    this._app = app;
     this._notebooks = notebooks;
     this.addClass('jp-CodexPanel');
   }
 
   render(): JSX.Element {
-    return <CodexChat notebooks={this._notebooks} />;
+    return <CodexChat app={this._app} notebooks={this._notebooks} />;
   }
 
   protected onAfterAttach(msg: Message): void {
@@ -492,6 +495,7 @@ type ModelCatalogEntry = {
 };
 
 type CodexChatProps = {
+  app: JupyterFrontEnd;
   notebooks: INotebookTracker;
 };
 
@@ -501,6 +505,7 @@ type CliDefaultsSnapshot = {
   availableModels?: ModelCatalogEntry[];
 };
 
+type ConversationMode = 'resume' | 'fallback';
 type NotebookMode = 'ipynb' | 'jupytext_py' | 'plain_py' | 'unsupported';
 
 type NotebookSession = {
@@ -516,6 +521,7 @@ type NotebookSession = {
   pairedOsPath: string;
   pairedMessage: string;
   notebookMode: NotebookMode | null;
+  conversationMode: ConversationMode;
 };
 
 type SessionThreadSyncEvent = {
@@ -726,6 +732,13 @@ function coerceNotebookMode(value: unknown): NotebookMode | null {
   return null;
 }
 
+function coerceConversationMode(value: unknown): ConversationMode | null {
+  if (value === 'resume' || value === 'fallback') {
+    return value;
+  }
+  return null;
+}
+
 function inferNotebookModeFromPath(path: string): NotebookMode {
   const normalized = (path || '').trim().toLowerCase();
   if (normalized.endsWith('.ipynb')) {
@@ -929,6 +942,7 @@ function createSession(
     pairedOsPath: '',
     pairedMessage: '',
     notebookMode: null,
+    conversationMode: 'resume',
   };
 }
 
@@ -1818,6 +1832,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const sessionThreadSyncIdRef = useRef<string>(createSessionEventId());
   const lastRateLimitsRefreshRef = useRef<number>(0);
   const pendingRefreshPathsRef = useRef<Set<string>>(new Set());
+  const activeDocumentWidgetRef = useRef<DocumentWidgetLike | null>(null);
   const notifyOnDoneRef = useRef<boolean>(notifyOnDone);
   const notifyOnDoneMinSecondsRef = useRef<number>(notifyOnDoneMinSeconds);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -2491,6 +2506,28 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     });
   }
 
+  function setSessionConversationMode(sessionKey: string, rawMode: unknown): void {
+    const mode = coerceConversationMode(rawMode);
+    if (!mode) {
+      return;
+    }
+    const targetSessionKey = sessionKey || currentNotebookSessionKeyRef.current || '';
+    if (!targetSessionKey) {
+      return;
+    }
+
+    updateSessions(prev => {
+      const next = new Map(prev);
+      const session =
+        next.get(targetSessionKey) ?? createSession('', `Session started`, { sessionKey: targetSessionKey });
+      if (session.conversationMode === mode) {
+        return prev;
+      }
+      next.set(targetSessionKey, { ...session, conversationMode: mode });
+      return next;
+    });
+  }
+
   function resolveMessageSessionKey(msg: any): string {
     const messagePath = typeof msg.notebookPath === 'string' ? msg.notebookPath : '';
     const sessionContextKey = typeof msg.sessionContextKey === 'string' ? msg.sessionContextKey : '';
@@ -2619,17 +2656,22 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       return;
     }
 
-    const widget = props.notebooks.currentWidget;
-    if (!widget || widget.context.path !== path) {
+    const widget = findDocumentWidgetByPath(props.app, path, activeDocumentWidgetRef.current);
+    if (!widget) {
       pendingRefreshPathsRef.current.add(sessionKey);
       return;
     }
+    const context: any = getDocumentContext(widget);
+    if (!context || typeof context.revert !== 'function') {
+      pendingRefreshPathsRef.current.add(sessionKey);
+      return;
+    }
+    activeDocumentWidgetRef.current = widget;
 
-    const context = widget.context;
     if (context.model.dirty) {
       const result = await showDialog({
-        title: 'Notebook has unsaved changes',
-        body: 'Codex updated notebook source files. Reload notebook now? (Unsaved changes will be lost.)',
+        title: 'Document has unsaved changes',
+        body: 'Codex updated source files. Reload this document now? (Unsaved changes will be lost.)',
         buttons: [Dialog.cancelButton(), Dialog.okButton({ label: 'Reload' })]
       });
       if (!result.button.accept) {
@@ -2640,17 +2682,21 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 
     try {
       await context.revert();
-      appendMessage(sessionKey, 'system', 'Notebook was refreshed after Codex file updates.');
+      appendMessage(sessionKey, 'system', 'Document was refreshed after Codex file updates.');
       pendingRefreshPathsRef.current.delete(sessionKey);
     } catch (err) {
-      appendMessage(sessionKey, 'system', `Failed to refresh notebook: ${String(err)}`);
+      appendMessage(sessionKey, 'system', `Failed to refresh document: ${String(err)}`);
       pendingRefreshPathsRef.current.add(sessionKey);
     }
   }
 
   useEffect(() => {
     const updateNotebook = () => {
-      const path = getNotebookPath(props.notebooks);
+      const activeWidget = getActiveDocumentWidget(props.app, activeDocumentWidgetRef.current);
+      if (activeWidget) {
+        activeDocumentWidgetRef.current = activeWidget;
+      }
+      const path = getSupportedDocumentPath(activeWidget);
       const sessionKey = resolveSessionKey(path);
       const previousKey = currentNotebookSessionKeyRef.current;
       if (sessionKey && sessionKey === previousKey) {
@@ -2687,12 +2733,19 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     };
 
     updateNotebook();
+    const shellChanged = props.app.shell.currentChanged;
+    if (shellChanged) {
+      shellChanged.connect(updateNotebook);
+    }
     props.notebooks.currentChanged.connect(updateNotebook);
 
     return () => {
+      if (shellChanged) {
+        shellChanged.disconnect(updateNotebook);
+      }
       props.notebooks.currentChanged.disconnect(updateNotebook);
     };
-  }, [props.notebooks]);
+  }, [props.app, props.notebooks]);
 
   useEffect(() => {
     const onStorage = (event: StorageEvent) => {
@@ -2780,7 +2833,11 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         deleteAllSessionsOnServer();
       }
 
-      const notebookPath = currentNotebookPathRef.current || getNotebookPath(props.notebooks);
+      const activeWidget = getActiveDocumentWidget(props.app, activeDocumentWidgetRef.current);
+      if (activeWidget) {
+        activeDocumentWidgetRef.current = activeWidget;
+      }
+      const notebookPath = currentNotebookPathRef.current || getSupportedDocumentPath(activeWidget);
       if (!notebookPath) {
         return;
       }
@@ -2861,6 +2918,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       if (msg.type === 'status') {
         if (targetSessionKey) {
           syncEffectiveSandboxFromStatus(targetSessionKey, msg.effectiveSandbox);
+          setSessionConversationMode(targetSessionKey, msg.runMode);
         }
         const sessionId = typeof msg.sessionId === 'string' && msg.sessionId.trim() ? msg.sessionId.trim() : '';
         const history = coerceSessionHistory(msg.history);
@@ -2951,6 +3009,9 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       }
 
       if (msg.type === 'error') {
+        if (targetSessionKey) {
+          setSessionConversationMode(targetSessionKey, msg.runMode);
+        }
         const suggestedCommandPath = typeof msg.suggestedCommandPath === 'string' ? msg.suggestedCommandPath.trim() : '';
         if (suggestedCommandPath && !commandPath) {
           setCommandPath(suggestedCommandPath);
@@ -2982,6 +3043,9 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       }
 
       if (msg.type === 'done') {
+        if (targetSessionKey) {
+          setSessionConversationMode(targetSessionKey, msg.runMode);
+        }
         if (targetSessionKey) {
           const pairedOk = typeof msg.pairedOk === 'boolean' ? msg.pairedOk : null;
           const pairedPath = typeof msg.pairedPath === 'string' ? msg.pairedPath : '';
@@ -3030,7 +3094,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       wsRef.current = null;
       runToSessionKeyRef.current = new Map();
     };
-  }, [props.notebooks, reconnectCounter]);
+  }, [props.app, props.notebooks, reconnectCounter]);
 
   useEffect(() => {
     if (!isAtBottom) {
@@ -3292,10 +3356,21 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       return;
     }
 
-    const widget = props.notebooks.currentWidget;
-    if (autoSaveBeforeSend && widget && widget.context.model.dirty) {
+    const activeWidget = findDocumentWidgetByPath(props.app, notebookPath, activeDocumentWidgetRef.current);
+    if (activeWidget) {
+      activeDocumentWidgetRef.current = activeWidget;
+    }
+    const activeWidgetPath = getSupportedDocumentPath(activeWidget);
+    const activeContext: any = activeWidget ? getDocumentContext(activeWidget) : null;
+    if (
+      autoSaveBeforeSend &&
+      activeContext &&
+      typeof activeContext.save === 'function' &&
+      activeWidgetPath === notebookPath &&
+      activeContext.model.dirty
+    ) {
       try {
-        await widget.context.save();
+        await activeContext.save();
       } catch (err) {
         appendMessage(sessionKey, 'system', `Auto-save failed: ${String(err)}`);
         return;
@@ -3307,19 +3382,19 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     let selection = '';
     if (includeActiveCell) {
       if (notebookMode === 'plain_py') {
-        const selectedText = getSelectedTextFromActiveCell(props.notebooks);
+        const selectedText = getSelectedTextFromActiveCell(activeWidget) || getSelectedTextFromFileEditor(activeWidget);
         if (selectedText) {
           includeSelectionKey = true;
           selection = selectedText;
         }
       } else {
         includeSelectionKey = true;
-        selection = getActiveCellText(props.notebooks);
+        selection = getActiveCellText(activeWidget) || getSelectedTextFromFileEditor(activeWidget);
       }
     }
     const includeCellOutputKey =
       includeActiveCell && includeActiveCellOutput && notebookMode === 'ipynb';
-    const cellOutput = includeCellOutputKey ? getActiveCellOutput(props.notebooks) : '';
+    const cellOutput = includeCellOutputKey ? getActiveCellOutput(activeWidget) : '';
     const session = ensureSession(notebookPath, sessionKey);
     const sandboxForSend = sandboxMode;
 
@@ -4228,57 +4303,162 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   );
 }
 
-function getNotebookPath(notebooks: INotebookTracker): string {
-  return notebooks.currentWidget ? notebooks.currentWidget.context.path : '';
+type DocumentWidgetLike = {
+  isDisposed?: boolean;
+  context?: {
+    path?: string;
+    model?: { dirty?: boolean };
+    save?: () => Promise<void>;
+    revert?: () => Promise<void>;
+  };
+  content?: any;
+};
+
+function getDocumentContext(widget: DocumentWidgetLike | null): any {
+  return widget && widget.context ? widget.context : null;
 }
 
-function getActiveCellText(notebooks: INotebookTracker): string {
-  const widget = notebooks.currentWidget;
-  if (!widget) {
+function getSupportedDocumentPath(widget: DocumentWidgetLike | null): string {
+  const rawPath = typeof widget?.context?.path === 'string' ? widget.context.path.trim() : '';
+  if (!rawPath) {
     return '';
   }
-  const activeCell = widget.content.activeCell;
-  return activeCell ? activeCell.model.sharedModel.getSource() : '';
+  const lower = rawPath.toLowerCase();
+  if (lower.endsWith('.ipynb') || lower.endsWith('.py')) {
+    return rawPath;
+  }
+  return '';
 }
 
-function getSelectedTextFromActiveCell(notebooks: INotebookTracker): string {
-  const widget = notebooks.currentWidget;
-  if (!widget) {
+function getActiveDocumentWidget(
+  app: JupyterFrontEnd,
+  fallbackWidget: DocumentWidgetLike | null
+): DocumentWidgetLike | null {
+  const current = app.shell.currentWidget as any;
+  const currentPath = getSupportedDocumentPath(current as DocumentWidgetLike | null);
+  if (currentPath) {
+    return current as DocumentWidgetLike;
+  }
+
+  if (fallbackWidget && !fallbackWidget.isDisposed && getSupportedDocumentPath(fallbackWidget)) {
+    return fallbackWidget;
+  }
+  return null;
+}
+
+function findDocumentWidgetByPath(
+  app: JupyterFrontEnd,
+  path: string,
+  fallbackWidget: DocumentWidgetLike | null = null
+): DocumentWidgetLike | null {
+  const normalizedPath = (path || '').trim();
+  if (!normalizedPath) {
+    return null;
+  }
+
+  const current = app.shell.currentWidget as any;
+  if (getSupportedDocumentPath(current as DocumentWidgetLike | null) === normalizedPath) {
+    return current as DocumentWidgetLike;
+  }
+
+  if (
+    fallbackWidget &&
+    !fallbackWidget.isDisposed &&
+    getSupportedDocumentPath(fallbackWidget) === normalizedPath
+  ) {
+    return fallbackWidget;
+  }
+
+  const iterator: any = app.shell.widgets('main');
+  if (iterator && typeof iterator.next === 'function') {
+    while (true) {
+      const candidate = iterator.next() as any;
+      if (!candidate) {
+        break;
+      }
+      if (getSupportedDocumentPath(candidate as DocumentWidgetLike) === normalizedPath) {
+        return candidate as DocumentWidgetLike;
+      }
+    }
+  }
+  return null;
+}
+
+function isNotebookWidget(widget: DocumentWidgetLike | null): boolean {
+  return Boolean(widget && widget.content && 'activeCell' in widget.content);
+}
+
+function getActiveCellText(widget: DocumentWidgetLike | null): string {
+  if (!isNotebookWidget(widget)) {
     return '';
   }
-  const activeCell = widget.content.activeCell;
+  const activeCell = (widget as any).content.activeCell;
+  if (!activeCell) {
+    return '';
+  }
+  const source =
+    typeof activeCell.model?.sharedModel?.getSource === 'function' ? activeCell.model.sharedModel.getSource() : '';
+  return typeof source === 'string' ? source : '';
+}
+
+function getSelectedTextFromCodeEditor(editor: any, source: string): string {
+  if (!editor || typeof editor.getSelection !== 'function' || typeof editor.getOffsetAt !== 'function') {
+    return '';
+  }
+
+  const range = editor.getSelection();
+  if (!range || !range.start || !range.end) {
+    return '';
+  }
+
+  const startOffset = Number(editor.getOffsetAt(range.start));
+  const endOffset = Number(editor.getOffsetAt(range.end));
+  if (!Number.isFinite(startOffset) || !Number.isFinite(endOffset)) {
+    return '';
+  }
+
+  const from = Math.max(0, Math.min(startOffset, endOffset));
+  const to = Math.max(0, Math.max(startOffset, endOffset));
+  if (to <= from) {
+    return '';
+  }
+  if (!source) {
+    return '';
+  }
+  return source.slice(from, to);
+}
+
+function getSelectedTextFromActiveCell(widget: DocumentWidgetLike | null): string {
+  if (!isNotebookWidget(widget)) {
+    return '';
+  }
+  const activeCell = (widget as any).content.activeCell;
   if (!activeCell) {
     return '';
   }
 
   try {
-    const editor: any = (activeCell as any).editor;
-    if (!editor || typeof editor.getSelection !== 'function' || typeof editor.getOffsetAt !== 'function') {
-      return '';
-    }
+    const source =
+      typeof activeCell.model?.sharedModel?.getSource === 'function' ? activeCell.model.sharedModel.getSource() : '';
+    return getSelectedTextFromCodeEditor((activeCell as any).editor, typeof source === 'string' ? source : '');
+  } catch {
+    return '';
+  }
+}
 
-    const range = editor.getSelection();
-    if (!range || !range.start || !range.end) {
-      return '';
-    }
+function getSelectedTextFromFileEditor(widget: DocumentWidgetLike | null): string {
+  if (!widget || isNotebookWidget(widget)) {
+    return '';
+  }
 
-    const startOffset = Number(editor.getOffsetAt(range.start));
-    const endOffset = Number(editor.getOffsetAt(range.end));
-    if (!Number.isFinite(startOffset) || !Number.isFinite(endOffset)) {
+  try {
+    const editor: any = (widget as any).content?.editor;
+    if (!editor) {
       return '';
     }
-
-    const from = Math.max(0, Math.min(startOffset, endOffset));
-    const to = Math.max(0, Math.max(startOffset, endOffset));
-    if (to <= from) {
-      return '';
-    }
-
-    const source = activeCell.model.sharedModel.getSource();
-    if (!source) {
-      return '';
-    }
-    return source.slice(from, to);
+    const source =
+      typeof editor.model?.sharedModel?.getSource === 'function' ? editor.model.sharedModel.getSource() : '';
+    return getSelectedTextFromCodeEditor(editor, typeof source === 'string' ? source : '');
   } catch {
     return '';
   }
@@ -4410,12 +4590,11 @@ function summarizeJupyterOutputs(outputs: any[]): string {
   return combined;
 }
 
-function getActiveCellOutput(notebooks: INotebookTracker): string {
-  const widget = notebooks.currentWidget;
-  if (!widget) {
+function getActiveCellOutput(widget: DocumentWidgetLike | null): string {
+  if (!isNotebookWidget(widget)) {
     return '';
   }
-  const activeCell = widget.content.activeCell;
+  const activeCell = (widget as any).content.activeCell;
   if (!activeCell) {
     return '';
   }

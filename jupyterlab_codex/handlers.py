@@ -39,6 +39,9 @@ _NOISY_STDERR_PATTERNS = (
 _AUTH_REQUIRED_HINT = (
     "Authentication required: open a terminal and run `codex` (or `codex login`) to sign in, then retry."
 )
+_RESUME_FALLBACK_HINT = (
+    "Resume was unavailable for this turn. This turn was handled in fallback mode."
+)
 _PY_CELL_MARKER_RE = re.compile(r"^\s*#\s*%%(?:\s|$|\[)")
 _PY_JUPYTEXT_HEADER_HINTS = (
     "jupytext:",
@@ -104,6 +107,10 @@ def _build_command_not_found_hint(requested_path: str) -> dict[str, str]:
             f"Cannot find executable '{requested_label}'. "
             "Run `which codex` in terminal and paste the output path into settings.",
     }
+
+
+class _ResumeFallbackRequested(Exception):
+    """Raised when resume did not continue the requested thread."""
 
 
 class CodexWSHandler(WebSocketHandler):
@@ -315,6 +322,8 @@ class CodexWSHandler(WebSocketHandler):
         paired_ok, paired_path, paired_os_path, paired_message, notebook_mode = _compute_pairing_status(
             notebook_path, notebook_os_path
         )
+        run_mode = "resume"
+
         def _build_status_payload(state: str) -> Dict[str, Any]:
             payload: Dict[str, Any] = {
                 "type": "status",
@@ -323,6 +332,7 @@ class CodexWSHandler(WebSocketHandler):
                 "sessionId": session_id,
                 "sessionContextKey": session_context_key,
                 "notebookPath": notebook_path,
+                "runMode": run_mode,
                 "pairedOk": paired_ok,
                 "pairedPath": paired_path,
                 "pairedOsPath": paired_os_path,
@@ -362,6 +372,15 @@ class CodexWSHandler(WebSocketHandler):
         if notebook_path:
             self._store.update_notebook_path(session_id, notebook_path, notebook_os_path)
 
+        prior_messages = self._store.load_messages(session_id)
+        has_conversation_history = any(
+            isinstance(item, dict)
+            and item.get("role") in {"user", "assistant"}
+            and isinstance(item.get("content"), str)
+            for item in prior_messages
+        )
+        is_first_turn = not has_conversation_history
+
         cwd = None
         if notebook_os_path:
             candidate = os.path.dirname(os.path.abspath(notebook_os_path))
@@ -379,9 +398,10 @@ class CodexWSHandler(WebSocketHandler):
             notebook_mode=notebook_mode,
             include_history=False,
         )
-        self._store.append_message(session_id, "user", content)
+        resume_target_session_id = None if is_first_turn else session_id
 
         async def _run():
+            nonlocal run_mode
             self.write_message(
                 json.dumps(_build_status_payload("running"))
             )
@@ -390,6 +410,15 @@ class CodexWSHandler(WebSocketHandler):
             image_paths: list[str] = []
             assistant_buffer = []
             auth_hint_sent = False
+            user_message_logged = False
+            current_resume_session_id = resume_target_session_id
+
+            def _append_user_message_once() -> None:
+                nonlocal user_message_logged
+                if user_message_logged:
+                    return
+                self._store.append_message(session_id, "user", content)
+                user_message_logged = True
 
             async def on_event(event: Dict[str, Any]):
                 nonlocal auth_hint_sent, session_id
@@ -399,6 +428,14 @@ class CodexWSHandler(WebSocketHandler):
                         thread_id = thread_id_raw.strip()
                     else:
                         thread_id = ""
+                    if (
+                        current_resume_session_id
+                        and thread_id
+                        and thread_id != current_resume_session_id
+                    ):
+                        raise _ResumeFallbackRequested(
+                            f"requested={current_resume_session_id}, started={thread_id}"
+                        )
                     if thread_id and thread_id != session_id:
                         session_id = self._store.rename_session(session_id, thread_id)
                         run_context = self._active_runs.get(run_id)
@@ -479,17 +516,103 @@ class CodexWSHandler(WebSocketHandler):
                             handle.write(decoded)
                         image_paths.append(out_path)
 
-                exit_code = await self._runner.run(
-                    prompt,
-                    on_event,
-                    cwd=cwd,
-                    model=requested_model,
-                    reasoning_effort=requested_reasoning,
-                    sandbox=requested_sandbox,
-                    command=requested_command_path,
-                    images=image_paths,
-                    resume_session_id=session_id,
-                )
+                exit_code = None
+                try:
+                    exit_code = await self._runner.run(
+                        prompt,
+                        on_event,
+                        cwd=cwd,
+                        model=requested_model,
+                        reasoning_effort=requested_reasoning,
+                        sandbox=requested_sandbox,
+                        command=requested_command_path,
+                        images=image_paths,
+                        resume_session_id=current_resume_session_id,
+                    )
+                except _ResumeFallbackRequested:
+                    run_mode = "fallback"
+                    current_resume_session_id = ""
+                    assistant_buffer = []
+                    self.write_message(
+                        json.dumps(
+                            {
+                                "type": "output",
+                                "runId": run_id,
+                                "sessionId": session_id,
+                                "sessionContextKey": session_context_key,
+                                "notebookPath": notebook_path,
+                                "role": "system",
+                                "text": _RESUME_FALLBACK_HINT,
+                            }
+                        )
+                    )
+                    self.write_message(json.dumps(_build_status_payload("running")))
+                    fallback_prompt = self._store.build_prompt(
+                        session_id,
+                        content,
+                        selection,
+                        cell_output,
+                        cwd=cwd,
+                        notebook_mode=notebook_mode,
+                        include_history=True,
+                    )
+                    exit_code = await self._runner.run(
+                        fallback_prompt,
+                        on_event,
+                        cwd=cwd,
+                        model=requested_model,
+                        reasoning_effort=requested_reasoning,
+                        sandbox=requested_sandbox,
+                        command=requested_command_path,
+                        images=image_paths,
+                        resume_session_id=None,
+                    )
+                if exit_code is None:
+                    exit_code = 1
+                if (
+                    exit_code != 0
+                    and current_resume_session_id
+                    and not assistant_buffer
+                    and not auth_hint_sent
+                ):
+                    run_mode = "fallback"
+                    current_resume_session_id = ""
+                    self.write_message(
+                        json.dumps(
+                            {
+                                "type": "output",
+                                "runId": run_id,
+                                "sessionId": session_id,
+                                "sessionContextKey": session_context_key,
+                                "notebookPath": notebook_path,
+                                "role": "system",
+                                "text": _RESUME_FALLBACK_HINT,
+                            }
+                        )
+                    )
+                    self.write_message(json.dumps(_build_status_payload("running")))
+                    fallback_prompt = self._store.build_prompt(
+                        session_id,
+                        content,
+                        selection,
+                        cell_output,
+                        cwd=cwd,
+                        notebook_mode=notebook_mode,
+                        include_history=True,
+                    )
+                    assistant_buffer = []
+                    exit_code = await self._runner.run(
+                        fallback_prompt,
+                        on_event,
+                        cwd=cwd,
+                        model=requested_model,
+                        reasoning_effort=requested_reasoning,
+                        sandbox=requested_sandbox,
+                        command=requested_command_path,
+                        images=image_paths,
+                        resume_session_id=None,
+                    )
+                _append_user_message_once()
                 if assistant_buffer:
                     self._store.append_message(session_id, "assistant", "".join(assistant_buffer))
                 file_changed = _has_path_changes(before_mtimes, _capture_mtimes(watch_paths))
@@ -503,6 +626,7 @@ class CodexWSHandler(WebSocketHandler):
                             "notebookPath": notebook_path,
                             "exitCode": exit_code,
                             "fileChanged": file_changed,
+                            "runMode": run_mode,
                             "pairedOk": paired_ok,
                             "pairedPath": paired_path,
                             "pairedOsPath": paired_os_path,
@@ -515,6 +639,7 @@ class CodexWSHandler(WebSocketHandler):
                     json.dumps(_build_status_payload("ready"))
                 )
             except asyncio.CancelledError:
+                _append_user_message_once()
                 file_changed = _has_path_changes(before_mtimes, _capture_mtimes(watch_paths))
                 self.write_message(
                     json.dumps(
@@ -527,6 +652,7 @@ class CodexWSHandler(WebSocketHandler):
                             "exitCode": None,
                             "cancelled": True,
                             "fileChanged": file_changed,
+                            "runMode": run_mode,
                             "pairedOk": paired_ok,
                             "pairedPath": paired_path,
                             "pairedOsPath": paired_os_path,
@@ -540,6 +666,7 @@ class CodexWSHandler(WebSocketHandler):
                 )
                 raise
             except FileNotFoundError:
+                _append_user_message_once()
                 hint = _build_command_not_found_hint(requested_command_path)
                 error_payload = {
                     "type": "error",
@@ -548,6 +675,7 @@ class CodexWSHandler(WebSocketHandler):
                     "sessionContextKey": session_context_key,
                     "notebookPath": notebook_path,
                     "message": hint["message"],
+                    "runMode": run_mode,
                     "pairedOk": paired_ok,
                     "pairedPath": paired_path,
                     "pairedOsPath": paired_os_path,
@@ -561,6 +689,7 @@ class CodexWSHandler(WebSocketHandler):
                     json.dumps(_build_status_payload("ready"))
                 )
             except Exception as exc:  # pragma: no cover - defensive path
+                _append_user_message_once()
                 self.write_message(
                     json.dumps(
                         {
@@ -570,6 +699,7 @@ class CodexWSHandler(WebSocketHandler):
                             "sessionContextKey": session_context_key,
                             "notebookPath": notebook_path,
                             "message": str(exc),
+                            "runMode": run_mode,
                             "pairedOk": paired_ok,
                             "pairedPath": paired_path,
                             "pairedOsPath": paired_os_path,
