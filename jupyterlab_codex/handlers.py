@@ -92,6 +92,26 @@ def _coerce_bool_flag(value: Any) -> bool:
     return False
 
 
+def _coerce_ui_selection_preview(value: Any) -> Dict[str, str] | None:
+    if not isinstance(value, dict):
+        return None
+
+    location_raw = value.get("locationLabel")
+    preview_raw = value.get("previewText")
+    if not isinstance(location_raw, str) or not isinstance(preview_raw, str):
+        return None
+
+    location = re.sub(r"\s+", " ", location_raw).strip()
+    preview_text = re.sub(r"\s+", " ", preview_raw).strip()
+    if not location or not preview_text:
+        return None
+
+    return {
+        "locationLabel": location[:80],
+        "previewText": preview_text[:1000],
+    }
+
+
 def _build_command_not_found_hint(requested_path: str) -> dict[str, str]:
     requested_label = requested_path or "codex"
     detected = shutil.which("codex")
@@ -264,7 +284,13 @@ class CodexWSHandler(WebSocketHandler):
                 continue
             if not isinstance(content, str):
                 continue
-            history.append({"role": role, "content": content})
+            entry: Dict[str, Any] = {"role": role, "content": content}
+            ui = item.get("ui")
+            if isinstance(ui, dict):
+                selection_preview = _coerce_ui_selection_preview(ui.get("selectionPreview"))
+                if selection_preview:
+                    entry["selectionPreview"] = selection_preview
+            history.append(entry)
 
         paired_ok, paired_path, paired_os_path, paired_message, notebook_mode = _compute_pairing_status(
             notebook_path, notebook_os_path
@@ -303,6 +329,7 @@ class CodexWSHandler(WebSocketHandler):
         cell_output = payload.get("cellOutput", "")
         if not isinstance(cell_output, str):
             cell_output = str(cell_output) if cell_output is not None else ""
+        ui_selection_preview = _coerce_ui_selection_preview(payload.get("uiSelectionPreview"))
         images_payload = payload.get("images")
         notebook_path = payload.get("notebookPath", "")
         requested_model_raw = payload.get("model")
@@ -446,7 +473,8 @@ class CodexWSHandler(WebSocketHandler):
                 nonlocal user_message_logged
                 if user_message_logged:
                     return
-                self._store.append_message(session_id, "user", content)
+                ui_payload = {"selectionPreview": ui_selection_preview} if ui_selection_preview else None
+                self._store.append_message(session_id, "user", content, ui=ui_payload)
                 user_message_logged = True
 
             async def on_event(event: Dict[str, Any]):

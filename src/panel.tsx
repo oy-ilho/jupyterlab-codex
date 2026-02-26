@@ -427,6 +427,14 @@ type TextRole = 'user' | 'assistant' | 'system';
 type ChatAttachments = {
   images?: number;
 };
+type SelectionPreview = {
+  locationLabel: string;
+  previewText: string;
+};
+type StoredSelectionPreviewEntry = {
+  contentHash: string;
+  preview: SelectionPreview | null;
+};
 type ChatEntry =
   | {
       kind: 'text';
@@ -434,6 +442,7 @@ type ChatEntry =
       role: TextRole;
       text: string;
       attachments?: ChatAttachments;
+      selectionPreview?: SelectionPreview;
     }
   | {
       kind: 'run-divider';
@@ -585,12 +594,17 @@ const INCLUDE_ACTIVE_CELL_STORAGE_KEY = 'jupyterlab-codex:include-active-cell';
 const INCLUDE_ACTIVE_CELL_OUTPUT_STORAGE_KEY = 'jupyterlab-codex:include-active-cell-output';
 const SESSION_THREADS_STORAGE_KEY = 'jupyterlab-codex:session-threads';
 const SESSION_THREADS_EVENT_KEY = 'jupyterlab-codex:session-threads:event';
+const SELECTION_PREVIEWS_STORAGE_KEY = 'jupyterlab-codex:selection-previews';
 const DELETE_ALL_PENDING_KEY = 'jupyterlab-codex:delete-all-pending';
 const SESSION_KEY_SEPARATOR = '\u0000';
 
 const MAX_IMAGE_ATTACHMENTS = 4;
 const MAX_IMAGE_ATTACHMENT_BYTES = 4 * 1024 * 1024; // Avoid huge WebSocket payloads.
 const MAX_IMAGE_ATTACHMENT_TOTAL_BYTES = 6 * 1024 * 1024;
+const MESSAGE_SELECTION_PREVIEW_DISPLAY_MAX_CHARS = 1000;
+const MESSAGE_SELECTION_PREVIEW_STORED_MAX_CHARS = 1000;
+const MAX_STORED_SELECTION_PREVIEW_THREADS = 80;
+const MAX_STORED_SELECTION_PREVIEW_MESSAGES_PER_THREAD = 10;
 const READ_ONLY_PERMISSION_WARNING = 'Code changes are not available with the current permission (Read only).';
 
 function findModelLabel(model: string, options: readonly ModelOption[]): string {
@@ -877,6 +891,120 @@ function persistStoredSessionThreads(sessions: Map<string, NotebookSession>): vo
   }
 }
 
+function hashSelectionPreviewContent(content: string): string {
+  // Stable lightweight hash for local UI-only metadata matching.
+  const normalized = (content || '').replace(/\r\n/g, '\n');
+  let hash = 2166136261;
+  for (let idx = 0; idx < normalized.length; idx += 1) {
+    hash ^= normalized.charCodeAt(idx);
+    hash +=
+      (hash << 1) +
+      (hash << 4) +
+      (hash << 7) +
+      (hash << 8) +
+      (hash << 24);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+function normalizeStoredSelectionPreviewEntry(
+  value: unknown
+): StoredSelectionPreviewEntry | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+  const raw = value as Record<string, unknown>;
+  const contentHash = typeof raw.contentHash === 'string' ? raw.contentHash.trim() : '';
+  if (!contentHash) {
+    return null;
+  }
+
+  const previewRaw = raw.preview;
+  if (!previewRaw || typeof previewRaw !== 'object') {
+    return { contentHash, preview: null };
+  }
+  const previewObj = previewRaw as Record<string, unknown>;
+  const locationLabel =
+    typeof previewObj.locationLabel === 'string' ? previewObj.locationLabel.trim() : '';
+  const previewText =
+    typeof previewObj.previewText === 'string'
+      ? truncateEnd(
+          previewObj.previewText.replace(/\s+/g, ' ').trim(),
+          MESSAGE_SELECTION_PREVIEW_STORED_MAX_CHARS
+        )
+      : '';
+  if (!locationLabel || !previewText) {
+    return { contentHash, preview: null };
+  }
+  return {
+    contentHash,
+    preview: {
+      locationLabel,
+      previewText
+    }
+  };
+}
+
+function readStoredSelectionPreviewsByThread(): Map<string, StoredSelectionPreviewEntry[]> {
+  const raw = safeLocalStorageGet(SELECTION_PREVIEWS_STORAGE_KEY);
+  if (!raw) {
+    return new Map();
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') {
+      return new Map();
+    }
+
+    const next = new Map<string, StoredSelectionPreviewEntry[]>();
+    for (const [threadIdRaw, entriesRaw] of Object.entries(parsed as Record<string, unknown>)) {
+      const threadId = typeof threadIdRaw === 'string' ? threadIdRaw.trim() : '';
+      if (!threadId || !Array.isArray(entriesRaw)) {
+        continue;
+      }
+      const entries: StoredSelectionPreviewEntry[] = [];
+      for (const entryCandidate of entriesRaw) {
+        const entry = normalizeStoredSelectionPreviewEntry(entryCandidate);
+        if (!entry) {
+          continue;
+        }
+        entries.push(entry);
+      }
+      if (entries.length <= 0) {
+        continue;
+      }
+      next.set(threadId, entries.slice(-MAX_STORED_SELECTION_PREVIEW_MESSAGES_PER_THREAD));
+    }
+    return next;
+  } catch {
+    return new Map();
+  }
+}
+
+function persistStoredSelectionPreviewsByThread(
+  previewsByThread: Map<string, StoredSelectionPreviewEntry[]>
+): void {
+  const serialized: Record<string, Array<{ contentHash: string; preview?: SelectionPreview }>> = {};
+  const entries = Array.from(previewsByThread.entries()).slice(-MAX_STORED_SELECTION_PREVIEW_THREADS);
+  for (const [threadId, threadEntries] of entries) {
+    if (!threadId || !Array.isArray(threadEntries) || threadEntries.length <= 0) {
+      continue;
+    }
+    const normalizedEntries = threadEntries
+      .filter(item => item && typeof item.contentHash === 'string' && item.contentHash)
+      .slice(-MAX_STORED_SELECTION_PREVIEW_MESSAGES_PER_THREAD)
+      .map(item =>
+        item.preview
+          ? { contentHash: item.contentHash, preview: item.preview }
+          : { contentHash: item.contentHash }
+      );
+    if (normalizedEntries.length > 0) {
+      serialized[threadId] = normalizedEntries;
+    }
+  }
+  safeLocalStorageSet(SELECTION_PREVIEWS_STORAGE_KEY, JSON.stringify(serialized));
+}
+
 function coerceSessionThreadSyncEvent(value: string): SessionThreadSyncEvent | null {
   if (!value) {
     return null;
@@ -904,16 +1032,33 @@ function coerceSessionThreadSyncEvent(value: string): SessionThreadSyncEvent | n
   return { kind: 'new-thread', sessionKey, notebookPath, threadId, source, id, issuedAt };
 }
 
+function coerceSelectionPreview(value: unknown): SelectionPreview | undefined {
+  if (!value || typeof value !== 'object') {
+    return undefined;
+  }
+  const raw = value as Record<string, unknown>;
+  const locationLabel = typeof raw.locationLabel === 'string' ? raw.locationLabel.trim() : '';
+  const previewText =
+    typeof raw.previewText === 'string'
+      ? truncateEnd(raw.previewText.replace(/\s+/g, ' ').trim(), MESSAGE_SELECTION_PREVIEW_STORED_MAX_CHARS)
+      : '';
+  if (!locationLabel || !previewText) {
+    return undefined;
+  }
+  return { locationLabel, previewText };
+}
+
 function coerceSessionHistory(
   raw: any
 ): Array<{
   role: TextRole;
   content: string;
+  selectionPreview?: SelectionPreview;
 }> {
   if (!Array.isArray(raw)) {
     return [];
   }
-  const result: Array<{ role: TextRole; content: string }> = [];
+  const result: Array<{ role: TextRole; content: string; selectionPreview?: SelectionPreview }> = [];
   for (const item of raw) {
     if (!item || typeof item !== 'object') {
       continue;
@@ -923,7 +1068,8 @@ function coerceSessionHistory(
     if ((role !== 'user' && role !== 'assistant' && role !== 'system') || typeof content !== 'string') {
       continue;
     }
-    result.push({ role, content });
+    const selectionPreview = coerceSelectionPreview((item as any).selectionPreview);
+    result.push({ role, content, selectionPreview });
   }
   return result;
 }
@@ -1843,6 +1989,14 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const [reasoningMenuOpen, setReasoningMenuOpen] = useState(false);
   const [usagePopoverOpen, setUsagePopoverOpen] = useState(false);
   const [permissionMenuOpen, setPermissionMenuOpen] = useState(false);
+  const [selectionPopover, setSelectionPopover] = useState<{
+    messageId: string;
+    preview: SelectionPreview;
+  } | null>(null);
+  const storedSelectionPreviewsRef = useRef<Map<string, StoredSelectionPreviewEntry[]>>(
+    readStoredSelectionPreviewsByThread()
+  );
+  const previousSessionThreadIdsRef = useRef<Map<string, string>>(new Map());
   const [rateLimits, setRateLimits] = useState<CodexRateLimitsSnapshot | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const runToSessionKeyRef = useRef<Map<string, string>>(new Map());
@@ -1867,6 +2021,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const usagePopoverRef = useRef<HTMLDivElement>(null);
   const permissionBtnRef = useRef<HTMLButtonElement>(null);
   const permissionPopoverRef = useRef<HTMLDivElement>(null);
+  const selectionPopoverAnchorRef = useRef<HTMLElement | null>(null);
+  const selectionPopoverRef = useRef<HTMLDivElement>(null);
   const notebookLabelRef = useRef<HTMLSpanElement | null>(null);
   const [isNotebookLabelTruncated, setIsNotebookLabelTruncated] = useState(false);
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -2091,6 +2247,137 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       window.removeEventListener('keydown', onKeyDown);
     };
   }, [modelMenuOpen, reasoningMenuOpen, usagePopoverOpen, permissionMenuOpen]);
+
+  useEffect(() => {
+    if (!selectionPopover) {
+      return;
+    }
+
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (!target) {
+        return;
+      }
+
+      const inAnchor = selectionPopoverAnchorRef.current?.contains(target) ?? false;
+      const inPopover = selectionPopoverRef.current?.contains(target) ?? false;
+      if (inAnchor || inPopover) {
+        return;
+      }
+
+      setSelectionPopover(null);
+      selectionPopoverAnchorRef.current = null;
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') {
+        return;
+      }
+      event.preventDefault();
+      setSelectionPopover(null);
+      selectionPopoverAnchorRef.current = null;
+    };
+
+    window.addEventListener('pointerdown', onPointerDown, true);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown, true);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [selectionPopover]);
+
+  function closeSelectionPopover(): void {
+    setSelectionPopover(null);
+    selectionPopoverAnchorRef.current = null;
+  }
+
+  function toggleSelectionPopover(
+    messageId: string,
+    preview: SelectionPreview,
+    event: React.MouseEvent<HTMLButtonElement>
+  ): void {
+    if (!messageId) {
+      return;
+    }
+    if (selectionPopover?.messageId === messageId) {
+      closeSelectionPopover();
+      return;
+    }
+    selectionPopoverAnchorRef.current = event.currentTarget;
+    setSelectionPopover({ messageId, preview });
+  }
+
+  function commitStoredSelectionPreviews(
+    nextByThread: Map<string, StoredSelectionPreviewEntry[]>
+  ): void {
+    const trimmed = new Map<string, StoredSelectionPreviewEntry[]>();
+    const entries = Array.from(nextByThread.entries()).slice(-MAX_STORED_SELECTION_PREVIEW_THREADS);
+    for (const [threadId, threadEntries] of entries) {
+      if (!threadId || !Array.isArray(threadEntries) || threadEntries.length <= 0) {
+        continue;
+      }
+      trimmed.set(threadId, threadEntries.slice(-MAX_STORED_SELECTION_PREVIEW_MESSAGES_PER_THREAD));
+    }
+    storedSelectionPreviewsRef.current = trimmed;
+    persistStoredSelectionPreviewsByThread(trimmed);
+  }
+
+  function appendStoredSelectionPreviewEntry(
+    threadId: string,
+    content: string,
+    preview: SelectionPreview | undefined
+  ): void {
+    const normalizedThreadId = (threadId || '').trim();
+    if (!normalizedThreadId) {
+      return;
+    }
+    const hash = hashSelectionPreviewContent(content || '');
+    if (!hash) {
+      return;
+    }
+
+    const next = new Map(storedSelectionPreviewsRef.current);
+    const existing = next.get(normalizedThreadId) ?? [];
+    const entry: StoredSelectionPreviewEntry = {
+      contentHash: hash,
+      preview: preview ?? null
+    };
+    next.delete(normalizedThreadId);
+    next.set(
+      normalizedThreadId,
+      [...existing, entry].slice(-MAX_STORED_SELECTION_PREVIEW_MESSAGES_PER_THREAD)
+    );
+    commitStoredSelectionPreviews(next);
+  }
+
+  function migrateStoredSelectionPreviewEntries(fromThreadId: string, toThreadId: string): void {
+    const from = (fromThreadId || '').trim();
+    const to = (toThreadId || '').trim();
+    if (!from || !to || from === to) {
+      return;
+    }
+
+    const current = storedSelectionPreviewsRef.current;
+    const sourceEntries = current.get(from);
+    if (!sourceEntries || sourceEntries.length <= 0) {
+      return;
+    }
+
+    const next = new Map(current);
+    const targetEntries = next.get(to) ?? [];
+    next.delete(from);
+    next.delete(to);
+    next.set(
+      to,
+      [...targetEntries, ...sourceEntries].slice(-MAX_STORED_SELECTION_PREVIEW_MESSAGES_PER_THREAD)
+    );
+    commitStoredSelectionPreviews(next);
+  }
+
+  function clearStoredSelectionPreviews(): void {
+    storedSelectionPreviewsRef.current = new Map();
+    safeLocalStorageRemove(SELECTION_PREVIEWS_STORAGE_KEY);
+  }
 
   function replaceSessions(next: Map<string, NotebookSession>): void {
     sessionsRef.current = next;
@@ -2737,6 +3024,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     runToSessionKeyRef.current = new Map();
     activeSessionKeyByPathRef.current = new Map();
     safeLocalStorageRemove(SESSION_THREADS_STORAGE_KEY);
+    clearStoredSelectionPreviews();
     replaceSessions(new Map());
     clearInputForCurrentSession();
     clearPendingImages();
@@ -3030,25 +3318,47 @@ function CodexChat(props: CodexChatProps): JSX.Element {
             const hasConversation = existing.messages.some(
               entry => entry.kind === 'text' && (entry.role === 'user' || entry.role === 'assistant')
             );
-            if (!hasConversation && history.length > 0) {
-              const introEntry =
-                existing.messages.find(
+	            if (!hasConversation && history.length > 0) {
+	              const introEntry =
+	                existing.messages.find(
                   entry => entry.kind === 'text' && entry.role === 'system' && isSessionStartNotice(entry.text)
                 ) ??
                 ({
                   kind: 'text',
                   id: crypto.randomUUID(),
-                  role: 'system',
-                  text: normalizeSystemText('system', 'Session started')
-                } as ChatEntry);
-              const restoredEntries: ChatEntry[] = history.map(item => ({
-                kind: 'text',
-                id: crypto.randomUUID(),
-                role: item.role,
-                text: normalizeSystemText(item.role, item.content)
-              }));
-              nextMessages = [introEntry, ...restoredEntries];
-            }
+	                  role: 'system',
+	                  text: normalizeSystemText('system', 'Session started')
+	                } as ChatEntry);
+                const storedUserEntries = storedSelectionPreviewsRef.current.get(nextThreadId) ?? [];
+                let storedUserCursor = 0;
+	              const restoredEntries: ChatEntry[] = history.map(item => {
+                  const text = normalizeSystemText(item.role, item.content);
+                  let selectionPreview: SelectionPreview | undefined;
+                  if (item.role === 'user') {
+                    selectionPreview = item.selectionPreview;
+                    if (!selectionPreview) {
+                      const contentHash = hashSelectionPreviewContent(item.content);
+                      while (storedUserCursor < storedUserEntries.length) {
+                        const candidate = storedUserEntries[storedUserCursor];
+                        storedUserCursor += 1;
+                        if (!candidate || candidate.contentHash !== contentHash) {
+                          continue;
+                        }
+                        selectionPreview = candidate.preview ?? undefined;
+                        break;
+                      }
+                    }
+                  }
+                  return {
+                    kind: 'text',
+                    id: crypto.randomUUID(),
+                    role: item.role,
+                    text,
+                    selectionPreview
+                  };
+                });
+	              nextMessages = [introEntry, ...restoredEntries];
+	            }
 
             if (nextThreadId === existing.threadId && nextMessages === existing.messages) {
               return prev;
@@ -3481,20 +3791,27 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     }
 
     const notebookMode = current?.notebookMode ?? inferNotebookModeFromPath(notebookPath);
+    const selectedContext = getSelectedContext(activeWidget, notebookMode);
+    const selectedTextForContext = selectedContext?.text || '';
     let includeSelectionKey = false;
     let selection = '';
     if (includeActiveCell) {
       if (notebookMode === 'plain_py') {
-        const selectedText = getSelectedTextFromActiveCell(activeWidget) || getSelectedTextFromFileEditor(activeWidget);
+        const selectedText =
+          selectedTextForContext || getSelectedTextFromActiveCell(activeWidget) || getSelectedTextFromFileEditor(activeWidget);
         if (selectedText) {
           includeSelectionKey = true;
           selection = selectedText;
         }
       } else {
         includeSelectionKey = true;
-        selection = getActiveCellText(activeWidget) || getSelectedTextFromFileEditor(activeWidget);
+        selection =
+          selectedTextForContext || getActiveCellText(activeWidget) || getSelectedTextFromFileEditor(activeWidget);
       }
     }
+    const messageSelectionPreview =
+      toSelectionPreview(selectedContext) ||
+      (includeSelectionKey ? toFallbackSelectionPreview(activeWidget, notebookMode, selection) : undefined);
     const includeCellOutputKey =
       includeActiveCell && includeActiveCellOutput && notebookMode === 'ipynb';
     const cellOutput = includeCellOutputKey ? getActiveCellOutput(activeWidget) : '';
@@ -3538,8 +3855,12 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     if (includeCellOutputKey) {
       sendPayload.cellOutput = cellOutput;
     }
+    if (messageSelectionPreview) {
+      sendPayload.uiSelectionPreview = messageSelectionPreview;
+    }
 
     socket.send(JSON.stringify(sendPayload));
+    appendStoredSelectionPreviewEntry(session.threadId, content, messageSelectionPreview);
 
     const imageCount = pendingImagesRef.current.length;
     const showReadOnlyWarning = sandboxForSend === 'read-only';
@@ -3564,7 +3885,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
           id: crypto.randomUUID(),
           role: 'user',
           text: content,
-          attachments: imageCount > 0 ? { images: imageCount } : undefined
+          attachments: imageCount > 0 ? { images: imageCount } : undefined,
+          selectionPreview: messageSelectionPreview
         }
       ];
       next.set(sessionKey, {
@@ -3587,6 +3909,43 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const progress = currentSession?.progress ?? '';
   const progressKind = currentSession?.progressKind ?? '';
   const status: PanelStatus = socketConnected ? currentSession?.runState ?? 'ready' : 'disconnected';
+
+  useEffect(() => {
+    closeSelectionPopover();
+  }, [currentNotebookSessionKey]);
+
+  useEffect(() => {
+    if (!selectionPopover) {
+      return;
+    }
+    const exists = messages.some(entry => entry.kind === 'text' && entry.id === selectionPopover.messageId);
+    if (exists) {
+      return;
+    }
+    closeSelectionPopover();
+  }, [messages, selectionPopover]);
+
+  useEffect(() => {
+    const previous = previousSessionThreadIdsRef.current;
+    for (const [sessionKey, session] of sessions) {
+      const nextThreadId = (session?.threadId || '').trim();
+      const previousThreadId = (previous.get(sessionKey) || '').trim();
+      if (previousThreadId && nextThreadId && previousThreadId !== nextThreadId) {
+        migrateStoredSelectionPreviewEntries(previousThreadId, nextThreadId);
+      }
+    }
+
+    const nextBySessionKey = new Map<string, string>();
+    for (const [sessionKey, session] of sessions) {
+      const threadId = (session?.threadId || '').trim();
+      if (!sessionKey || !threadId) {
+        continue;
+      }
+      nextBySessionKey.set(sessionKey, threadId);
+    }
+    previousSessionThreadIdsRef.current = nextBySessionKey;
+  }, [sessions]);
+
   const displayPath = currentNotebookPath
     ? currentNotebookPath.split('/').pop() || 'Untitled'
     : 'No notebook';
@@ -3874,10 +4233,18 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 	                    : ''
 	                  : '';
 	              const imageCount = entry.attachments?.images ?? 0;
+                const selectionPreview = entry.selectionPreview;
+                const hasSelectionPreview =
+                  entry.role === 'user' &&
+                  Boolean(selectionPreview?.locationLabel && selectionPreview?.previewText);
+                const isSelectionPreviewOpen = hasSelectionPreview && selectionPopover?.messageId === entry.id;
+                const messageClassName = `jp-CodexChat-message jp-CodexChat-${entry.role}${systemVariant}${
+                  hasSelectionPreview ? ' has-selection-preview' : ''
+                }${isSelectionPreviewOpen ? ' is-selection-open' : ''}`;
 	              return (
 	                <div
 	                  key={entry.id}
-	                  className={`jp-CodexChat-message jp-CodexChat-${entry.role}${systemVariant}`}
+	                  className={messageClassName}
 	                >
 	                  <div className="jp-CodexChat-role">{entry.role}</div>
 	                  <MessageText text={entry.text} canCopyCode={entry.role === 'assistant'} />
@@ -3893,6 +4260,16 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 	                      </span>
 	                    </div>
 	                  )}
+                    {hasSelectionPreview && selectionPreview && (
+                      <button
+                        type="button"
+                        className={`jp-CodexChat-selectionToggle${isSelectionPreviewOpen ? ' is-open' : ''}`}
+                        onClick={event => toggleSelectionPopover(entry.id, selectionPreview, event)}
+                        aria-label={isSelectionPreviewOpen ? 'Hide selected text context' : 'Show selected text context'}
+                      >
+                        <PlusIcon width="1em" height="1em" />
+                      </button>
+                    )}
 	                </div>
 		              );
 		            }
@@ -3977,6 +4354,24 @@ function CodexChat(props: CodexChatProps): JSX.Element {
           <div ref={endRef} />
         </div>
       </div>
+      <PortalMenu
+        open={Boolean(selectionPopover)}
+        anchorRef={selectionPopoverAnchorRef}
+        popoverRef={selectionPopoverRef}
+        className="jp-CodexChat-selectionPopover"
+        ariaLabel="Selected text context"
+        role="dialog"
+        align="right"
+      >
+        {selectionPopover && (
+          <div className="jp-CodexChat-selectionCard" role="note" aria-label="Selected text context">
+            <div className="jp-CodexChat-selectionMeta">{selectionPopover.preview.locationLabel}</div>
+            <div className="jp-CodexChat-selectionText">
+              {formatSelectionPreviewTextForDisplay(selectionPopover.preview.previewText)}
+            </div>
+          </div>
+        )}
+      </PortalMenu>
 
       <div className="jp-CodexChat-input">
         <div className={`jp-CodexJumpBar${isAtBottom ? '' : ' is-visible'}`}>
@@ -4511,31 +4906,63 @@ function getActiveCellText(widget: DocumentWidgetLike | null): string {
   return typeof source === 'string' ? source : '';
 }
 
-function getSelectedTextFromCodeEditor(editor: any, source: string): string {
+type CodeEditorSelection = {
+  text: string;
+  startLine: number | null;
+};
+
+type SelectedContext =
+  | {
+      kind: 'cell';
+      number: number;
+      text: string;
+    }
+  | {
+      kind: 'line';
+      number: number;
+      text: string;
+    };
+
+function getSelectionFromCodeEditor(editor: any, source: string): CodeEditorSelection | null {
   if (!editor || typeof editor.getSelection !== 'function' || typeof editor.getOffsetAt !== 'function') {
-    return '';
+    return null;
   }
 
   const range = editor.getSelection();
   if (!range || !range.start || !range.end) {
-    return '';
+    return null;
   }
 
   const startOffset = Number(editor.getOffsetAt(range.start));
   const endOffset = Number(editor.getOffsetAt(range.end));
   if (!Number.isFinite(startOffset) || !Number.isFinite(endOffset)) {
-    return '';
+    return null;
   }
 
   const from = Math.max(0, Math.min(startOffset, endOffset));
   const to = Math.max(0, Math.max(startOffset, endOffset));
-  if (to <= from) {
-    return '';
+  if (to <= from || !source) {
+    return null;
   }
-  if (!source) {
-    return '';
+
+  const text = source.slice(from, to);
+  if (!text) {
+    return null;
   }
-  return source.slice(from, to);
+
+  const startLineRaw = Number(range.start.line);
+  const endLineRaw = Number(range.end.line);
+  const startLine =
+    Number.isFinite(startLineRaw) && Number.isFinite(endLineRaw)
+      ? Math.max(1, Math.min(startLineRaw, endLineRaw) + 1)
+      : null;
+
+  return { text, startLine };
+}
+
+function getSelectedTextFromCodeEditor(editor: any, source: string): string {
+  const selection = getSelectionFromCodeEditor(editor, source);
+  return selection?.text || '';
 }
 
 function getSelectedTextFromActiveCell(widget: DocumentWidgetLike | null): string {
@@ -4556,6 +4983,39 @@ function getSelectedTextFromActiveCell(widget: DocumentWidgetLike | null): strin
   }
 }
 
+function getSelectedContextFromActiveCell(widget: DocumentWidgetLike | null): SelectedContext | null {
+  if (!isNotebookWidget(widget)) {
+    return null;
+  }
+  const notebookContent: any = (widget as any).content;
+  const activeCell = notebookContent?.activeCell;
+  if (!activeCell) {
+    return null;
+  }
+
+  try {
+    const source =
+      typeof activeCell.model?.sharedModel?.getSource === 'function' ? activeCell.model.sharedModel.getSource() : '';
+    const selection = getSelectionFromCodeEditor(
+      (activeCell as any).editor,
+      typeof source === 'string' ? source : ''
+    );
+    if (!selection?.text) {
+      return null;
+    }
+
+    const rawCellIndex = Number(notebookContent?.activeCellIndex);
+    const cellNumber = Number.isFinite(rawCellIndex) ? Math.max(1, Math.floor(rawCellIndex) + 1) : 1;
+    return {
+      kind: 'cell',
+      number: cellNumber,
+      text: selection.text
+    };
+  } catch {
+    return null;
+  }
+}
+
 function getSelectedTextFromFileEditor(widget: DocumentWidgetLike | null): string {
   if (!widget || isNotebookWidget(widget)) {
     return '';
@@ -4572,6 +5032,105 @@ function getSelectedTextFromFileEditor(widget: DocumentWidgetLike | null): strin
   } catch {
     return '';
   }
+}
+
+function getSelectedContextFromFileEditor(widget: DocumentWidgetLike | null): SelectedContext | null {
+  if (!widget || isNotebookWidget(widget)) {
+    return null;
+  }
+
+  try {
+    const editor: any = (widget as any).content?.editor;
+    if (!editor) {
+      return null;
+    }
+    const source =
+      typeof editor.model?.sharedModel?.getSource === 'function' ? editor.model.sharedModel.getSource() : '';
+    const selection = getSelectionFromCodeEditor(editor, typeof source === 'string' ? source : '');
+    if (!selection?.text) {
+      return null;
+    }
+    const lineNumber = selection.startLine ?? 1;
+    return {
+      kind: 'line',
+      number: lineNumber,
+      text: selection.text
+    };
+  } catch {
+    return null;
+  }
+}
+
+function getSelectedContext(
+  widget: DocumentWidgetLike | null,
+  notebookMode: NotebookMode
+): SelectedContext | null {
+  if (notebookMode === 'plain_py') {
+    return getSelectedContextFromFileEditor(widget) ?? getSelectedContextFromActiveCell(widget);
+  }
+  return getSelectedContextFromActiveCell(widget) ?? getSelectedContextFromFileEditor(widget);
+}
+
+function inferLocationLabelFromWidget(
+  widget: DocumentWidgetLike | null,
+  notebookMode: NotebookMode
+): string {
+  if (isNotebookWidget(widget) || notebookMode === 'ipynb' || notebookMode === 'jupytext_py') {
+    const rawCellIndex = Number((widget as any)?.content?.activeCellIndex);
+    if (Number.isFinite(rawCellIndex)) {
+      return `Cell ${Math.max(1, Math.floor(rawCellIndex) + 1)}`;
+    }
+    return 'Cell';
+  }
+
+  try {
+    const editor: any = widget && !isNotebookWidget(widget) ? (widget as any).content?.editor : null;
+    if (editor && typeof editor.getCursorPosition === 'function') {
+      const cursor = editor.getCursorPosition();
+      const lineRaw = Number(cursor?.line);
+      if (Number.isFinite(lineRaw)) {
+        return `Line ${Math.max(1, Math.floor(lineRaw) + 1)}`;
+      }
+    }
+  } catch {
+    // Ignore location inference errors and fallback to a generic label.
+  }
+
+  return notebookMode === 'plain_py' ? 'Line' : 'Selection';
+}
+
+function toSelectionPreview(context: SelectedContext | null): SelectionPreview | undefined {
+  if (!context) {
+    return undefined;
+  }
+  const normalized = context.text.replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return undefined;
+  }
+  const locationLabel = context.kind === 'cell' ? `Cell ${context.number}` : `Line ${context.number}`;
+  return {
+    locationLabel,
+    previewText: truncateEnd(normalized, MESSAGE_SELECTION_PREVIEW_STORED_MAX_CHARS)
+  };
+}
+
+function formatSelectionPreviewTextForDisplay(previewText: string): string {
+  return truncateEnd((previewText || '').trim(), MESSAGE_SELECTION_PREVIEW_DISPLAY_MAX_CHARS);
+}
+
+function toFallbackSelectionPreview(
+  widget: DocumentWidgetLike | null,
+  notebookMode: NotebookMode,
+  text: string
+): SelectionPreview | undefined {
+  const normalized = (text || '').replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return undefined;
+  }
+  return {
+    locationLabel: inferLocationLabelFromWidget(widget, notebookMode),
+    previewText: truncateEnd(normalized, MESSAGE_SELECTION_PREVIEW_STORED_MAX_CHARS)
+  };
 }
 
 const ACTIVE_CELL_OUTPUT_MAX_CHARS = 6000;

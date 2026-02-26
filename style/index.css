@@ -906,6 +906,114 @@
   margin-top: 8px;
 }
 
+.jp-CodexChat-selectionToggle {
+  appearance: none;
+  -webkit-appearance: none;
+  box-sizing: border-box;
+  position: absolute;
+  right: calc(var(--cdx-selection-btn-size, 2em) * -0.14);
+  bottom: calc(var(--cdx-selection-btn-size, 2em) * -0.36);
+  z-index: 1;
+  width: var(--cdx-selection-btn-size, 2em) !important;
+  height: var(--cdx-selection-btn-size, 2em) !important;
+  min-width: var(--cdx-selection-btn-size, 2em) !important;
+  min-height: var(--cdx-selection-btn-size, 2em) !important;
+  max-width: var(--cdx-selection-btn-size, 2em) !important;
+  max-height: var(--cdx-selection-btn-size, 2em) !important;
+  border-radius: 50% !important;
+  overflow: hidden;
+  border: 2px solid color-mix(in srgb, var(--cdx-surface) 94%, #ffffff);
+  background: #101010;
+  color: #ffffff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  line-height: 0;
+  font-size: calc(var(--cdx-selection-btn-size, 2em) * 0.48);
+  cursor: pointer;
+  box-shadow: 0 8px 22px rgba(10, 10, 10, 0.3);
+  opacity: 1;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease, transform 120ms ease,
+    opacity 120ms ease;
+}
+
+.jp-CodexChat-selectionToggle svg {
+  display: block;
+  transition: transform 120ms ease;
+}
+
+.jp-CodexChat-selectionToggle:hover {
+  background: #1a1a1a;
+  border-color: color-mix(in srgb, #ffffff 94%, var(--cdx-border));
+  transform: translateY(-1px);
+}
+
+.jp-CodexChat-selectionToggle.is-open {
+  background: #000000;
+  border-color: #ffffff;
+}
+
+.jp-CodexChat-selectionToggle.is-open svg {
+  transform: rotate(45deg);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .jp-CodexChat-user.has-selection-preview .jp-CodexChat-selectionToggle {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(2px) scale(0.94);
+  }
+
+  .jp-CodexChat-user.has-selection-preview:hover .jp-CodexChat-selectionToggle,
+  .jp-CodexChat-user.has-selection-preview:focus-within .jp-CodexChat-selectionToggle,
+  .jp-CodexChat-user.has-selection-preview.is-selection-open .jp-CodexChat-selectionToggle {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0) scale(1);
+  }
+
+  .jp-CodexChat-user.has-selection-preview .jp-CodexChat-selectionToggle:hover {
+    transform: translateY(-1px) scale(1);
+  }
+}
+
+.jp-CodexChat-selectionCard {
+  margin-top: 0;
+  width: auto;
+  padding: 9px 11px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--cdx-border) 72%, transparent);
+  background: color-mix(in srgb, var(--cdx-surface-2) 82%, transparent);
+}
+
+.jp-CodexChat-selectionMeta {
+  font-family: var(--cdx-mono);
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--cdx-muted);
+}
+
+.jp-CodexChat-selectionText {
+  margin-top: 4px;
+  font-family: var(--cdx-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--cdx-text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.jp-CodexChat-message.has-selection-preview {
+  overflow: visible;
+}
+
+.jp-CodexChat-user.has-selection-preview {
+  --cdx-selection-btn-size: clamp(1.85em, 2.08em, 2.28em);
+  margin-bottom: calc(var(--cdx-selection-btn-size) * 0.45);
+}
+
 .jp-CodexChat-attachmentPill {
   display: inline-flex;
   align-items: center;
@@ -1617,6 +1725,13 @@
     sans-serif
   );
   color: var(--cdx-text);
+}
+
+.jp-CodexMenu.jp-CodexChat-selectionPopover {
+  min-width: min(18ch, calc(100vw - 24px)) !important;
+  width: min(34ch, calc(100vw - 24px)) !important;
+  max-width: min(42ch, calc(100vw - 24px)) !important;
+  padding: 8px !important;
 }
 
 .jp-CodexUsageBtn {

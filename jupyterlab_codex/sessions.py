@@ -10,6 +10,9 @@ _TRUE_VALUES = {"1", "true", "y", "yes", "on"}
 _FALSE_VALUES = {"0", "false", "n", "no", "off"}
 _DEFAULT_SESSION_RETENTION_DAYS = 30
 _DEFAULT_MAX_MESSAGE_CHARS = 12000
+_DEFAULT_UI_LABEL_MAX_CHARS = 80
+_DEFAULT_UI_PREVIEW_MAX_CHARS = 1000
+_DEFAULT_UI_PREVIEW_MAX_ITEMS_PER_SESSION = 10
 
 _SENSITIVE_PATTERNS = [
     (
@@ -61,7 +64,9 @@ class SessionStore:
         }
         meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
-    def append_message(self, session_id: str, role: str, content: str) -> None:
+    def append_message(
+        self, session_id: str, role: str, content: str, ui: Dict[str, Any] | None = None
+    ) -> None:
         if not self._logging_enabled:
             return
 
@@ -70,13 +75,20 @@ class SessionStore:
             "content": _sanitize_message(content, self._max_message_chars),
             "timestamp": _now_iso(),
         }
+        ui_payload = _sanitize_ui_payload(ui)
+        if ui_payload:
+            record["ui"] = ui_payload
         with self._jsonl_path(session_id).open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record))
             handle.write("\n")
         self._touch_meta(session_id)
+        if role == "user" and ui_payload:
+            self._prune_user_ui_previews(
+                session_id, keep_latest=_DEFAULT_UI_PREVIEW_MAX_ITEMS_PER_SESSION
+            )
         self.prune_expired_sessions()
 
-    def load_messages(self, session_id: str) -> List[Dict[str, str]]:
+    def load_messages(self, session_id: str) -> List[Dict[str, Any]]:
         if not self._logging_enabled:
             return []
 
@@ -95,6 +107,66 @@ class SessionStore:
                 except json.JSONDecodeError:
                     continue
         return messages
+
+    def _prune_user_ui_previews(self, session_id: str, keep_latest: int) -> None:
+        if keep_latest <= 0:
+            return
+
+        path = self._jsonl_path(session_id)
+        if not path.exists():
+            return
+
+        try:
+            raw_lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return
+
+        records: List[Dict[str, Any]] = []
+        for line in raw_lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                return
+            if not isinstance(item, dict):
+                return
+            records.append(item)
+
+        if not records:
+            return
+
+        ui_indices: List[int] = []
+        for idx, record in enumerate(records):
+            if record.get("role") != "user":
+                continue
+            ui = record.get("ui")
+            if (
+                isinstance(ui, dict)
+                and isinstance(ui.get("selectionPreview"), dict)
+            ):
+                ui_indices.append(idx)
+
+        if len(ui_indices) <= keep_latest:
+            return
+
+        changed = False
+        for idx in ui_indices[: len(ui_indices) - keep_latest]:
+            if "ui" in records[idx]:
+                records[idx].pop("ui", None)
+                changed = True
+
+        if not changed:
+            return
+
+        try:
+            with path.open("w", encoding="utf-8") as handle:
+                for record in records:
+                    handle.write(json.dumps(record))
+                    handle.write("\n")
+        except OSError:
+            return
 
     def build_prompt(
         self,
@@ -570,6 +642,34 @@ def _parse_iso_datetime(raw_value: str | None) -> datetime | None:
 
 def _sanitize_message(content: str, max_chars: int) -> str:
     return _truncate_text(_sanitize_sensitive_values(content), max_chars)
+
+
+def _sanitize_ui_payload(raw: Dict[str, Any] | None) -> Dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+
+    preview_raw = raw.get("selectionPreview")
+    if not isinstance(preview_raw, dict):
+        return {}
+
+    location_raw = preview_raw.get("locationLabel")
+    preview_text_raw = preview_raw.get("previewText")
+    if not isinstance(location_raw, str) or not isinstance(preview_text_raw, str):
+        return {}
+
+    location = _sanitize_message(location_raw.strip(), _DEFAULT_UI_LABEL_MAX_CHARS)
+    preview_text = _sanitize_message(
+        re.sub(r"\s+", " ", preview_text_raw).strip(), _DEFAULT_UI_PREVIEW_MAX_CHARS
+    )
+    if not location or not preview_text:
+        return {}
+
+    return {
+        "selectionPreview": {
+            "locationLabel": location,
+            "previewText": preview_text,
+        }
+    }
 
 
 def _sanitize_sensitive_values(raw: str) -> str:
