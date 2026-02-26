@@ -3821,12 +3821,21 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     const sandboxForSend = current?.selectedSandboxMode ?? sandboxMode;
     const selectedModelForSend =
       modelForSend === '__config__' ? (autoModel || '').trim() : modelForSend.trim();
-    const selectedReasoningForSend = reasoningForSend === '__config__' ? '' : reasoningForSend;
+    const selectedReasoningForSend =
+      reasoningForSend === '__config__' ? coerceReasoningEffort(autoReasoningEffort || '') : reasoningForSend;
     if (!selectedModelForSend) {
       appendMessage(
         sessionKey,
         'system',
         'Model is not resolved yet. Wait for model defaults to load, or pick a model explicitly.'
+      );
+      return;
+    }
+    if (!selectedReasoningForSend) {
+      appendMessage(
+        sessionKey,
+        'system',
+        'Reasoning level is not resolved yet. Wait for defaults to load, or pick a reasoning level explicitly.'
       );
       return;
     }
@@ -3854,7 +3863,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       notebookPath,
       commandPath: commandPath.trim() || undefined,
       model: selectedModelForSend,
-      reasoningEffort: selectedReasoningForSend || undefined,
+      reasoningEffort: selectedReasoningForSend,
       sandbox: sandboxForSend,
       images
     };
