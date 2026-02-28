@@ -15,6 +15,7 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+*.log
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
@@ -70,7 +71,9 @@ id_ed25519.*
 playwright-report/
 test-results/
 blob-report/
+.jupyterlab-playwright-*.log
 .jupyterlab-playwright.log
+output/
 
 # ---- Yarn cache artifacts (node-modules linker) ----
 .yarn/cache/

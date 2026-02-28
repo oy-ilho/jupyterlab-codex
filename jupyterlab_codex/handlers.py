@@ -602,6 +602,11 @@ class CodexWSHandler(WebSocketHandler):
             temp_images_dir = None
             image_paths: list[str] = []
             assistant_buffer = []
+            pending_output_chunks: list[str] = []
+            pending_output_chars = 0
+            last_output_flush_at = 0.0
+            output_flush_interval_s = 0.35
+            output_flush_max_chars = 6000
             auth_hint_sent = False
             user_message_logged = False
             current_resume_session_id = resume_target_session_id
@@ -618,9 +623,37 @@ class CodexWSHandler(WebSocketHandler):
                 self._store.append_message(session_id, "user", content, ui=ui_payload)
                 user_message_logged = True
 
+            def _flush_pending_output(force: bool = False) -> None:
+                nonlocal pending_output_chunks, pending_output_chars, last_output_flush_at
+                if not pending_output_chunks:
+                    return
+                now = time.monotonic()
+                if (
+                    not force
+                    and pending_output_chars < output_flush_max_chars
+                    and (now - last_output_flush_at) < output_flush_interval_s
+                ):
+                    return
+                combined_text = "".join(pending_output_chunks)
+                pending_output_chunks = []
+                pending_output_chars = 0
+                last_output_flush_at = now
+                self._safe_write_message(
+                    json.dumps(
+                        build_output_payload(
+                            run_id=run_id,
+                            session_id=session_id,
+                            session_context_key=session_context_key,
+                            notebook_path=notebook_path,
+                            text=combined_text,
+                        )
+                    )
+                )
+
             async def on_event(event: Dict[str, Any]):
-                nonlocal auth_hint_sent, session_id
+                nonlocal auth_hint_sent, session_id, pending_output_chars
                 if event.get("type") == "thread.started":
+                    _flush_pending_output(force=True)
                     thread_id_raw = event.get("thread_id")
                     if isinstance(thread_id_raw, str):
                         thread_id = thread_id_raw.strip()
@@ -649,6 +682,7 @@ class CodexWSHandler(WebSocketHandler):
                     if isinstance(raw_stderr, str) and _is_missing_auth_stderr(raw_stderr):
                         if not auth_hint_sent:
                             auth_hint_sent = True
+                            _flush_pending_output(force=True)
                             self._safe_write_message(
                                 json.dumps(
                                     build_output_payload(
@@ -666,22 +700,15 @@ class CodexWSHandler(WebSocketHandler):
                 text = event_to_text(event)
                 if text:
                     assistant_buffer.append(text)
-                    self._safe_write_message(
-                        json.dumps(
-                            build_output_payload(
-                                run_id=run_id,
-                                session_id=session_id,
-                                session_context_key=session_context_key,
-                                notebook_path=notebook_path,
-                                text=text,
-                            )
-                        )
-                    )
+                    pending_output_chunks.append(text)
+                    pending_output_chars += len(text)
+                    _flush_pending_output(force=False)
                 elif event.get("type") == "stderr":
                     # Ignore filtered/no-op stderr chunks to avoid rendering them
                     # again via the generic "event" UI path.
                     return
                 else:
+                    _flush_pending_output(force=True)
                     self._safe_write_message(
                         json.dumps(
                             build_event_payload(
@@ -728,6 +755,8 @@ class CodexWSHandler(WebSocketHandler):
                     run_mode = "fallback"
                     current_resume_session_id = ""
                     assistant_buffer = []
+                    pending_output_chunks = []
+                    pending_output_chars = 0
                     self._safe_write_message(
                         json.dumps(
                             build_output_payload(
@@ -771,6 +800,8 @@ class CodexWSHandler(WebSocketHandler):
                 ):
                     run_mode = "fallback"
                     current_resume_session_id = ""
+                    pending_output_chunks = []
+                    pending_output_chars = 0
                     self._safe_write_message(
                         json.dumps(
                             build_output_payload(
@@ -808,6 +839,7 @@ class CodexWSHandler(WebSocketHandler):
                 _append_user_message_once()
                 if assistant_buffer:
                     self._store.append_message(session_id, "assistant", "".join(assistant_buffer))
+                _flush_pending_output(force=True)
                 file_changed = _has_path_changes(before_file_signatures, _capture_file_signatures(watch_paths))
                 self._safe_write_message(
                     json.dumps(
@@ -832,6 +864,7 @@ class CodexWSHandler(WebSocketHandler):
                 )
             except asyncio.CancelledError:
                 _append_user_message_once()
+                _flush_pending_output(force=True)
                 file_changed = _has_path_changes(before_file_signatures, _capture_file_signatures(watch_paths))
                 self._safe_write_message(
                     json.dumps(
@@ -858,6 +891,7 @@ class CodexWSHandler(WebSocketHandler):
                 return
             except FileNotFoundError:
                 _append_user_message_once()
+                _flush_pending_output(force=True)
                 hint = _build_command_not_found_hint(requested_command_path)
                 self._safe_write_message(
                     json.dumps(
@@ -882,6 +916,7 @@ class CodexWSHandler(WebSocketHandler):
                 )
             except Exception as exc:  # pragma: no cover - defensive path
                 _append_user_message_once()
+                _flush_pending_output(force=True)
                 self._safe_write_message(
                     json.dumps(
                         build_error_payload(

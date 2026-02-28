@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ReactWidget, Dialog, showDialog } from '@jupyterlab/apputils';
 import type { JupyterFrontEnd } from '@jupyterlab/application';
@@ -524,6 +524,18 @@ type PendingImageAttachment = {
   previewUrl: string;
 };
 
+type QueuedImageAttachment = {
+  name: string;
+  dataUrl: string;
+};
+
+type QueuedSendMessage = {
+  content: string;
+  notebookPath: string;
+  sessionKey: string;
+  images?: QueuedImageAttachment[] | null;
+};
+
 type RunState = 'ready' | 'running';
 type PanelStatus = 'disconnected' | RunState;
 type ProgressKind = '' | 'reasoning';
@@ -662,6 +674,10 @@ const MESSAGE_SELECTION_PREVIEW_DISPLAY_MAX_CHARS = 500;
 const MESSAGE_SELECTION_PREVIEW_STORED_MAX_CHARS = 500;
 const MAX_STORED_SELECTION_PREVIEW_THREADS = 80;
 const MAX_STORED_SELECTION_PREVIEW_MESSAGES_PER_THREAD = 10;
+const MAX_SESSION_MESSAGES = 300;
+const SOCKET_MESSAGE_BATCH_SIZE = 8;
+const SOCKET_MESSAGE_MAX_QUEUE = 1200;
+const SOCKET_MESSAGE_FALLBACK_FLUSH_MS = 16;
 const READ_ONLY_PERMISSION_WARNING = 'Code changes are not available with the current permission (Read only).';
 
 function findModelLabel(model: string, options: readonly ModelOption[]): string {
@@ -2068,7 +2084,7 @@ function StatusPill(props: { status: PanelStatus }): JSX.Element {
   );
 }
 
-function CodeBlock(props: { lang: string; code: string; canCopy: boolean }): JSX.Element {
+const CodeBlock = memo(function CodeBlock(props: { lang: string; code: string; canCopy: boolean }): JSX.Element {
   const [copied, setCopied] = useState(false);
   const highlightedCode = useMemo(
     () => renderHighlightedCodeToSafeHtml(props.code, props.lang),
@@ -2104,9 +2120,11 @@ function CodeBlock(props: { lang: string; code: string; canCopy: boolean }): JSX
       </pre>
     </div>
   );
-}
+});
 
-function MessageText(props: { text: string; canCopyCode?: boolean }): JSX.Element {
+CodeBlock.displayName = 'CodeBlock';
+
+const MessageText = memo(function MessageText(props: { text: string; canCopyCode?: boolean }): JSX.Element {
   const blocks = splitFencedCodeBlocks(props.text);
   return (
     <div className="jp-CodexChat-text">
@@ -2119,7 +2137,9 @@ function MessageText(props: { text: string; canCopyCode?: boolean }): JSX.Elemen
       })}
     </div>
   );
-}
+}, (a, b) => a.text === b.text && Boolean(a.canCopyCode) === Boolean(b.canCopyCode));
+
+MessageText.displayName = 'MessageText';
 
 function SelectionPreviewCode(props: { code: string }): JSX.Element {
   const displayCode = formatSelectionPreviewTextForDisplay(props.code);
@@ -2192,7 +2212,12 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const sessionThreadSyncIdRef = useRef<string>(createSessionEventId());
   const lastRateLimitsRefreshRef = useRef<number>(0);
   const pendingRefreshPathsRef = useRef<Set<string>>(new Set());
+  const sendMessageQueueRef = useRef<Map<string, QueuedSendMessage[]>>(new Map());
+  const sendMessageQueueInFlightRef = useRef<Set<string>>(new Set());
   const activeDocumentWidgetRef = useRef<DocumentWidgetLike | null>(null);
+  const socketMessageQueueRef = useRef<unknown[]>([]);
+  const socketMessageFlushTimerRef = useRef<number | null>(null);
+  const socketMessageFlushRafRef = useRef<number | null>(null);
   const notifyOnDoneRef = useRef<boolean>(notifyOnDone);
   const notifyOnDoneMinSecondsRef = useRef<number>(notifyOnDoneMinSeconds);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -2611,6 +2636,13 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     setSessions(next);
   }
 
+  function trimSessionMessages(messages: ChatEntry[]): ChatEntry[] {
+    if (messages.length <= MAX_SESSION_MESSAGES) {
+      return messages;
+    }
+    return messages.slice(messages.length - MAX_SESSION_MESSAGES);
+  }
+
   function updateSessions(
     updater: (prev: Map<string, NotebookSession>) => Map<string, NotebookSession>
   ): void {
@@ -2922,6 +2954,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     }
 
     const now = Date.now();
+    let shouldFlushQueue = false;
     updateSessions(prev => {
       const next = new Map(prev);
       const existing = next.get(sessionKey) ?? createSession('', `Session started`, { sessionKey });
@@ -2933,6 +2966,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         runStartedAt = now;
       }
       if (runState === 'ready' && session.runState === 'running') {
+        shouldFlushQueue = true;
         const startedAt = runStartedAt;
         if (typeof startedAt === 'number' && Number.isFinite(startedAt)) {
           const elapsedMs = Math.max(0, now - startedAt);
@@ -2943,9 +2977,20 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 
       const progress = session.runState === runState ? session.progress : '';
       const progressKind = session.runState === runState ? session.progressKind : '';
-      next.set(sessionKey, { ...session, messages, runState, activeRunId: runId, runStartedAt, progress, progressKind });
+      next.set(sessionKey, {
+        ...session,
+        messages: trimSessionMessages(messages),
+        runState,
+        activeRunId: runId,
+        runStartedAt,
+        progress,
+        progressKind
+      });
       return next;
     });
+    if (shouldFlushQueue) {
+      flushQueuedSendForSession(sessionKey);
+    }
   }
 
   function setSessionProgress(sessionKey: string, progress: string, kind: ProgressKind = ''): void {
@@ -3046,7 +3091,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
               { ...msg, item: updated },
               ...messages.slice(idx + 1),
             ];
-            next.set(targetSessionKey, { ...session, messages: updatedMessages });
+            next.set(targetSessionKey, { ...session, messages: trimSessionMessages(updatedMessages) });
             return next;
           }
         }
@@ -3081,14 +3126,14 @@ function CodexChat(props: CodexChatProps): JSX.Element {
               { ...msg, item: updated },
               ...messages.slice(idx + 1),
             ];
-            next.set(targetSessionKey, { ...session, messages: updatedMessages });
+            next.set(targetSessionKey, { ...session, messages: trimSessionMessages(updatedMessages) });
             return next;
           }
         }
       }
 
       const updatedMessages: ChatEntry[] = [...messages, { kind: 'activity', id: entry.id, item: entry }];
-      next.set(targetSessionKey, { ...session, messages: updatedMessages });
+      next.set(targetSessionKey, { ...session, messages: trimSessionMessages(updatedMessages) });
       return next;
     });
   }
@@ -3198,13 +3243,12 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       const session =
         next.get(targetSessionKey) ?? createSession('', `Session started`, { sessionKey: targetSessionKey });
       const messages = session.messages;
-      // Keep each incoming message as a distinct bubble for readability.
       const updatedMessages: ChatEntry[] = [
         ...messages,
         { kind: 'text', id: crypto.randomUUID(), role, text: nextText }
       ];
 
-      next.set(targetSessionKey, { ...session, messages: updatedMessages });
+      next.set(targetSessionKey, { ...session, messages: trimSessionMessages(updatedMessages) });
       return next;
     });
   }
@@ -3259,6 +3303,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     }
     runToSessionKeyRef.current = new Map();
     activeSessionKeyByPathRef.current = new Map();
+    sendMessageQueueRef.current = new Map();
+    sendMessageQueueInFlightRef.current = new Set();
     safeLocalStorageRemove(SESSION_THREADS_STORAGE_KEY);
     clearStoredSelectionPreviews();
     replaceSessions(new Map());
@@ -3269,6 +3315,14 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   async function refreshNotebook(sessionKey: string): Promise<void> {
     const { path } = parseSessionKey(sessionKey);
     if (!path) {
+      return;
+    }
+
+    const activeWidget = getActiveDocumentWidget(props.app, activeDocumentWidgetRef.current);
+    const activePath = getSupportedDocumentPath(activeWidget);
+    const isSessionStillRunning = sessionsRef.current.get(sessionKey)?.runState === 'running';
+    if (isSessionStillRunning && activePath !== path) {
+      pendingRefreshPathsRef.current.add(sessionKey);
       return;
     }
 
@@ -3285,15 +3339,13 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     activeDocumentWidgetRef.current = widget;
 
     if (context.model.dirty) {
-      const result = await showDialog({
-        title: 'Document has unsaved changes',
-        body: 'Codex updated source files. Reload this document now? (Unsaved changes will be lost.)',
-        buttons: [Dialog.cancelButton(), Dialog.okButton({ label: 'Reload' })]
-      });
-      if (!result.button.accept) {
-        pendingRefreshPathsRef.current.add(sessionKey);
-        return;
-      }
+      pendingRefreshPathsRef.current.add(sessionKey);
+      appendMessage(
+        sessionKey,
+        'system',
+        'Codex updated files, but this document has unsaved changes. Reload manually when ready.'
+      );
+      return;
     }
 
     const viewState = captureDocumentViewState(widget);
@@ -3443,6 +3495,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   }, []);
 
   function onSocketOpen(): void {
+    resetSocketMessageQueue();
     if (hasDeleteAllPending()) {
       deleteAllSessionsOnServer();
     }
@@ -3462,10 +3515,11 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   }
 
   function onSocketClose(): void {
+    resetSocketMessageQueue();
     runToSessionKeyRef.current = new Map();
   }
 
-  function onSocketMessage(rawMessage: unknown): void {
+  function processSocketMessage(rawMessage: unknown): void {
     try {
       handleCodexSocketMessage(rawMessage, {
         appendMessage,
@@ -3521,6 +3575,71 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       console.error('[Codex] onSocketMessage failed', err, rawMessage);
     }
   }
+
+  function clearSocketMessageFlushTimer(): void {
+    const rafId = socketMessageFlushRafRef.current;
+    if (rafId !== null) {
+      window.cancelAnimationFrame(rafId);
+      socketMessageFlushRafRef.current = null;
+    }
+    const timerId = socketMessageFlushTimerRef.current;
+    if (timerId === null) {
+      return;
+    }
+    window.clearTimeout(timerId);
+    socketMessageFlushTimerRef.current = null;
+  }
+
+  function flushSocketMessageQueue(): void {
+    clearSocketMessageFlushTimer();
+    const queue = socketMessageQueueRef.current;
+    if (queue.length === 0) {
+      return;
+    }
+
+    const batch = queue.splice(0, SOCKET_MESSAGE_BATCH_SIZE);
+    for (const rawMessage of batch) {
+      processSocketMessage(rawMessage);
+    }
+
+    if (queue.length > 0) {
+      scheduleSocketMessageFlush();
+    }
+  }
+
+  function scheduleSocketMessageFlush(): void {
+    if (socketMessageFlushTimerRef.current !== null || socketMessageFlushRafRef.current !== null) {
+      return;
+    }
+    if (typeof window.requestAnimationFrame === 'function') {
+      socketMessageFlushRafRef.current = window.requestAnimationFrame(() => {
+        socketMessageFlushRafRef.current = null;
+        flushSocketMessageQueue();
+      });
+      return;
+    }
+    socketMessageFlushTimerRef.current = window.setTimeout(flushSocketMessageQueue, SOCKET_MESSAGE_FALLBACK_FLUSH_MS);
+  }
+
+  function resetSocketMessageQueue(): void {
+    socketMessageQueueRef.current = [];
+    clearSocketMessageFlushTimer();
+  }
+
+  function onSocketMessage(rawMessage: unknown): void {
+    const queue = socketMessageQueueRef.current;
+    queue.push(rawMessage);
+    if (queue.length > SOCKET_MESSAGE_MAX_QUEUE) {
+      queue.splice(0, queue.length - SOCKET_MESSAGE_MAX_QUEUE);
+    }
+    scheduleSocketMessageFlush();
+  }
+
+  useEffect(() => {
+    return () => {
+      resetSocketMessageQueue();
+    };
+  }, []);
 
   useEffect(() => {
     if (!isAtBottom) {
@@ -3748,11 +3867,90 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     });
   }
 
+  async function buildQueuedImagePayloads(attachments: PendingImageAttachment[]): Promise<QueuedImageAttachment[] | null> {
+    if (attachments.length === 0) {
+      return [];
+    }
+    try {
+      const output: QueuedImageAttachment[] = [];
+      for (const image of attachments) {
+        output.push({
+          name: image.file.name || 'image',
+          dataUrl: await blobToDataUrl(image.file)
+        });
+      }
+      return output;
+    } catch (err) {
+      appendMessage(
+        currentNotebookSessionKeyRef.current || '',
+        'system',
+        `Failed to prepare image attachment: ${String(err)}`
+      );
+      return null;
+    }
+  }
+
+  function enqueueSendMessage(message: QueuedSendMessage): void {
+    const queue = sendMessageQueueRef.current.get(message.sessionKey) ?? [];
+    queue.push(message);
+    sendMessageQueueRef.current.set(message.sessionKey, queue);
+  }
+
+  function flushQueuedSendForSession(sessionKey: string): void {
+    const normalizedSessionKey = (sessionKey || '').trim();
+    if (!normalizedSessionKey) {
+      return;
+    }
+    if (sendMessageQueueInFlightRef.current.has(normalizedSessionKey)) {
+      return;
+    }
+    const session = sessionsRef.current.get(normalizedSessionKey);
+    if (session?.runState === 'running') {
+      return;
+    }
+
+    const queue = sendMessageQueueRef.current.get(normalizedSessionKey);
+    if (!queue || queue.length === 0) {
+      return;
+    }
+    const nextMessage = queue.shift();
+    if (!nextMessage) {
+      return;
+    }
+    sendMessageQueueRef.current.set(normalizedSessionKey, queue);
+    sendMessageQueueInFlightRef.current.add(normalizedSessionKey);
+
+    void (async () => {
+      try {
+        const ok = await sendMessage({
+          forcedText: nextMessage.content,
+          forcedNotebookPath: nextMessage.notebookPath,
+          forcedSessionKey: nextMessage.sessionKey,
+          queuedImages: nextMessage.images ?? null,
+          skipRunStateCheck: true
+        });
+        if (!ok) {
+          const retryQueue = sendMessageQueueRef.current.get(normalizedSessionKey) ?? [];
+          retryQueue.unshift(nextMessage);
+          sendMessageQueueRef.current.set(normalizedSessionKey, retryQueue);
+        }
+      } catch (err) {
+        const retryQueue = sendMessageQueueRef.current.get(normalizedSessionKey) ?? [];
+        retryQueue.unshift(nextMessage);
+        sendMessageQueueRef.current.set(normalizedSessionKey, retryQueue);
+        appendMessage(normalizedSessionKey, 'system', `Failed to send queued message: ${String(err)}`);
+      } finally {
+        sendMessageQueueInFlightRef.current.delete(normalizedSessionKey);
+      }
+    })();
+  }
+
   async function sendMessage(options?: {
     forcedText?: string;
     forcedNotebookPath?: string;
     forcedSessionKey?: string;
     skipRunStateCheck?: boolean;
+    queuedImages?: QueuedImageAttachment[] | null;
   }): Promise<boolean> {
     const socket = wsRef.current;
     const notebookPath = (options?.forcedNotebookPath ?? currentNotebookPathRef.current) || '';
@@ -3782,15 +3980,34 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     }
 
     const forcedText = typeof options?.forcedText === 'string' ? options.forcedText : null;
+    const queuedImages = options?.queuedImages == null ? null : options.queuedImages;
     const trimmed = (forcedText ?? inputRef.current).trim();
-    const hasImages = forcedText == null && pendingImagesRef.current.length > 0;
+    const hasQueuedImages = (queuedImages?.length ?? 0) > 0;
+    const hasImages = forcedText == null ? pendingImagesRef.current.length > 0 : hasQueuedImages;
     if (!trimmed && !hasImages) {
       return false;
     }
 
     const current = sessionKey ? sessionsRef.current.get(sessionKey) : null;
     if (current?.runState === 'running' && options?.skipRunStateCheck !== true) {
-      return false;
+      const queuedPayloads =
+        queuedImages ?? (hasImages ? await buildQueuedImagePayloads(pendingImagesRef.current) : null);
+      if (queuedPayloads === null) {
+        return false;
+      }
+      enqueueSendMessage({
+        content: trimmed,
+        notebookPath,
+        sessionKey,
+        images: queuedPayloads
+      });
+      appendMessage(sessionKey, 'system', 'Request queued while Codex is running.');
+
+      if (forcedText == null) {
+        clearInputForCurrentSession();
+        clearPendingImages();
+      }
+      return true;
     }
 
     const activeWidget = findDocumentWidgetByPath(props.app, notebookPath, activeDocumentWidgetRef.current);
@@ -3879,18 +4096,18 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     }
 
     const content = trimmed || (hasImages ? 'Please analyze the attached image(s).' : '');
+    const imagePayloads =
+      queuedImages != null
+        ? queuedImages
+        : hasImages
+          ? await buildQueuedImagePayloads(pendingImagesRef.current)
+          : null;
+    if (hasImages && !imagePayloads) {
+      return false;
+    }
     let images: { name: string; dataUrl: string }[] | undefined;
-    if (hasImages) {
-      try {
-        images = [];
-        for (const image of pendingImagesRef.current) {
-          const dataUrl = await blobToDataUrl(image.file);
-          images.push({ name: image.file.name || 'clipboard-image', dataUrl });
-        }
-      } catch (err) {
-        appendMessage(sessionKey, 'system', `Failed to attach image(s): ${String(err)}`);
-        return false;
-      }
+    if (imagePayloads && imagePayloads.length > 0) {
+      images = imagePayloads;
     }
 
     if (
@@ -3920,7 +4137,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 
     appendStoredSelectionPreviewEntry(session.threadId, content, messageContextPreview);
 
-    const imageCount = pendingImagesRef.current.length;
+    const imageCount = images ? images.length : 0;
     const showReadOnlyWarning = sandboxForSend === 'read-only';
     updateSessions(prev => {
       const next = new Map(prev);
@@ -3950,7 +4167,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       ];
       next.set(sessionKey, {
         ...existing,
-        messages: updatedMessages,
+        messages: trimSessionMessages(updatedMessages),
         runState: 'running',
         activeRunId: null,
         runStartedAt: Date.now(),
@@ -4023,9 +4240,12 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     currentSession?.pairedOk !== false;
   const trimmedInput = input.trim();
   const canSend =
-    status === 'ready' &&
+    status !== 'disconnected' &&
     currentNotebookPath.length > 0 &&
     currentSession?.pairedOk !== false;
+  const hasComposerInput = Boolean(trimmedInput) || pendingImages.length > 0;
+  const canSendNow = canSend && status === 'ready' && hasComposerInput;
+  const canQueueNow = canSend && status === 'running' && hasComposerInput;
   const runningSummary = status === 'running' ? progress || 'Working...' : '';
   const activeModelOption = currentSession?.selectedModelOption ?? modelOption;
   const activeReasoningEffort = currentSession?.selectedReasoningEffort ?? reasoningEffort;
@@ -4060,7 +4280,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
           ? 'Permission will be requested when enabling this option.'
           : `Shows a browser notification for ${minimumNotifyDurationLabel}.`;
   const canStop = status === 'running' && Boolean(currentSession?.activeRunId);
-  const canSendNow = canSend && (Boolean(trimmedInput) || pendingImages.length > 0);
   const sendButtonDisabled = status === 'running' ? !canStop : !canSendNow;
   const nowMs = Date.now();
   const rateUpdatedAtMs = safeParseDateMs(rateLimits?.updatedAt ?? null);
@@ -4322,7 +4541,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                 const messageClassName = `jp-CodexChat-message jp-CodexChat-${entry.role}${systemVariant}${
                   hasContextPreview ? ' has-selection-preview' : ''
                 }${isSelectionPreviewOpen ? ' is-selection-open' : ''}`;
-	              return (
+		              return (
 	                <div
 	                  key={entry.id}
 	                  className={messageClassName}
@@ -4544,7 +4763,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 	              if (e.key !== 'Enter' || e.shiftKey) {
                   return;
                 }
-                if (canSend && (trimmedInput || pendingImages.length > 0)) {
+                if (canSendNow || canQueueNow) {
                   e.preventDefault();
                   void sendMessage();
                 }
