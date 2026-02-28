@@ -45,19 +45,19 @@ SCATTERING_PARAMS = {
 
 # %%
 def simulate_1d_scattering(
-    nx=1024,
-    x_min=-200.0,
-    x_max=200.0,
-    hbar=1.0,
-    mass=1.0,
-    dt=0.03,
-    n_steps=1400,
-    save_every=8,
-    barrier_height=1.0,
-    barrier_width=8.0,
-    x0=-90.0,
-    sigma=10.0,
-    k0=1.3,
+    nx=SCATTERING_PARAMS["nx"],
+    x_min=SCATTERING_PARAMS["x_min"],
+    x_max=SCATTERING_PARAMS["x_max"],
+    hbar=SCATTERING_PARAMS["hbar"],
+    mass=SCATTERING_PARAMS["mass"],
+    dt=SCATTERING_PARAMS["dt"],
+    n_steps=SCATTERING_PARAMS["n_steps"],
+    save_every=SCATTERING_PARAMS["save_every"],
+    barrier_height=SCATTERING_PARAMS["barrier_height"],
+    barrier_width=SCATTERING_PARAMS["barrier_width"],
+    x0=SCATTERING_PARAMS["x0"],
+    sigma=SCATTERING_PARAMS["sigma"],
+    k0=SCATTERING_PARAMS["k0"],
 ):
     """분할 단계 FFT를 이용한 1차원 시간의존 슈뢰딩거 방정식 산란 시뮬레이션."""
     if not isinstance(nx, int):
@@ -107,7 +107,8 @@ def simulate_1d_scattering(
 
         # 일정 간격으로 확률밀도 스냅샷 저장
         if step % save_every == 0:
-            snapshots.append(np.abs(psi) ** 2)
+            density = np.abs(psi) ** 2
+            snapshots.append(density)
             times.append((step + 1) * dt)
 
     # 좌/중앙/우 영역별 확률 계산
@@ -115,10 +116,11 @@ def simulate_1d_scattering(
     right_region = x > barrier_width / 2.0
     center_region = ~(left_region | right_region)
 
-    norm_final = np.sum(np.abs(psi) ** 2) * dx
-    reflection = np.sum(np.abs(psi[left_region]) ** 2) * dx / norm_final
-    transmission = np.sum(np.abs(psi[right_region]) ** 2) * dx / norm_final
-    center_probability = np.sum(np.abs(psi[center_region]) ** 2) * dx / norm_final
+    density_final = np.abs(psi) ** 2
+    norm_final = np.sum(density_final) * dx
+    reflection = np.sum(density_final[left_region]) * dx / norm_final
+    transmission = np.sum(density_final[right_region]) * dx / norm_final
+    center_probability = np.sum(density_final[center_region]) * dx / norm_final
 
     return {
         "x": x,

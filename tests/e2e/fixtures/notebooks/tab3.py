@@ -31,18 +31,6 @@ def split_operator_step(psi_state, phase_v_half, phase_t):
     return psi_state
 
 
-def momentum_operator(psi_state, k, hbar):
-    """Apply p = -i*hbar*d/dx with a spectral derivative."""
-    psi_k_state = np.fft.fft(psi_state)
-    return np.fft.ifft(hbar * k * psi_k_state)
-
-
-def momentum_squared_operator(psi_state, k, hbar):
-    """Apply p^2 operator with a spectral derivative."""
-    psi_k_state = np.fft.fft(psi_state)
-    return np.fft.ifft((hbar * k) ** 2 * psi_k_state)
-
-
 # %%
 # Simulation helpers
 def _validate_simulation_params(
@@ -93,8 +81,9 @@ def _record_observables(psi, x, dx, k, hbar):
 
     x_mean = np.sum(x * density) * dx
     x2_mean = np.sum((x**2) * density) * dx
-    p_psi = momentum_operator(psi, k, hbar)
-    p2_psi = momentum_squared_operator(psi, k, hbar)
+    psi_k = np.fft.fft(psi)
+    p_psi = np.fft.ifft(hbar * k * psi_k)
+    p2_psi = np.fft.ifft((hbar * k) ** 2 * psi_k)
     p_mean = np.real(np.sum(np.conj(psi) * p_psi) * dx)
     p2_mean = np.real(np.sum(np.conj(psi) * p2_psi) * dx)
 
@@ -104,7 +93,7 @@ def _record_observables(psi, x, dx, k, hbar):
     return density, norm, x_mean, p_mean, uncertainty
 
 
-def _compute_diagnostics(final_density, x, dx, barrier_region, uncertainty_history, hbar):
+def _compute_diagnostics(final_density, x, dx, barrier_region, uncertainty_history):
     reflection = np.sum(final_density[x < -barrier_region]) * dx
     transmission = np.sum(final_density[x > barrier_region]) * dx
     near_barrier = np.sum(final_density[np.abs(x) <= barrier_region]) * dx
@@ -116,7 +105,6 @@ def _compute_diagnostics(final_density, x, dx, barrier_region, uncertainty_histo
         "near_barrier": near_barrier,
         "probability_sum": reflection + transmission + near_barrier,
         "min_uncertainty": float(np.min(uncertainty_history)),
-        "uncertainty_bound": 0.5 * hbar,
     }
 
 
@@ -175,7 +163,7 @@ def simulate_1d_quantum_scattering(
         psi = split_operator_step(psi, phase_v_half, phase_t)
 
     final_density = np.abs(psi) ** 2
-    diagnostics = _compute_diagnostics(final_density, x, dx, barrier_region, uncertainty_history, hbar)
+    diagnostics = _compute_diagnostics(final_density, x, dx, barrier_region, uncertainty_history)
 
     return {
         "x": x,
@@ -195,8 +183,10 @@ def simulate_1d_quantum_scattering(
 def _plot_density_panel(ax, x, snapshots, times, V):
     for density, t in zip(snapshots, times):
         ax.plot(x, density, label=f"t={t:.1f}")
-    scale = np.max(snapshots[0]) / np.max(V)
-    ax.plot(x, V * scale, "--", linewidth=2, label="Barrier (scaled)")
+    vmax = np.max(V)
+    if vmax > 0:
+        scale = np.max(snapshots[0]) / vmax
+        ax.plot(x, V * scale, "--", linewidth=2, label="Barrier (scaled)")
     ax.set_title("1D Quantum Wave Packet Scattering")
     ax.set_xlabel("x")
     ax.set_ylabel(r"Probability density $|\psi|^2$")
@@ -257,6 +247,7 @@ def plot_results(result, hbar=1.0):
 # %%
 def validate_diagnostics(diagnostics, hbar=1.0, tol=1e-3):
     """Return validation checks for core physical constraints."""
+    uncertainty_bound = 0.5 * hbar
     reflection = diagnostics["reflection"]
     transmission = diagnostics["transmission"]
     near_barrier = diagnostics["near_barrier"]
@@ -269,7 +260,7 @@ def validate_diagnostics(diagnostics, hbar=1.0, tol=1e-3):
                 near_barrier,
                 diagnostics["probability_sum"],
                 diagnostics["min_uncertainty"],
-                diagnostics["uncertainty_bound"],
+                uncertainty_bound,
             ]
         )
     )
@@ -285,10 +276,7 @@ def validate_diagnostics(diagnostics, hbar=1.0, tol=1e-3):
             and transmission <= 1.0 + tol
             and near_barrier <= 1.0 + tol
         ),
-        "uncertainty_bound_consistent": bool(
-            abs(diagnostics["uncertainty_bound"] - 0.5 * hbar) <= tol
-        ),
-        "uncertainty_respected": bool(diagnostics["min_uncertainty"] + tol >= 0.5 * hbar),
+        "uncertainty_respected": bool(diagnostics["min_uncertainty"] + tol >= uncertainty_bound),
     }
     checks["all_passed"] = all(checks.values())
     return checks
@@ -296,9 +284,10 @@ def validate_diagnostics(diagnostics, hbar=1.0, tol=1e-3):
 
 # %%
 def main():
-    result = simulate_1d_quantum_scattering()
+    hbar = 1.0
+    result = simulate_1d_quantum_scattering(hbar=hbar)
     diag = result["diagnostics"]
-    checks = validate_diagnostics(diag)
+    checks = validate_diagnostics(diag, hbar=hbar)
 
     print(f"Final normalization (should be ~1): {diag['final_norm']:.6f}")
     print(f"Reflection probability    : {diag['reflection']:.6f}")
@@ -307,7 +296,7 @@ def main():
     print(f"R + T + Near-barrier      : {diag['probability_sum']:.6f}")
     print(
         "Min uncertainty DxDp      : "
-        f"{diag['min_uncertainty']:.6f} (>= {diag['uncertainty_bound']:.3f})"
+        f"{diag['min_uncertainty']:.6f} (>= {0.5 * hbar:.3f})"
     )
     print(f"Validation all passed      : {checks['all_passed']}")
 
@@ -316,7 +305,7 @@ def main():
             continue
         print(f"  - {name:25}: {passed}")
 
-    plot_results(result)
+    plot_results(result, hbar=hbar)
 
 
 if __name__ == "__main__":
