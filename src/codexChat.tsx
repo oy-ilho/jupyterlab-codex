@@ -67,23 +67,6 @@ function ArrowDownIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
   );
 }
 
-function QueueIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" {...props}>
-      <rect x="4" y="5" width="12" height="3" rx="1.5" stroke="currentColor" strokeWidth="1.8" />
-      <rect x="4" y="10.5" width="12" height="3" rx="1.5" stroke="currentColor" strokeWidth="1.8" />
-      <rect x="4" y="16" width="12" height="3" rx="1.5" stroke="currentColor" strokeWidth="1.8" />
-      <path
-        d="M18 9.5v7m0 0l-2.7-2.7M18 16.5l2.7-2.7"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
 function StopIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
   return (
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" {...props}>
@@ -539,13 +522,6 @@ type PendingImageAttachment = {
   id: string;
   file: File;
   previewUrl: string;
-};
-
-type QueuedTurn = {
-  id: string;
-  text: string;
-  notebookPath: string;
-  queuedAt: number;
 };
 
 type RunState = 'ready' | 'running';
@@ -2224,9 +2200,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const sessionThreadSyncIdRef = useRef<string>(createSessionEventId());
   const lastRateLimitsRefreshRef = useRef<number>(0);
   const pendingRefreshPathsRef = useRef<Set<string>>(new Set());
-  const [queuedTurns, setQueuedTurns] = useState<Map<string, QueuedTurn>>(new Map());
-  const queuedTurnsRef = useRef<Map<string, QueuedTurn>>(new Map());
-  const queueSendLocksRef = useRef<Set<string>>(new Set());
   const activeDocumentWidgetRef = useRef<DocumentWidgetLike | null>(null);
   const socketMessageQueueRef = useRef<unknown[]>([]);
   const socketMessageFlushTimerRef = useRef<number | null>(null);
@@ -2354,105 +2327,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     const restoredInput = sessionKey ? inputDraftsRef.current.get(sessionKey) || '' : '';
     inputRef.current = restoredInput;
     setInput(restoredInput);
-  }
-
-  function updateQueuedTurns(updater: (prev: Map<string, QueuedTurn>) => Map<string, QueuedTurn>): void {
-    const previous = queuedTurnsRef.current;
-    const next = updater(previous);
-    if (next === previous) {
-      return;
-    }
-    queuedTurnsRef.current = next;
-    setQueuedTurns(next);
-  }
-
-  function clearAllQueuedTurns(): void {
-    if (queuedTurnsRef.current.size === 0) {
-      return;
-    }
-    updateQueuedTurns(() => new Map());
-  }
-
-  function clearQueuedTurn(
-    sessionKey: string,
-    options?: {
-      restoreInput?: boolean;
-      fallbackText?: string;
-    }
-  ): void {
-    if (!sessionKey) {
-      return;
-    }
-    const existing = queuedTurnsRef.current.get(sessionKey);
-    const restoreText = (options?.fallbackText ?? existing?.text ?? '').trim();
-    updateQueuedTurns(prev => {
-      if (!prev.has(sessionKey)) {
-        return prev;
-      }
-      const next = new Map(prev);
-      next.delete(sessionKey);
-      return next;
-    });
-
-    if (!options?.restoreInput || !restoreText) {
-      return;
-    }
-    setInputDraftForSession(sessionKey, restoreText);
-    if (currentNotebookSessionKeyRef.current === sessionKey) {
-      inputRef.current = restoreText;
-      setInput(restoreText);
-      window.requestAnimationFrame(() => autosizeComposerTextarea());
-    }
-  }
-
-  function queueCurrentInput(): void {
-    const sessionKey = currentNotebookSessionKeyRef.current || '';
-    const notebookPath = currentNotebookPathRef.current || '';
-    if (!sessionKey || !notebookPath) {
-      return;
-    }
-
-    const trimmed = inputRef.current.trim();
-    if (!trimmed) {
-      return;
-    }
-    if (queuedTurnsRef.current.has(sessionKey)) {
-      appendMessage(
-        sessionKey,
-        'system',
-        'A queued follow-up is already set. Remove it before queueing another message.'
-      );
-      return;
-    }
-
-    if (pendingImagesRef.current.length > 0) {
-      clearPendingImages();
-      appendMessage(
-        sessionKey,
-        'system',
-        'Queued follow-up accepts text only while a run is active. Pending images were removed.'
-      );
-    }
-
-    updateQueuedTurns(prev => {
-      const next = new Map(prev);
-      next.set(sessionKey, {
-        id: crypto.randomUUID(),
-        text: trimmed,
-        notebookPath,
-        queuedAt: Date.now()
-      });
-      return next;
-    });
-    clearInputForCurrentSession();
-  }
-
-  function removeQueuedTurnForCurrentSession(): void {
-    const sessionKey = currentNotebookSessionKeyRef.current || '';
-    if (!sessionKey) {
-      return;
-    }
-    clearQueuedTurn(sessionKey, { restoreInput: true });
   }
 
   useEffect(() => {
@@ -3066,7 +2940,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     }
 
     const now = Date.now();
-    let shouldNotifyDone = false;
     updateSessions(prev => {
       const next = new Map(prev);
       const existing = next.get(sessionKey) ?? createSession('', `Session started`, { sessionKey });
@@ -3078,7 +2951,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         runStartedAt = now;
       }
       if (runState === 'ready' && session.runState === 'running') {
-        shouldNotifyDone = true;
         const startedAt = runStartedAt;
         if (typeof startedAt === 'number' && Number.isFinite(startedAt)) {
           const elapsedMs = Math.max(0, now - startedAt);
@@ -3100,9 +2972,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       });
       return next;
     });
-    if (shouldNotifyDone) {
-      onSessionDoneForQueue(sessionKey);
-    }
   }
 
   function setSessionProgress(sessionKey: string, progress: string, kind: ProgressKind = ''): void {
@@ -3415,7 +3284,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     }
     runToSessionKeyRef.current = new Map();
     activeSessionKeyByPathRef.current = new Map();
-    clearAllQueuedTurns();
     safeLocalStorageRemove(SESSION_THREADS_STORAGE_KEY);
     clearStoredSelectionPreviews();
     replaceSessions(new Map());
@@ -3999,13 +3867,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       );
       return null;
     }
-  }
-
-  function onSessionDoneForQueue(sessionKey: string): void {
-    if (!sessionKey) {
-      return;
-    }
-    clearQueuedTurn(sessionKey);
   }
 
   async function sendMessage(options?: {
