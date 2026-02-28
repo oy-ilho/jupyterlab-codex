@@ -223,6 +223,24 @@ def _plot_uncertainty_panel(ax, times, uncertainty_history, hbar):
 
 
 # %%
+def plot_density_3d(result):
+    x = result["x"]
+    times = np.array(result["times"])
+    snapshots = np.array(result["snapshots"])
+
+    X, T = np.meshgrid(x, times)
+    fig = plt.figure(figsize=(10, 6))
+    ax = fig.add_subplot(111, projection="3d")
+    ax.plot_surface(X, T, snapshots, cmap="viridis", linewidth=0, antialiased=True)
+    ax.set_title("Probability Density Surface")
+    ax.set_xlabel("x")
+    ax.set_ylabel("time")
+    ax.set_zlabel(r"$|\psi|^2$")
+    plt.tight_layout()
+    plt.show()
+
+
+# %%
 # Plot entrypoint
 def plot_results(result, hbar=1.0):
     x = result["x"]
@@ -242,6 +260,7 @@ def plot_results(result, hbar=1.0):
 
     plt.tight_layout()
     plt.show()
+    plot_density_3d(result)
 
 
 # %%

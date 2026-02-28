@@ -51,9 +51,9 @@ test('coerceSessionHistory drops invalid entries', () => {
 test('coerceRateLimitsSnapshot normalizes nested windows and context window', () => {
   const snapshot = coerceRateLimitsSnapshot({
     updatedAt: '2024-01-01T00:00:00Z',
-    primary: { usedPercent: 20.1, windowMinutes: 10.2, resetsAt: 99.9 },
-    secondary: { usedPercent: 12.2, windowMinutes: 5, resetsAt: 40 },
-    contextWindow: { windowTokens: 10.5, usedTokens: 5.2, leftTokens: 4.8, usedPercent: 50.5 }
+    primary: { usedPercent: '20.1', windowMinutes: '10.2', resetsAt: '99.9' },
+    secondary: { usedPercent: '12.2', windowMinutes: '5', resetsAt: '40' },
+    contextWindow: { windowTokens: '10.5', usedTokens: '5.2', leftTokens: '4.8', usedPercent: '50.5' }
   });
   expect(snapshot).toEqual({
     updatedAt: '2024-01-01T00:00:00Z',

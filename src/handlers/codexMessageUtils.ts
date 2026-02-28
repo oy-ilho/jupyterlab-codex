@@ -152,16 +152,27 @@ export function coerceSessionHistory(
   return result;
 }
 
+function coerceFiniteNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const parsed = Number(value.trim());
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
 export function coerceRateLimitWindow(raw: unknown): RateLimitWindowSnapshot | null {
   if (!raw || typeof raw !== 'object') {
     return null;
   }
   const record = raw as Record<string, unknown>;
-  const usedPercent = typeof record.usedPercent === 'number' && Number.isFinite(record.usedPercent) ? record.usedPercent : null;
-  const windowMinutes = Number.isFinite(record.windowMinutes as number)
-    ? Math.round(record.windowMinutes as number)
-    : null;
-  const resetsAt = Number.isFinite(record.resetsAt as number) ? Math.round(record.resetsAt as number) : null;
+  const usedPercent = coerceFiniteNumber(record.usedPercent);
+  const windowMinutesValue = coerceFiniteNumber(record.windowMinutes);
+  const resetsAtValue = coerceFiniteNumber(record.resetsAt);
+  const windowMinutes = windowMinutesValue === null ? null : Math.round(windowMinutesValue);
+  const resetsAt = resetsAtValue === null ? null : Math.round(resetsAtValue);
   return { usedPercent, windowMinutes, resetsAt };
 }
 
@@ -170,22 +181,13 @@ export function coerceContextWindowSnapshot(raw: unknown): ContextWindowSnapshot
     return null;
   }
   const record = raw as Record<string, unknown>;
-  const windowTokens =
-    typeof record.windowTokens === 'number' && Number.isFinite(record.windowTokens)
-      ? Math.round(record.windowTokens)
-      : null;
-  const usedTokens =
-    typeof record.usedTokens === 'number' && Number.isFinite(record.usedTokens)
-      ? Math.round(record.usedTokens)
-      : null;
-  const leftTokens =
-    typeof record.leftTokens === 'number' && Number.isFinite(record.leftTokens)
-      ? Math.round(record.leftTokens)
-      : null;
-  const usedPercent =
-    typeof record.usedPercent === 'number' && Number.isFinite(record.usedPercent)
-      ? record.usedPercent
-      : null;
+  const windowTokensValue = coerceFiniteNumber(record.windowTokens);
+  const usedTokensValue = coerceFiniteNumber(record.usedTokens);
+  const leftTokensValue = coerceFiniteNumber(record.leftTokens);
+  const usedPercent = coerceFiniteNumber(record.usedPercent);
+  const windowTokens = windowTokensValue === null ? null : Math.round(windowTokensValue);
+  const usedTokens = usedTokensValue === null ? null : Math.round(usedTokensValue);
+  const leftTokens = leftTokensValue === null ? null : Math.round(leftTokensValue);
   if (windowTokens == null && usedTokens == null && leftTokens == null && usedPercent == null) {
     return null;
   }

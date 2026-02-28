@@ -29,7 +29,8 @@
     "clean": "rimraf lib tsconfig.tsbuildinfo",
     "test:unit": "playwright test --config playwright.unit.config.cjs",
     "test:e2e": "playwright test",
-    "test:e2e:queue-repro": "playwright test tests/e2e/queue-multitab-repro.spec.js",
+    "test:e2e:queue-repro": "bash scripts/run_playwright_queue_repro.sh",
+    "test:e2e:queue-repro:local": "bash scripts/run_playwright_repro.sh",
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:install": "playwright install chromium",
     "test:e2e:repro-local": "bash scripts/run_playwright_repro.sh"

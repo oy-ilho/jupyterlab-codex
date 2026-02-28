@@ -1,11 +1,16 @@
 import { type SetStateAction } from 'react';
 import { parseServerMessage, type ModelCatalogEntry } from '../protocol';
-import { splitStoredMessagePreview as splitStoredMessagePreviewShared, truncateEnd } from './codexMessageUtils';
+import {
+  type CodexRateLimitsSnapshot,
+  type HistoryEntry,
+  type ProgressKind,
+  type TextRole,
+  splitStoredMessagePreview as splitStoredMessagePreviewShared,
+  truncateEnd
+} from './codexMessageUtils';
 
-type TextRole = 'user' | 'assistant' | 'system';
 type ActivityPhase = 'started' | 'completed' | '';
 type ActivityCategory = 'reasoning' | 'command' | 'file' | 'tool' | 'event';
-export type ProgressKind = '' | 'reasoning';
 type NotebookMode = 'ipynb' | 'jupytext_py' | 'plain_py' | 'unsupported';
 type RunState = 'ready' | 'running';
 
@@ -58,26 +63,6 @@ interface NotebookSessionLike {
   conversationMode: 'resume' | 'fallback';
 }
 
-interface CodexRateLimitsWindow {
-  usedPercent: number | null;
-  windowMinutes: number | null;
-  resetsAt: number | null;
-}
-
-interface CodexRateLimitsContextWindow {
-  windowTokens: number | null;
-  usedTokens: number | null;
-  leftTokens: number | null;
-  usedPercent: number | null;
-}
-
-export interface CodexRateLimitsSnapshot {
-  updatedAt: string | null;
-  primary: CodexRateLimitsWindow | null;
-  secondary: CodexRateLimitsWindow | null;
-  contextWindow: CodexRateLimitsContextWindow | null;
-}
-
 export type PairingPayload = {
   pairedOk: boolean | null;
   pairedPath: string;
@@ -96,13 +81,6 @@ export interface ActivitySummary {
   };
   progress: string;
   progressKind: ProgressKind;
-}
-
-export interface HistoryEntry {
-  role: 'user' | 'assistant' | 'system';
-  content: string;
-  selectionPreview?: unknown;
-  cellOutputPreview?: unknown;
 }
 
 export interface CliDefaults {
