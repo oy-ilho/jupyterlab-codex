@@ -75,6 +75,23 @@ function StopIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
   );
 }
 
+function QueueIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" {...props}>
+      <rect x="4" y="5" width="12" height="3" rx="1.5" stroke="currentColor" strokeWidth="1.8" />
+      <rect x="4" y="10.5" width="12" height="3" rx="1.5" stroke="currentColor" strokeWidth="1.8" />
+      <rect x="4" y="16" width="12" height="3" rx="1.5" stroke="currentColor" strokeWidth="1.8" />
+      <path
+        d="M18 9.5v7m0 0l-2.7-2.7M18 16.5l2.7-2.7"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function ImageIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
   return (
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false" {...props}>
@@ -522,6 +539,13 @@ type PendingImageAttachment = {
   id: string;
   file: File;
   previewUrl: string;
+};
+
+type QueuedTurn = {
+  id: string;
+  text: string;
+  notebookPath: string;
+  queuedAt: number;
 };
 
 type RunState = 'ready' | 'running';
@@ -2163,6 +2187,9 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const pendingImagesRef = useRef<PendingImageAttachment[]>([]);
   const inputRef = useRef<string>('');
   const inputDraftsRef = useRef<Map<string, string>>(new Map());
+  const [queuedTurns, setQueuedTurns] = useState<Map<string, QueuedTurn>>(new Map());
+  const queuedTurnsRef = useRef<Map<string, QueuedTurn>>(new Map());
+  const queueSendLocksRef = useRef<Set<string>>(new Set());
   const {
     socketRef: wsRef,
     socketConnected,
@@ -2272,8 +2299,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     setCurrentSessionModelOption(firstModel);
   }, [modelOption, autoModel, modelOptions]);
 
-  function saveCurrentInputDraft(value: string): void {
-    const sessionKey = currentNotebookSessionKeyRef.current || '';
+  function setInputDraftForSession(sessionKey: string, value: string): void {
     if (!sessionKey) {
       return;
     }
@@ -2285,6 +2311,14 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       nextDrafts.delete(sessionKey);
     }
     inputDraftsRef.current = nextDrafts;
+  }
+
+  function saveCurrentInputDraft(value: string): void {
+    const sessionKey = currentNotebookSessionKeyRef.current || '';
+    if (!sessionKey) {
+      return;
+    }
+    setInputDraftForSession(sessionKey, value);
   }
 
   function clearInputForCurrentSession(): void {
@@ -2309,6 +2343,97 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     const restoredInput = sessionKey ? inputDraftsRef.current.get(sessionKey) || '' : '';
     inputRef.current = restoredInput;
     setInput(restoredInput);
+  }
+
+  function updateQueuedTurns(updater: (prev: Map<string, QueuedTurn>) => Map<string, QueuedTurn>): void {
+    const previous = queuedTurnsRef.current;
+    const next = updater(previous);
+    if (next === previous) {
+      return;
+    }
+    queuedTurnsRef.current = next;
+    setQueuedTurns(next);
+  }
+
+  function clearAllQueuedTurns(): void {
+    if (queuedTurnsRef.current.size === 0) {
+      return;
+    }
+    updateQueuedTurns(() => new Map());
+  }
+
+  function clearQueuedTurn(
+    sessionKey: string,
+    options?: {
+      restoreInput?: boolean;
+      fallbackText?: string;
+    }
+  ): void {
+    if (!sessionKey) {
+      return;
+    }
+    const existing = queuedTurnsRef.current.get(sessionKey);
+    const restoreText = (options?.fallbackText ?? existing?.text ?? '').trim();
+    updateQueuedTurns(prev => {
+      if (!prev.has(sessionKey)) {
+        return prev;
+      }
+      const next = new Map(prev);
+      next.delete(sessionKey);
+      return next;
+    });
+
+    if (!options?.restoreInput || !restoreText) {
+      return;
+    }
+    setInputDraftForSession(sessionKey, restoreText);
+    if (currentNotebookSessionKeyRef.current === sessionKey) {
+      inputRef.current = restoreText;
+      setInput(restoreText);
+      window.requestAnimationFrame(() => autosizeComposerTextarea());
+    }
+  }
+
+  function queueCurrentInput(): void {
+    const sessionKey = currentNotebookSessionKeyRef.current || '';
+    const notebookPath = currentNotebookPathRef.current || '';
+    if (!sessionKey || !notebookPath) {
+      return;
+    }
+
+    const trimmed = inputRef.current.trim();
+    if (!trimmed) {
+      return;
+    }
+
+    if (pendingImagesRef.current.length > 0) {
+      clearPendingImages();
+      appendMessage(
+        sessionKey,
+        'system',
+        'Queued follow-up accepts text only while a run is active. Pending images were removed.'
+      );
+    }
+
+    updateQueuedTurns(prev => {
+      const next = new Map(prev);
+      next.set(sessionKey, {
+        id: crypto.randomUUID(),
+        text: trimmed,
+        notebookPath,
+        queuedAt: Date.now()
+      });
+      return next;
+    });
+    clearInputForCurrentSession();
+  }
+
+  function removeQueuedTurnForCurrentSession(): void {
+    const sessionKey = currentNotebookSessionKeyRef.current || '';
+    if (!sessionKey) {
+      return;
+    }
+    clearQueuedTurn(sessionKey, { restoreInput: true });
   }
 
   useEffect(() => {
@@ -3246,6 +3371,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     activeSessionKeyByPathRef.current = new Map();
     safeLocalStorageRemove(SESSION_THREADS_STORAGE_KEY);
     clearStoredSelectionPreviews();
+    clearAllQueuedTurns();
     replaceSessions(new Map());
     clearInputForCurrentSession();
     clearPendingImages();
@@ -3398,18 +3524,19 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 
       const resetSession = createThreadResetSession(notebookPath, sessionKey, threadId);
       const currentPath = currentNotebookPathRef.current;
+      const existingSession = sessionsRef.current.get(sessionKey);
+      if (existingSession && existingSession.threadId === threadId) {
+        return;
+      }
 
       updateSessions(prev => {
         const next = new Map(prev);
-        const existing = next.get(sessionKey);
-        if (existing && existing.threadId === threadId) {
-          return prev;
-        }
         next.set(sessionKey, resetSession);
         return next;
       });
       activeSessionKeyByPathRef.current.set(notebookPath, sessionKey);
       clearRunMappingForSessionKey(sessionKey);
+      clearQueuedTurn(sessionKey);
 
       if (currentPath === notebookPath && currentNotebookSessionKeyRef.current !== sessionKey) {
         setCurrentNotebookSessionKey(sessionKey);
@@ -3451,44 +3578,61 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   }
 
   function onSocketMessage(rawMessage: unknown): void {
-    handleCodexSocketMessage(rawMessage, {
-      appendMessage,
-      clearDeleteAllPending,
-      coerceModelCatalog: parseModelCatalog,
-      coerceReasoningEffort,
-      coerceRateLimitsSnapshot,
-      coerceSessionHistory,
-      coerceNotebookMode,
-      createSession,
-      deleteAllSessionsOnServer,
-      getCommandPath: () => commandPath,
-      getCurrentSessionKey: () => currentNotebookSessionKeyRef.current,
-      getStoredSelectionPreviews: () => storedSelectionPreviewsRef.current,
-      hashSelectionPreviewContent,
-      hasDeleteAllPending,
-      isNoiseCodexEvent,
-      isSessionStartNotice,
-      markDeleteAllPending,
-      normalizeSystemText,
-      notifyRunDone,
-      refreshNotebook,
-      resolveMessageSessionKey,
-      runToSessionKeyRef,
-      setCliDefaults,
-      setCommandPath,
-      setRateLimits,
-      setSessionConversationMode,
-      setSessionPairing,
-      setSessionProgress,
-      setSessionRunState,
-      summarizeCodexEvent,
-      appendActivityItem,
-      syncEffectiveSandboxFromStatus,
-      updateSessions: updater =>
-        updateSessions(
-          previous => updater(previous as Map<string, Record<string, unknown>>) as Map<string, NotebookSession>
-        )
-    });
+    try {
+      handleCodexSocketMessage(rawMessage, {
+        appendMessage,
+        clearDeleteAllPending,
+        coerceModelCatalog: parseModelCatalog,
+        coerceReasoningEffort,
+        coerceRateLimitsSnapshot,
+        coerceSessionHistory,
+        coerceNotebookMode,
+        createSession,
+        deleteAllSessionsOnServer,
+        getCommandPath: () => commandPath,
+        getCurrentSessionKey: () => currentNotebookSessionKeyRef.current,
+        getStoredSelectionPreviews: () => storedSelectionPreviewsRef.current,
+        hashSelectionPreviewContent,
+        hasDeleteAllPending,
+        isNoiseCodexEvent,
+        isSessionStartNotice,
+        markDeleteAllPending,
+        normalizeSystemText,
+        notifyRunDone,
+        refreshNotebook,
+        resolveMessageSessionKey,
+        runToSessionKeyRef,
+        setCliDefaults,
+        setCommandPath,
+        setRateLimits,
+        setSessionConversationMode,
+        setSessionPairing,
+        setSessionProgress,
+        setSessionRunState,
+        getSessionThreadId: (sessionKey: string) => {
+          const normalizedSessionKey = (sessionKey || '').trim();
+          if (!normalizedSessionKey) {
+            return '';
+          }
+          const session = sessionsRef.current.get(normalizedSessionKey);
+          return (session?.threadId || '').trim();
+        },
+        onSessionDoneForQueue,
+        summarizeCodexEvent,
+        appendActivityItem,
+        syncEffectiveSandboxFromStatus,
+        updateSessions: updater =>
+          updateSessions(
+            previous => updater(previous as Map<string, Record<string, unknown>>) as Map<string, NotebookSession>
+          )
+      });
+    } catch (err) {
+      const sessionKey = currentNotebookSessionKeyRef.current || '';
+      if (sessionKey) {
+        appendMessage(sessionKey, 'system', `Internal UI error while processing a server message: ${String(err)}`);
+      }
+      console.error('[Codex] onSocketMessage failed', err, rawMessage);
+    }
   }
 
   useEffect(() => {
@@ -3594,6 +3738,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       return next;
     });
     clearRunMappingForSessionKey(sessionKey);
+    clearQueuedTurn(sessionKey);
     clearInputForCurrentSession();
     clearPendingImages();
     sendStartSession(newSession, path, sessionKey, { forceNewThread: true });
@@ -3718,21 +3863,26 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     });
   }
 
-  async function sendMessage(): Promise<void> {
+  async function sendMessage(options?: {
+    forcedText?: string;
+    forcedNotebookPath?: string;
+    forcedSessionKey?: string;
+    skipRunStateCheck?: boolean;
+  }): Promise<boolean> {
     const socket = wsRef.current;
-    const notebookPath = currentNotebookPathRef.current || '';
-    const sessionKey = currentNotebookSessionKeyRef.current || '';
+    const notebookPath = (options?.forcedNotebookPath ?? currentNotebookPathRef.current) || '';
+    const sessionKey = (options?.forcedSessionKey ?? currentNotebookSessionKeyRef.current) || '';
 
     if (!notebookPath) {
-      return;
+      return false;
     }
     if (!sessionKey) {
-      return;
+      return false;
     }
 
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       appendMessage(sessionKey, 'system', 'WebSocket is not connected.');
-      return;
+      return false;
     }
 
     const existing = sessionKey ? sessionsRef.current.get(sessionKey) : null;
@@ -3743,18 +3893,19 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         existing.pairedMessage ||
           `Jupytext paired file not found. Expected: ${existing.pairedOsPath || existing.pairedPath || '<notebook>.py'}`
       );
-      return;
+      return false;
     }
 
-    const trimmed = input.trim();
-    const hasImages = pendingImagesRef.current.length > 0;
+    const forcedText = typeof options?.forcedText === 'string' ? options.forcedText : null;
+    const trimmed = (forcedText ?? inputRef.current).trim();
+    const hasImages = forcedText == null && pendingImagesRef.current.length > 0;
     if (!trimmed && !hasImages) {
-      return;
+      return false;
     }
 
     const current = sessionKey ? sessionsRef.current.get(sessionKey) : null;
-    if (current?.runState === 'running') {
-      return;
+    if (current?.runState === 'running' && options?.skipRunStateCheck !== true) {
+      return false;
     }
 
     const activeWidget = findDocumentWidgetByPath(props.app, notebookPath, activeDocumentWidgetRef.current);
@@ -3774,7 +3925,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         await activeContext.save();
       } catch (err) {
         appendMessage(sessionKey, 'system', `Auto-save failed: ${String(err)}`);
-        return;
+        return false;
       }
     }
 
@@ -3831,7 +3982,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         'system',
         'Model is not resolved yet. Wait for model defaults to load, or pick a model explicitly.'
       );
-      return;
+      return false;
     }
     if (!selectedReasoningForSend) {
       appendMessage(
@@ -3839,7 +3990,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         'system',
         'Reasoning level is not resolved yet. Wait for defaults to load, or pick a reasoning level explicitly.'
       );
-      return;
+      return false;
     }
 
     const content = trimmed || (hasImages ? 'Please analyze the attached image(s).' : '');
@@ -3853,7 +4004,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         }
       } catch (err) {
         appendMessage(sessionKey, 'system', `Failed to attach image(s): ${String(err)}`);
-        return;
+        return false;
       }
     }
 
@@ -3913,13 +4064,64 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         activeRunId: null,
         runStartedAt: Date.now(),
         progress: '',
-        progressKind: '',
+        progressKind: ''
       });
       return next;
     });
-    clearInputForCurrentSession();
-    clearPendingImages();
+    if (forcedText == null) {
+      clearInputForCurrentSession();
+      clearPendingImages();
+    }
     setExcludeCellAttachmentForNextSend(false);
+    return true;
+  }
+
+  function onSessionDoneForQueue(sessionKey: string): void {
+    if (!sessionKey) {
+      return;
+    }
+    if (queueSendLocksRef.current.has(sessionKey)) {
+      return;
+    }
+
+    const queuedTurn = queuedTurnsRef.current.get(sessionKey);
+    if (!queuedTurn) {
+      return;
+    }
+
+    const socket = wsRef.current;
+    if (!socketConnected || isReconnecting || !socket || socket.readyState !== WebSocket.OPEN) {
+      clearQueuedTurn(sessionKey, { restoreInput: true });
+      return;
+    }
+
+    queueSendLocksRef.current.add(sessionKey);
+    window.setTimeout(() => {
+      void (async () => {
+        try {
+          const pending = queuedTurnsRef.current.get(sessionKey);
+          if (!pending) {
+            return;
+          }
+          const sent = await sendMessage({
+            forcedText: pending.text,
+            forcedNotebookPath: pending.notebookPath,
+            forcedSessionKey: sessionKey,
+            skipRunStateCheck: true
+          });
+          if (!sent) {
+            clearQueuedTurn(sessionKey, { restoreInput: true, fallbackText: pending.text });
+            return;
+          }
+          clearQueuedTurn(sessionKey);
+        } catch (err) {
+          clearQueuedTurn(sessionKey, { restoreInput: true });
+          console.error('[Codex] queue auto-send failed', err);
+        } finally {
+          queueSendLocksRef.current.delete(sessionKey);
+        }
+      })();
+    }, 0);
   }
 
   const currentSession = currentNotebookSessionKey ? sessions.get(currentNotebookSessionKey) : null;
@@ -3976,10 +4178,22 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     composerNotebookMode !== 'plain_py' &&
     currentNotebookPath.length > 0 &&
     currentSession?.pairedOk !== false;
+  const trimmedInput = input.trim();
+  const queuedTurnForCurrentSession = currentNotebookSessionKey
+    ? queuedTurns.get(currentNotebookSessionKey) || null
+    : null;
+  const hasQueuedTurnForCurrentSession = Boolean(queuedTurnForCurrentSession);
   const canSend =
     status === 'ready' &&
     currentNotebookPath.length > 0 &&
     currentSession?.pairedOk !== false;
+  const canQueueFollowUp =
+    status === 'running' &&
+    currentNotebookPath.length > 0 &&
+    currentSession?.pairedOk !== false &&
+    Boolean(trimmedInput);
+  const sendButtonMode: 'send' | 'stop' | 'queue' =
+    status === 'running' ? (canQueueFollowUp ? 'queue' : 'stop') : 'send';
   const runningSummary = status === 'running' ? progress || 'Working...' : '';
   const activeModelOption = currentSession?.selectedModelOption ?? modelOption;
   const activeReasoningEffort = currentSession?.selectedReasoningEffort ?? reasoningEffort;
@@ -4010,10 +4224,17 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       ? 'Browser notifications are not available in this environment.'
       : notificationPermission === 'denied'
         ? 'Notifications are blocked for this site. Allow them in browser settings.'
-        : notificationPermission === 'default'
+      : notificationPermission === 'default'
           ? 'Permission will be requested when enabling this option.'
           : `Shows a browser notification for ${minimumNotifyDurationLabel}.`;
   const canStop = status === 'running' && Boolean(currentSession?.activeRunId);
+  const canSendNow = canSend && (Boolean(trimmedInput) || pendingImages.length > 0);
+  const sendButtonDisabled =
+    sendButtonMode === 'send'
+      ? !canSendNow
+      : sendButtonMode === 'stop'
+        ? !canStop
+        : false;
   const nowMs = Date.now();
   const rateUpdatedAtMs = safeParseDateMs(rateLimits?.updatedAt ?? null);
   const rateAgeMs = rateUpdatedAtMs == null ? null : nowMs - rateUpdatedAtMs;
@@ -4470,6 +4691,21 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                 </button>
               </div>
             </div>
+            {queuedTurnForCurrentSession && (
+              <div className="jp-CodexComposer-queued" role="status" aria-live="polite" title={queuedTurnForCurrentSession.text}>
+                <span className="jp-CodexComposer-queuedLabel">Queued</span>
+                <span className="jp-CodexComposer-queuedText">{queuedTurnForCurrentSession.text}</span>
+                <button
+                  type="button"
+                  className="jp-CodexComposer-queuedRemove"
+                  onClick={removeQueuedTurnForCurrentSession}
+                  aria-label="Remove queued follow-up"
+                  title="Remove queued follow-up"
+                >
+                  <XIcon width={10} height={10} />
+                </button>
+              </div>
+            )}
 	          <textarea
 	            ref={composerTextareaRef}
 	            value={input}
@@ -4493,10 +4729,18 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 	              if (native.isComposing || native.keyCode === 229) {
 	                return;
 	              }
-	              if (e.key === 'Enter' && !e.shiftKey && canSend && (input.trim() || pendingImages.length > 0)) {
-	                e.preventDefault();
-	                void sendMessage();
-	              }
+	              if (e.key !== 'Enter' || e.shiftKey) {
+                  return;
+                }
+                if (status === 'running' && trimmedInput) {
+                  e.preventDefault();
+                  queueCurrentInput();
+                  return;
+                }
+                if (canSend && (trimmedInput || pendingImages.length > 0)) {
+                  e.preventDefault();
+                  void sendMessage();
+                }
 	            }}
 	          />
 	          {pendingImages.length > 0 && (
@@ -4722,18 +4966,34 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 	            <div className="jp-CodexComposer-toolbarRight">
 	              <button
 	                type="button"
-	                className={`jp-CodexSendBtn${status === 'running' ? ' is-stop' : ''}`}
+	                className={`jp-CodexSendBtn${sendButtonMode === 'stop' ? ' is-stop' : ''}${sendButtonMode === 'queue' ? ' is-queue' : ''}`}
                 onClick={() => {
-                  if (status === 'running') {
+                  if (sendButtonMode === 'queue') {
+                    queueCurrentInput();
+                    return;
+                  }
+                  if (sendButtonMode === 'stop') {
                     cancelRun();
                     return;
                   }
                   void sendMessage();
                 }}
-                disabled={status === 'running' ? !canStop : !canSend || (!input.trim() && pendingImages.length === 0)}
-                aria-label={status === 'running' ? 'Stop run' : 'Send'}
+                disabled={sendButtonDisabled}
+                aria-label={
+                  sendButtonMode === 'queue'
+                    ? hasQueuedTurnForCurrentSession
+                      ? 'Update queued follow-up'
+                      : 'Queue follow-up'
+                    : sendButtonMode === 'stop'
+                      ? 'Stop run'
+                      : 'Send'
+                }
                 title={
-                  status === 'running'
+                  sendButtonMode === 'queue'
+                    ? hasQueuedTurnForCurrentSession
+                      ? 'Replace queued follow-up for this notebook'
+                      : 'Queue follow-up for automatic send after the current run'
+                    : sendButtonMode === 'stop'
                     ? currentSession?.activeRunId
                       ? `runId: ${currentSession.activeRunId}`
                       : 'Waiting for run id...'
@@ -4742,7 +5002,9 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                       : 'Send'
                 }
               >
-                {status === 'running' ? (
+                {sendButtonMode === 'queue' ? (
+                  <QueueIcon width={18} height={18} />
+                ) : sendButtonMode === 'stop' ? (
                   <StopIcon width={18} height={18} />
                 ) : (
                   <ArrowUpIcon width={18} height={18} />

@@ -1338,6 +1338,55 @@
   pointer-events: auto;
 }
 
+.jp-CodexComposer-queued {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin: 0 2px 4px;
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--cdx-accent) 30%, var(--cdx-border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--cdx-accent) 10%, var(--cdx-surface));
+  color: color-mix(in srgb, var(--cdx-accent) 82%, var(--cdx-text));
+  font-size: 11px;
+}
+
+.jp-CodexComposer-queuedLabel {
+  flex: 0 0 auto;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.jp-CodexComposer-queuedText {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.jp-CodexComposer-queuedRemove {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--cdx-accent) 35%, var(--cdx-border));
+  background: color-mix(in srgb, var(--cdx-surface) 84%, transparent);
+  color: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.jp-CodexComposer-queuedRemove:hover:not(:disabled) {
+  background: var(--cdx-surface);
+  border-color: color-mix(in srgb, var(--cdx-accent) 55%, var(--cdx-border));
+}
+
 .jp-CodexComposer-cellAttachment {
   display: inline-flex;
   align-items: center;
@@ -2139,6 +2188,21 @@
 
 .jp-CodexSendBtn.is-stop:active:not(:disabled) {
   background: color-mix(in srgb, #000000 88%, #222222);
+}
+
+.jp-CodexSendBtn.is-queue:not(:disabled) {
+  border-color: color-mix(in srgb, var(--cdx-accent) 70%, var(--cdx-border));
+  background: color-mix(in srgb, var(--cdx-accent) 92%, #0f172a);
+  color: #ffffff;
+}
+
+.jp-CodexSendBtn.is-queue:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--cdx-accent) 86%, var(--cdx-border));
+  background: color-mix(in srgb, var(--cdx-accent) 96%, #0f172a);
+}
+
+.jp-CodexSendBtn.is-queue:active:not(:disabled) {
+  background: color-mix(in srgb, var(--cdx-accent) 88%, #0f172a);
 }
 
 .jp-CodexBtn {

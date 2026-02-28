@@ -126,6 +126,7 @@ export interface CodexSocketMessageHandlerContext {
   deleteAllSessionsOnServer: () => boolean;
   getCommandPath: () => string;
   getCurrentSessionKey: () => string;
+  getSessionThreadId?: (sessionKey: string) => string;
   getStoredSelectionPreviews: () => Map<string, Array<{ contentHash: string; preview: unknown | null }>>;
   hashSelectionPreviewContent: (text: string) => string;
   hasDeleteAllPending: () => boolean;
@@ -144,6 +145,7 @@ export interface CodexSocketMessageHandlerContext {
   setSessionPairing: (sessionKey: string, pairing: PairingPayload) => void;
   setSessionProgress: (sessionKey: string, progress: string, kind: ProgressKind) => void;
   setSessionRunState: (sessionKey: string, runState: 'running' | 'ready', runId: string | null) => void;
+  onSessionDoneForQueue?: (sessionKey: string) => void;
   summarizeCodexEvent: (payload: unknown) => ActivitySummary;
   appendActivityItem: (sessionKey: string, item: Omit<ActivityItem, 'id' | 'ts'>) => void;
   syncEffectiveSandboxFromStatus: (sessionKey: string, rawMode: unknown) => void;
@@ -437,6 +439,21 @@ export function handleCodexSocketMessage(
     }
     if (runId) {
       context.runToSessionKeyRef.current.delete(runId);
+    }
+    const doneSessionId = typeof msg.sessionId === 'string' ? msg.sessionId.trim() : '';
+    const targetThreadId =
+      targetSessionKey && typeof context.getSessionThreadId === 'function'
+        ? context.getSessionThreadId(targetSessionKey).trim()
+        : '';
+    const queueDoneHandler = context.onSessionDoneForQueue;
+    const canTriggerQueueAutoSend =
+      targetSessionKey &&
+      doneSessionId &&
+      targetThreadId &&
+      doneSessionId === targetThreadId &&
+      typeof queueDoneHandler === 'function';
+    if (canTriggerQueueAutoSend) {
+      queueDoneHandler(targetSessionKey);
     }
   }
 }
