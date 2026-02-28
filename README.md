@@ -185,6 +185,37 @@ Selected UI values are passed as CLI args.
   - UI: `src/panel.tsx`
   - Server: `jupyterlab_codex/handlers.py`, `jupyterlab_codex/runner.py`
 
+## Playwright E2E (3-tab freeze reproduction)
+- Purpose: reproduce the "send while previous run is still running across 3 notebook tabs" scenario.
+- This suite uses a local mock Codex CLI (`tests/e2e/mock-codex-cli.py`) so it does not require real Codex auth.
+
+Setup once:
+
+```bash
+jlpm install
+jlpm test:e2e:install
+```
+
+Run with auto-launched JupyterLab:
+
+```bash
+jlpm test:e2e:repro-local
+```
+
+Or run against an already running JupyterLab:
+
+```bash
+PLAYWRIGHT_BASE_URL="http://127.0.0.1:8888/lab" \
+PLAYWRIGHT_CODEX_COMMAND="$(pwd)/tests/e2e/mock-codex-cli.py" \
+jlpm test:e2e:queue-repro
+```
+
+Files:
+- Playwright config: `playwright.config.cjs`
+- Test spec: `tests/e2e/queue-multitab-repro.spec.js`
+- Mock CLI: `tests/e2e/mock-codex-cli.py`
+- Notebook fixtures: `tests/e2e/fixtures/notebooks/`
+
 ## Architecture
 ```
 [UI (JupyterLab Sidebar)]

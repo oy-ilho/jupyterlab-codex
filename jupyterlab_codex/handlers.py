@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
-from tornado.websocket import WebSocketHandler
+from tornado.websocket import WebSocketClosedError, WebSocketHandler
 
 from .cli_defaults import load_cli_defaults_for_ui
 from .runner import CodexRunner
@@ -161,11 +161,35 @@ class CodexWSHandler(WebSocketHandler):
         self._store = SessionStore()
         self._active_runs: Dict[str, Dict[str, Any]] = {}
 
+    def _safe_write_message(self, message: str) -> bool:
+        try:
+            self.write_message(message)
+        except WebSocketClosedError:
+            return False
+        except Exception:
+            return False
+        return True
+
+    def _consume_task_exception(self, task: asyncio.Task[Any]) -> None:
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            return
+        except BaseException:
+            return
+
     def check_origin(self, origin: str) -> bool:
         return super().check_origin(origin)
 
+    def on_close(self) -> None:
+        for run_id, run_context in list(self._active_runs.items()):
+            task = run_context.get("task")
+            if isinstance(task, asyncio.Task) and not task.done():
+                task.cancel()
+            self._active_runs.pop(run_id, None)
+
     def open(self):
-        self.write_message(json.dumps(build_status_payload(state="ready")))
+        self._safe_write_message(json.dumps(build_status_payload(state="ready")))
         self._send_cli_defaults()
         self._send_model_catalog()
         self._send_rate_limits_snapshot()
@@ -174,13 +198,13 @@ class CodexWSHandler(WebSocketHandler):
         try:
             payload = json.loads(message)
         except json.JSONDecodeError:
-            self.write_message(json.dumps(build_error_payload(message="Invalid JSON")))
+            self._safe_write_message(json.dumps(build_error_payload(message="Invalid JSON")))
             return
 
         try:
             msg_type, normalized_payload = parse_client_message(payload)
         except ProtocolParseError as exc:
-            self.write_message(json.dumps(build_error_payload(message=str(exc))))
+            self._safe_write_message(json.dumps(build_error_payload(message=str(exc))))
             return
 
         if msg_type == "start_session":
@@ -211,7 +235,7 @@ class CodexWSHandler(WebSocketHandler):
             self._send_rate_limits_snapshot(force=True)
             return
 
-        self.write_message(json.dumps(build_error_payload(message="Unknown message type")))
+        self._safe_write_message(json.dumps(build_error_payload(message="Unknown message type")))
 
     def _send_cli_defaults(self) -> None:
         try:
@@ -220,7 +244,7 @@ class CodexWSHandler(WebSocketHandler):
             defaults = {"model": None, "reasoningEffort": None}
 
         try:
-            self.write_message(json.dumps(build_cli_defaults_payload(**defaults)))
+            self._safe_write_message(json.dumps(build_cli_defaults_payload(**defaults)))
         except Exception:
             return
 
@@ -234,12 +258,13 @@ class CodexWSHandler(WebSocketHandler):
             if not models:
                 return
             try:
-                self.write_message(json.dumps(build_cli_defaults_payload(available_models=models)))
+                self._safe_write_message(json.dumps(build_cli_defaults_payload(available_models=models)))
             except Exception:
                 return
 
         try:
-            asyncio.create_task(_send())
+            task = asyncio.create_task(_send())
+            task.add_done_callback(self._consume_task_exception)
         except Exception:
             return
 
@@ -348,7 +373,7 @@ class CodexWSHandler(WebSocketHandler):
             notebook_mode=notebook_mode,
             effective_sandbox=effective_sandbox,
         )
-        self.write_message(json.dumps(status_payload))
+        self._safe_write_message(json.dumps(status_payload))
 
     async def _handle_send(self, payload: Dict[str, Any]):
         session_id = payload.get("sessionId") or ""
@@ -379,7 +404,7 @@ class CodexWSHandler(WebSocketHandler):
 
         has_images = bool(images_payload)
         if not content and not has_images:
-            self.write_message(
+            self._safe_write_message(
                 json.dumps(
                     build_error_payload(
                         message="Empty content",
@@ -392,7 +417,7 @@ class CodexWSHandler(WebSocketHandler):
             )
             return
         if requested_model_raw and not requested_model:
-            self.write_message(
+            self._safe_write_message(
                 json.dumps(
                     build_error_payload(
                         message="Invalid model name",
@@ -405,7 +430,7 @@ class CodexWSHandler(WebSocketHandler):
             )
             return
         if requested_reasoning_raw and not requested_reasoning:
-            self.write_message(
+            self._safe_write_message(
                 json.dumps(
                     build_error_payload(
                         message="Invalid reasoning level",
@@ -418,7 +443,7 @@ class CodexWSHandler(WebSocketHandler):
             )
             return
         if requested_sandbox_raw and not requested_sandbox:
-            self.write_message(
+            self._safe_write_message(
                 json.dumps(
                     build_error_payload(
                         message="Invalid sandbox mode",
@@ -434,7 +459,7 @@ class CodexWSHandler(WebSocketHandler):
         images: list[dict[str, str]] = []
         if images_payload:
             if not isinstance(images_payload, list):
-                self.write_message(
+                self._safe_write_message(
                     json.dumps(
                         build_error_payload(
                             message="Invalid images payload",
@@ -447,7 +472,7 @@ class CodexWSHandler(WebSocketHandler):
                 )
                 return
             if len(images_payload) > _MAX_IMAGE_ATTACHMENTS:
-                self.write_message(
+                self._safe_write_message(
                     json.dumps(
                         build_error_payload(
                             message="Too many images attached",
@@ -461,7 +486,7 @@ class CodexWSHandler(WebSocketHandler):
                 return
             for item in images_payload:
                 if not isinstance(item, dict):
-                    self.write_message(
+                    self._safe_write_message(
                         json.dumps(
                             build_error_payload(
                                 message="Invalid images payload",
@@ -475,7 +500,7 @@ class CodexWSHandler(WebSocketHandler):
                     return
                 data_url = item.get("dataUrl")
                 if not isinstance(data_url, str) or not data_url.strip():
-                    self.write_message(
+                    self._safe_write_message(
                         json.dumps(
                             build_error_payload(
                                 message="Invalid images payload",
@@ -513,7 +538,7 @@ class CodexWSHandler(WebSocketHandler):
 
         if not paired_ok:
             # Enforce paired workflow on the server as well (front-end can be bypassed).
-            self.write_message(
+            self._safe_write_message(
                 json.dumps(
                     build_error_payload(
                         run_id=run_id,
@@ -533,7 +558,7 @@ class CodexWSHandler(WebSocketHandler):
                     )
                 )
             )
-            self.write_message(json.dumps(_build_status_payload("ready")))
+            self._safe_write_message(json.dumps(_build_status_payload("ready")))
             return
 
         self._store.ensure_session(session_id, notebook_path, notebook_os_path)
@@ -570,7 +595,7 @@ class CodexWSHandler(WebSocketHandler):
 
         async def _run():
             nonlocal run_mode
-            self.write_message(
+            self._safe_write_message(
                 json.dumps(_build_status_payload("running"))
             )
 
@@ -614,7 +639,7 @@ class CodexWSHandler(WebSocketHandler):
                         run_context = self._active_runs.get(run_id)
                         if isinstance(run_context, dict):
                             run_context["sessionId"] = session_id
-                        self.write_message(
+                        self._safe_write_message(
                             json.dumps(_build_status_payload("running"))
                         )
                     return
@@ -624,7 +649,7 @@ class CodexWSHandler(WebSocketHandler):
                     if isinstance(raw_stderr, str) and _is_missing_auth_stderr(raw_stderr):
                         if not auth_hint_sent:
                             auth_hint_sent = True
-                            self.write_message(
+                            self._safe_write_message(
                                 json.dumps(
                                     build_output_payload(
                                         run_id=run_id,
@@ -641,7 +666,7 @@ class CodexWSHandler(WebSocketHandler):
                 text = event_to_text(event)
                 if text:
                     assistant_buffer.append(text)
-                    self.write_message(
+                    self._safe_write_message(
                         json.dumps(
                             build_output_payload(
                                 run_id=run_id,
@@ -657,7 +682,7 @@ class CodexWSHandler(WebSocketHandler):
                     # again via the generic "event" UI path.
                     return
                 else:
-                    self.write_message(
+                    self._safe_write_message(
                         json.dumps(
                             build_event_payload(
                                 run_id=run_id,
@@ -703,7 +728,7 @@ class CodexWSHandler(WebSocketHandler):
                     run_mode = "fallback"
                     current_resume_session_id = ""
                     assistant_buffer = []
-                    self.write_message(
+                    self._safe_write_message(
                         json.dumps(
                             build_output_payload(
                                 run_id=run_id,
@@ -715,7 +740,7 @@ class CodexWSHandler(WebSocketHandler):
                             )
                         )
                     )
-                    self.write_message(json.dumps(_build_status_payload("running")))
+                    self._safe_write_message(json.dumps(_build_status_payload("running")))
                     fallback_prompt = self._store.build_prompt(
                         session_id,
                         content,
@@ -746,7 +771,7 @@ class CodexWSHandler(WebSocketHandler):
                 ):
                     run_mode = "fallback"
                     current_resume_session_id = ""
-                    self.write_message(
+                    self._safe_write_message(
                         json.dumps(
                             build_output_payload(
                                 run_id=run_id,
@@ -758,7 +783,7 @@ class CodexWSHandler(WebSocketHandler):
                             )
                         )
                     )
-                    self.write_message(json.dumps(_build_status_payload("running")))
+                    self._safe_write_message(json.dumps(_build_status_payload("running")))
                     fallback_prompt = self._store.build_prompt(
                         session_id,
                         content,
@@ -784,7 +809,7 @@ class CodexWSHandler(WebSocketHandler):
                 if assistant_buffer:
                     self._store.append_message(session_id, "assistant", "".join(assistant_buffer))
                 file_changed = _has_path_changes(before_file_signatures, _capture_file_signatures(watch_paths))
-                self.write_message(
+                self._safe_write_message(
                     json.dumps(
                         build_done_payload(
                             run_id=run_id,
@@ -802,13 +827,13 @@ class CodexWSHandler(WebSocketHandler):
                         )
                     )
                 )
-                self.write_message(
+                self._safe_write_message(
                     json.dumps(_build_status_payload("ready"))
                 )
             except asyncio.CancelledError:
                 _append_user_message_once()
                 file_changed = _has_path_changes(before_file_signatures, _capture_file_signatures(watch_paths))
-                self.write_message(
+                self._safe_write_message(
                     json.dumps(
                         build_done_payload(
                             run_id=run_id,
@@ -827,14 +852,14 @@ class CodexWSHandler(WebSocketHandler):
                         )
                     )
                 )
-                self.write_message(
+                self._safe_write_message(
                     json.dumps(_build_status_payload("ready"))
                 )
-                raise
+                return
             except FileNotFoundError:
                 _append_user_message_once()
                 hint = _build_command_not_found_hint(requested_command_path)
-                self.write_message(
+                self._safe_write_message(
                     json.dumps(
                         build_error_payload(
                             run_id=run_id,
@@ -852,12 +877,12 @@ class CodexWSHandler(WebSocketHandler):
                         )
                     )
                 )
-                self.write_message(
+                self._safe_write_message(
                     json.dumps(_build_status_payload("ready"))
                 )
             except Exception as exc:  # pragma: no cover - defensive path
                 _append_user_message_once()
-                self.write_message(
+                self._safe_write_message(
                     json.dumps(
                         build_error_payload(
                             run_id=run_id,
@@ -874,7 +899,7 @@ class CodexWSHandler(WebSocketHandler):
                         )
                     )
                 )
-                self.write_message(
+                self._safe_write_message(
                     json.dumps(_build_status_payload("ready"))
                 )
             finally:
@@ -886,6 +911,7 @@ class CodexWSHandler(WebSocketHandler):
                 self._active_runs.pop(run_id, None)
 
         task = asyncio.create_task(_run())
+        task.add_done_callback(self._consume_task_exception)
         self._active_runs[run_id] = {
             "task": task,
             "sessionId": session_id,
@@ -918,7 +944,7 @@ class CodexWSHandler(WebSocketHandler):
             message = str(exc)
 
         try:
-            self.write_message(
+            self._safe_write_message(
                 json.dumps(
                     build_delete_all_payload(
                         ok=ok,
@@ -938,7 +964,7 @@ class CodexWSHandler(WebSocketHandler):
             snapshot = None
 
         try:
-            self.write_message(json.dumps(build_rate_limits_payload(snapshot)))
+            self._safe_write_message(json.dumps(build_rate_limits_payload(snapshot)))
         except Exception:
             # Socket may already be closed; ignore.
             return
@@ -948,7 +974,7 @@ class CodexWSHandler(WebSocketHandler):
         run_context = self._active_runs.get(run_id)
 
         if not run_context:
-            self.write_message(
+            self._safe_write_message(
                 json.dumps(
                     build_error_payload(
                         run_id=run_id,
@@ -970,13 +996,13 @@ class CodexWSHandler(WebSocketHandler):
             notebook_path=run_context["notebookPath"],
             effective_sandbox=load_effective_sandbox_for_thread(session_id),
         )
-        self.write_message(json.dumps(status_payload))
+        self._safe_write_message(json.dumps(status_payload))
 
     async def _handle_end_session(self, payload: Dict[str, Any]):
         session_id = payload.get("sessionId")
         if session_id:
             self._store.close_session(session_id)
-        self.write_message(json.dumps(build_status_payload(state="ready")))
+        self._safe_write_message(json.dumps(build_status_payload(state="ready")))
 
     def _resolve_notebook_os_path(self, notebook_path: str) -> str:
         if not notebook_path:

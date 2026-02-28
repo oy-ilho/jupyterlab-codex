@@ -65,3 +65,12 @@ id_ed25519.*
 # ---- Local app/session state (often contains local paths and logs) ----
 .jupyter/
 .codex/
+
+# ---- Playwright artifacts ----
+playwright-report/
+test-results/
+blob-report/
+.jupyterlab-playwright.log
+
+# ---- Yarn cache artifacts (node-modules linker) ----
+.yarn/cache/

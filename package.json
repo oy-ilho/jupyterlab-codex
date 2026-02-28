@@ -26,7 +26,12 @@
     "watch": "jlpm run watch:lib & jlpm run watch:labextension",
     "watch:lib": "tsc -w -p tsconfig.json",
     "watch:labextension": "jupyter labextension watch . --development --source-map",
-    "clean": "rimraf lib tsconfig.tsbuildinfo"
+    "clean": "rimraf lib tsconfig.tsbuildinfo",
+    "test:e2e": "playwright test",
+    "test:e2e:queue-repro": "playwright test tests/e2e/queue-multitab-repro.spec.js",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:install": "playwright install chromium",
+    "test:e2e:repro-local": "bash scripts/run_playwright_repro.sh"
   },
   "dependencies": {
     "@jupyterlab/application": "^4.0.0",
@@ -45,6 +50,7 @@
   },
   "devDependencies": {
     "@jupyterlab/builder": "^4.0.0",
+    "@playwright/test": "^1.56.1",
     "@types/react": "^18.2.0",
     "@types/react-dom": "^18.2.0",
     "rimraf": "^5.0.0",
