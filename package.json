@@ -28,10 +28,10 @@
     "watch:labextension": "jupyter labextension watch . --development --source-map",
     "clean": "rimraf lib tsconfig.tsbuildinfo",
     "test:unit": "playwright test --config playwright.unit.config.cjs",
-    "test:e2e": "playwright test",
+    "test:e2e": "bash scripts/run_playwright_e2e.sh",
     "test:e2e:queue-repro": "bash scripts/run_playwright_queue_repro.sh",
     "test:e2e:queue-repro:local": "bash scripts/run_playwright_repro.sh",
-    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:headed": "bash scripts/run_playwright_e2e.sh --headed",
     "test:e2e:install": "playwright install chromium",
     "test:e2e:repro-local": "bash scripts/run_playwright_repro.sh"
   },

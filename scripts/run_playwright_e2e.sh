@@ -37,13 +37,11 @@ if [[ -z "$BASE_URL" ]]; then
   else
     echo "[playwright] Tried: ${FALLBACK_PORTS_RAW}"
   fi
-  echo "[playwright] Start JupyterLab first and retry, or run:"
-  echo "[playwright]   npm run test:e2e:repro-local"
+  echo "[playwright] Start JupyterLab first and retry."
+  echo "[playwright] Or run auto-start mode:"
+  echo "[playwright]   jlpm test:e2e:repro-local"
   exit 1
 fi
 
-echo "[playwright] running queue reproduction e2e against $BASE_URL"
 PLAYWRIGHT_BASE_URL="$BASE_URL" \
-PLAYWRIGHT_CODEX_COMMAND="${PLAYWRIGHT_CODEX_COMMAND:-$ROOT_DIR/tests/e2e/mock-codex-cli.py}" \
-MOCK_CODEX_DELAY_MS="${MOCK_CODEX_DELAY_MS:-2600}" \
-playwright test tests/e2e/queue-multitab-repro.spec.js "$@"
+playwright test "$@"
