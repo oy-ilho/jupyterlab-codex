@@ -132,9 +132,6 @@ function createFixture(sessionKey = 'doc:test') {
       return text.trim();
     },
     hasDeleteAllPending: () => state.deleteAllPending,
-    isNoiseCodexEvent(payload: unknown): boolean {
-      return (payload as { type?: string })?.type === 'noise';
-    },
     isSessionStartNotice(text: string): boolean {
       return text.startsWith('Session started');
     },
@@ -189,17 +186,6 @@ function createFixture(sessionKey = 'doc:test') {
         session.activeRunId = activeRunId;
       }
       state.sessionPairs.set(sessionKeyArg, { runState, activeRunId });
-    },
-    summarizeCodexEvent(payload: unknown) {
-      const detail =
-        typeof payload === 'object' && payload !== null && 'detail' in (payload as Record<string, unknown>)
-          ? String((payload as Record<string, unknown>).detail)
-          : String(payload ?? '');
-      return {
-        activity: { category: 'event', phase: '', title: 'Event', detail, raw: JSON.stringify(payload ?? {}) },
-        progress: `Event: ${detail || 'ok'}`,
-        progressKind: '' as ''
-      };
     },
     appendActivityItem(sessionKeyArg: string, item: { category: string; phase: string; title: string; detail: string; raw: string }) {
       state.messages.push({
@@ -373,7 +359,7 @@ test('event noise is ignored and non-noise updates progress', () => {
       sessionContextKey: 'doc:test',
       sessionId: 'thread',
       notebookPath: '/notebook.ipynb',
-      payload: { type: 'noise' }
+      payload: { type: 'thread.started' }
     },
     context
   );
@@ -392,6 +378,6 @@ test('event noise is ignored and non-noise updates progress', () => {
     context
   );
 
-  expect(state.progress.get('doc:test')?.progress).toContain('Event');
   expect(state.messages.some(item => item.text.startsWith('activity:event'))).toBeTruthy();
+  expect(state.progress.get('doc:test')?.progress).toContain('Agent Update');
 });
