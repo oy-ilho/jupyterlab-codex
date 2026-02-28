@@ -341,6 +341,26 @@ test('rate limit payload is normalized', () => {
   expect(state.rateLimits).toEqual([coerceRateLimitsSnapshot(payload)]);
 });
 
+test('rate limits payload accepts numeric strings from codex server', () => {
+  const { state, context } = createFixture();
+  const payload = {
+    updatedAt: '2026-03-01T00:00:00Z',
+    primary: { usedPercent: '10.4', windowMinutes: '20.8', resetsAt: '11.8' },
+    secondary: { usedPercent: '12.3', windowMinutes: '30', resetsAt: '13' },
+    contextWindow: { windowTokens: '100.5', usedTokens: '80.2', leftTokens: '19.8', usedPercent: '75.4' }
+  };
+
+  handleCodexSocketMessage(
+    {
+      type: 'rate_limits',
+      snapshot: payload
+    },
+    context
+  );
+
+  expect(state.rateLimits).toEqual([coerceRateLimitsSnapshot(payload)]);
+});
+
 test('event noise is ignored and non-noise updates progress', () => {
   const { state, context } = createFixture();
   context.createSession('', 'Session started', { sessionKey: 'doc:test' });

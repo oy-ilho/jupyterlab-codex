@@ -63,6 +63,20 @@ test('coerceRateLimitsSnapshot normalizes nested windows and context window', ()
   });
 });
 
+test('coerceRateLimitsSnapshot treats blank numeric strings as null', () => {
+  const snapshot = coerceRateLimitsSnapshot({
+    updatedAt: '2024-01-01T00:00:00Z',
+    primary: { usedPercent: '', windowMinutes: '   ', resetsAt: 'NaN' },
+    contextWindow: { windowTokens: '', usedTokens: '   ', leftTokens: 'none', usedPercent: '50' }
+  });
+  expect(snapshot).toEqual({
+    updatedAt: '2024-01-01T00:00:00Z',
+    primary: { usedPercent: null, windowMinutes: null, resetsAt: null },
+    secondary: null,
+    contextWindow: { windowTokens: null, usedTokens: null, leftTokens: null, usedPercent: 50 }
+  });
+});
+
 test('splitStoredMessagePreview handles nested and legacy payloads', () => {
   expect(splitStoredMessagePreview({ selectionPreview: { a: 1 }, cellOutputPreview: { b: 2 } })).toEqual({
     selectionPreview: { a: 1 },

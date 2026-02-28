@@ -3,7 +3,6 @@ import { createPortal } from 'react-dom';
 import { ReactWidget, Dialog, showDialog } from '@jupyterlab/apputils';
 import type { JupyterFrontEnd } from '@jupyterlab/application';
 import { INotebookTracker } from '@jupyterlab/notebook';
-import type { DocumentRegistry } from '@jupyterlab/docregistry';
 import { Message } from '@lumino/messaging';
 import { marked } from 'marked';
 import markedKatex from 'marked-katex-extension';
@@ -24,8 +23,33 @@ import {
   coerceRateLimitsSnapshot as coerceRateLimitsSnapshotShared,
   coerceSessionHistory as coerceSessionHistoryShared,
   coerceSelectionPreview as coerceSelectionPreviewShared,
+  type CodexRateLimitsSnapshot,
+  type MessageContextPreview,
+  type SelectionPreview,
   truncateEnd as truncateEndShared
 } from './handlers/codexMessageUtils';
+import {
+  type DocumentWidgetLike,
+  type NotebookMode,
+  MESSAGE_SELECTION_PREVIEW_DISPLAY_MAX_CHARS,
+  MESSAGE_SELECTION_PREVIEW_STORED_MAX_CHARS,
+  captureDocumentViewState,
+  formatSelectionPreviewTextForDisplay,
+  findDocumentWidgetByPath,
+  getActiveCellOutput,
+  getActiveCellText,
+  getActiveDocumentWidget,
+  getDocumentContext,
+  getSelectedContext,
+  getSelectedTextFromActiveCell,
+  getSelectedTextFromFileEditor,
+  getSupportedDocumentPath,
+  normalizeSelectionPreviewText,
+  restoreDocumentViewState,
+  toCellOutputPreview,
+  toFallbackSelectionPreview,
+  toSelectionPreview,
+} from './codexChatDocumentUtils';
 
 marked.use(
   markedKatex({
@@ -494,14 +518,6 @@ type TextRole = 'user' | 'assistant' | 'system';
 type ChatAttachments = {
   images?: number;
 };
-type SelectionPreview = {
-  locationLabel: string;
-  previewText: string;
-};
-type MessageContextPreview = {
-  selectionPreview?: SelectionPreview;
-  cellOutputPreview?: SelectionPreview;
-};
 type StoredSelectionPreviewEntry = {
   contentHash: string;
   preview: MessageContextPreview | null;
@@ -548,26 +564,6 @@ type ActivityItem = {
   raw: string;
 };
 
-type RateLimitWindowSnapshot = {
-  usedPercent: number | null;
-  windowMinutes: number | null;
-  resetsAt: number | null;
-};
-
-type ContextWindowSnapshot = {
-  windowTokens: number | null;
-  usedTokens: number | null;
-  leftTokens: number | null;
-  usedPercent: number | null;
-};
-
-type CodexRateLimitsSnapshot = {
-  updatedAt: string | null;
-  primary: RateLimitWindowSnapshot | null;
-  secondary: RateLimitWindowSnapshot | null;
-  contextWindow: ContextWindowSnapshot | null;
-};
-
 type CodexChatProps = {
   app: JupyterFrontEnd;
   notebooks: INotebookTracker;
@@ -580,8 +576,6 @@ type CliDefaultsSnapshot = {
 };
 
 type ConversationMode = 'resume' | 'fallback';
-type NotebookMode = 'ipynb' | 'jupytext_py' | 'plain_py' | 'unsupported';
-
 type NotebookSession = {
   threadId: string;
   messages: ChatEntry[];
@@ -667,8 +661,6 @@ const SESSION_KEY_SEPARATOR = '\u0000';
 const MAX_IMAGE_ATTACHMENTS = 4;
 const MAX_IMAGE_ATTACHMENT_BYTES = 4 * 1024 * 1024; // Avoid huge WebSocket payloads.
 const MAX_IMAGE_ATTACHMENT_TOTAL_BYTES = 6 * 1024 * 1024;
-const MESSAGE_SELECTION_PREVIEW_DISPLAY_MAX_CHARS = 500;
-const MESSAGE_SELECTION_PREVIEW_STORED_MAX_CHARS = 500;
 const MAX_STORED_SELECTION_PREVIEW_THREADS = 80;
 const MAX_STORED_SELECTION_PREVIEW_MESSAGES_PER_THREAD = 10;
 const MAX_SESSION_MESSAGES = 300;
@@ -1938,10 +1930,6 @@ function renderMarkdownToSafeHtml(markdown: string): string {
   } catch {
     return escapeHtml(markdown).replace(/\n/g, '<br />');
   }
-}
-
-function normalizeSelectionPreviewText(text: string): string {
-  return (text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
 }
 
 function normalizeMathDelimiters(markdown: string): string {
@@ -4989,601 +4977,4 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       )}
     </div>
   );
-}
-
-type DocumentWidgetLike = {
-  isDisposed?: boolean;
-  context?: {
-    path?: string;
-    model?: { dirty?: boolean };
-    save?: () => Promise<void>;
-    revert?: () => Promise<void>;
-  };
-  content?: any;
-};
-
-function getDocumentContext(widget: DocumentWidgetLike | null): any {
-  return widget && widget.context ? widget.context : null;
-}
-
-function getSupportedDocumentPath(widget: DocumentWidgetLike | null): string {
-  const rawPath = typeof widget?.context?.path === 'string' ? widget.context.path.trim() : '';
-  if (!rawPath) {
-    return '';
-  }
-  const lower = rawPath.toLowerCase();
-  if (lower.endsWith('.ipynb') || lower.endsWith('.py')) {
-    return rawPath;
-  }
-  return '';
-}
-
-function getActiveDocumentWidget(
-  app: JupyterFrontEnd,
-  fallbackWidget: DocumentWidgetLike | null
-): DocumentWidgetLike | null {
-  const current = app.shell.currentWidget as any;
-  const currentPath = getSupportedDocumentPath(current as DocumentWidgetLike | null);
-  if (currentPath) {
-    return current as DocumentWidgetLike;
-  }
-
-  if (fallbackWidget && !fallbackWidget.isDisposed && getSupportedDocumentPath(fallbackWidget)) {
-    return fallbackWidget;
-  }
-  return null;
-}
-
-function findDocumentWidgetByPath(
-  app: JupyterFrontEnd,
-  path: string,
-  fallbackWidget: DocumentWidgetLike | null = null
-): DocumentWidgetLike | null {
-  const normalizedPath = (path || '').trim();
-  if (!normalizedPath) {
-    return null;
-  }
-
-  const current = app.shell.currentWidget as any;
-  if (getSupportedDocumentPath(current as DocumentWidgetLike | null) === normalizedPath) {
-    return current as DocumentWidgetLike;
-  }
-
-  if (
-    fallbackWidget &&
-    !fallbackWidget.isDisposed &&
-    getSupportedDocumentPath(fallbackWidget) === normalizedPath
-  ) {
-    return fallbackWidget;
-  }
-
-  const iterator: any = app.shell.widgets('main');
-  if (iterator && typeof iterator.next === 'function') {
-    while (true) {
-      const candidate = iterator.next() as any;
-      if (!candidate) {
-        break;
-      }
-      if (getSupportedDocumentPath(candidate as DocumentWidgetLike) === normalizedPath) {
-        return candidate as DocumentWidgetLike;
-      }
-    }
-  }
-  return null;
-}
-
-function isNotebookWidget(widget: DocumentWidgetLike | null): boolean {
-  return Boolean(widget && widget.content && 'activeCell' in widget.content);
-}
-
-type DocumentViewState = {
-  scrollTop: number;
-  scrollLeft: number;
-  activeCellIndex: number | null;
-};
-
-function isScrollableElement(element: HTMLElement | null): element is HTMLElement {
-  if (!element) {
-    return false;
-  }
-  return element.scrollHeight > element.clientHeight + 1 || element.scrollWidth > element.clientWidth + 1;
-}
-
-function isHTMLElement(value: unknown): value is HTMLElement {
-  return Boolean(value && value instanceof HTMLElement);
-}
-
-function querySelectorIncludingSelf(root: HTMLElement, selector: string): HTMLElement | null {
-  if (root.matches(selector)) {
-    return root;
-  }
-  return root.querySelector(selector) as HTMLElement | null;
-}
-
-function getPrimaryDocumentScrollContainer(widget: DocumentWidgetLike | null): HTMLElement | null {
-  const contentNode = (widget as any)?.content?.node;
-  const widgetNode = (widget as any)?.node;
-  const roots = [contentNode, widgetNode].filter(isHTMLElement);
-  if (roots.length === 0) {
-    return null;
-  }
-
-  const candidates = [
-    '.jp-WindowedPanel-outer',
-    '.jp-Notebook .jp-WindowedPanel-outer',
-    '.jp-NotebookPanel-notebook .jp-WindowedPanel-outer',
-    '.jp-FileEditor .cm-scroller',
-    '.jp-FileEditor .jp-CodeMirrorEditor',
-    '.cm-scroller',
-    '.jp-FileEditor'
-  ];
-
-  for (const root of roots) {
-    for (const selector of candidates) {
-      const node = querySelectorIncludingSelf(root, selector);
-      if (isScrollableElement(node)) {
-        return node;
-      }
-    }
-  }
-
-  for (const root of roots) {
-    if (isScrollableElement(root)) {
-      return root;
-    }
-  }
-
-  return null;
-}
-
-function captureDocumentViewState(widget: DocumentWidgetLike | null): DocumentViewState {
-  const scrollContainer = getPrimaryDocumentScrollContainer(widget);
-  const notebookContent: any = isNotebookWidget(widget) ? (widget as any).content : null;
-  const rawActiveCellIndex = Number(notebookContent?.activeCellIndex);
-  const activeCellIndex = Number.isFinite(rawActiveCellIndex) ? Math.max(0, Math.floor(rawActiveCellIndex)) : null;
-  return {
-    scrollTop: scrollContainer?.scrollTop ?? 0,
-    scrollLeft: scrollContainer?.scrollLeft ?? 0,
-    activeCellIndex
-  };
-}
-
-function restoreDocumentViewState(widget: DocumentWidgetLike | null, viewState: DocumentViewState): void {
-  if (isNotebookWidget(widget) && viewState.activeCellIndex !== null) {
-    try {
-      const notebookContent: any = (widget as any).content;
-      const cellsLengthRaw = Number(notebookContent?.widgets?.length);
-      if (Number.isFinite(cellsLengthRaw) && cellsLengthRaw > 0) {
-        const maxIndex = Math.floor(cellsLengthRaw) - 1;
-        notebookContent.activeCellIndex = Math.max(0, Math.min(viewState.activeCellIndex, maxIndex));
-      }
-    } catch {
-      // Ignore active-cell restore failures.
-    }
-  }
-
-  const applyScroll = () => {
-    const scrollContainer = getPrimaryDocumentScrollContainer(widget);
-    if (!scrollContainer) {
-      return;
-    }
-    scrollContainer.scrollTop = viewState.scrollTop;
-    scrollContainer.scrollLeft = viewState.scrollLeft;
-  };
-
-  applyScroll();
-  window.requestAnimationFrame(() => {
-    applyScroll();
-    window.requestAnimationFrame(applyScroll);
-  });
-  window.setTimeout(applyScroll, 120);
-}
-
-function getActiveCellText(widget: DocumentWidgetLike | null): string {
-  if (!isNotebookWidget(widget)) {
-    return '';
-  }
-  const activeCell = (widget as any).content.activeCell;
-  if (!activeCell) {
-    return '';
-  }
-  const source =
-    typeof activeCell.model?.sharedModel?.getSource === 'function' ? activeCell.model.sharedModel.getSource() : '';
-  return typeof source === 'string' ? source : '';
-}
-
-type CodeEditorSelection = {
-  text: string;
-  startLine: number | null;
-};
-
-type SelectedContext =
-  | {
-      kind: 'cell';
-      number: number;
-      text: string;
-    }
-  | {
-      kind: 'line';
-      number: number;
-      text: string;
-    };
-
-function getSelectionFromCodeEditor(editor: any, source: string): CodeEditorSelection | null {
-  if (!editor || typeof editor.getSelection !== 'function' || typeof editor.getOffsetAt !== 'function') {
-    return null;
-  }
-
-  const range = editor.getSelection();
-  if (!range || !range.start || !range.end) {
-    return null;
-  }
-
-  const startOffset = Number(editor.getOffsetAt(range.start));
-  const endOffset = Number(editor.getOffsetAt(range.end));
-  if (!Number.isFinite(startOffset) || !Number.isFinite(endOffset)) {
-    return null;
-  }
-
-  const from = Math.max(0, Math.min(startOffset, endOffset));
-  const to = Math.max(0, Math.max(startOffset, endOffset));
-  if (to <= from || !source) {
-    return null;
-  }
-
-  const text = source.slice(from, to);
-  if (!text) {
-    return null;
-  }
-
-  const startLineRaw = Number(range.start.line);
-  const endLineRaw = Number(range.end.line);
-  const startLine =
-    Number.isFinite(startLineRaw) && Number.isFinite(endLineRaw)
-      ? Math.max(1, Math.min(startLineRaw, endLineRaw) + 1)
-      : null;
-
-  return { text, startLine };
-}
-
-function getSelectedTextFromCodeEditor(editor: any, source: string): string {
-  const selection = getSelectionFromCodeEditor(editor, source);
-  return selection?.text || '';
-}
-
-function getSelectedTextFromActiveCell(widget: DocumentWidgetLike | null): string {
-  if (!isNotebookWidget(widget)) {
-    return '';
-  }
-  const activeCell = (widget as any).content.activeCell;
-  if (!activeCell) {
-    return '';
-  }
-
-  try {
-    const source =
-      typeof activeCell.model?.sharedModel?.getSource === 'function' ? activeCell.model.sharedModel.getSource() : '';
-    return getSelectedTextFromCodeEditor((activeCell as any).editor, typeof source === 'string' ? source : '');
-  } catch {
-    return '';
-  }
-}
-
-function getSelectedContextFromActiveCell(widget: DocumentWidgetLike | null): SelectedContext | null {
-  if (!isNotebookWidget(widget)) {
-    return null;
-  }
-  const notebookContent: any = (widget as any).content;
-  const activeCell = notebookContent?.activeCell;
-  if (!activeCell) {
-    return null;
-  }
-
-  try {
-    const source =
-      typeof activeCell.model?.sharedModel?.getSource === 'function' ? activeCell.model.sharedModel.getSource() : '';
-    const selection = getSelectionFromCodeEditor(
-      (activeCell as any).editor,
-      typeof source === 'string' ? source : ''
-    );
-    if (!selection?.text) {
-      return null;
-    }
-
-    const rawCellIndex = Number(notebookContent?.activeCellIndex);
-    const cellNumber = Number.isFinite(rawCellIndex) ? Math.max(1, Math.floor(rawCellIndex) + 1) : 1;
-    return {
-      kind: 'cell',
-      number: cellNumber,
-      text: selection.text
-    };
-  } catch {
-    return null;
-  }
-}
-
-function getSelectedTextFromFileEditor(widget: DocumentWidgetLike | null): string {
-  if (!widget || isNotebookWidget(widget)) {
-    return '';
-  }
-
-  try {
-    const editor: any = (widget as any).content?.editor;
-    if (!editor) {
-      return '';
-    }
-    const source =
-      typeof editor.model?.sharedModel?.getSource === 'function' ? editor.model.sharedModel.getSource() : '';
-    return getSelectedTextFromCodeEditor(editor, typeof source === 'string' ? source : '');
-  } catch {
-    return '';
-  }
-}
-
-function getSelectedContextFromFileEditor(widget: DocumentWidgetLike | null): SelectedContext | null {
-  if (!widget || isNotebookWidget(widget)) {
-    return null;
-  }
-
-  try {
-    const editor: any = (widget as any).content?.editor;
-    if (!editor) {
-      return null;
-    }
-    const source =
-      typeof editor.model?.sharedModel?.getSource === 'function' ? editor.model.sharedModel.getSource() : '';
-    const selection = getSelectionFromCodeEditor(editor, typeof source === 'string' ? source : '');
-    if (!selection?.text) {
-      return null;
-    }
-    const lineNumber = selection.startLine ?? 1;
-    return {
-      kind: 'line',
-      number: lineNumber,
-      text: selection.text
-    };
-  } catch {
-    return null;
-  }
-}
-
-function getSelectedContext(
-  widget: DocumentWidgetLike | null,
-  notebookMode: NotebookMode
-): SelectedContext | null {
-  if (notebookMode === 'plain_py') {
-    return getSelectedContextFromFileEditor(widget) ?? getSelectedContextFromActiveCell(widget);
-  }
-  return getSelectedContextFromActiveCell(widget) ?? getSelectedContextFromFileEditor(widget);
-}
-
-function inferLocationLabelFromWidget(
-  widget: DocumentWidgetLike | null,
-  notebookMode: NotebookMode
-): string {
-  if (isNotebookWidget(widget) || notebookMode === 'ipynb' || notebookMode === 'jupytext_py') {
-    const rawCellIndex = Number((widget as any)?.content?.activeCellIndex);
-    if (Number.isFinite(rawCellIndex)) {
-      return `Cell ${Math.max(1, Math.floor(rawCellIndex) + 1)}`;
-    }
-    return 'Cell';
-  }
-
-  try {
-    const editor: any = widget && !isNotebookWidget(widget) ? (widget as any).content?.editor : null;
-    if (editor && typeof editor.getCursorPosition === 'function') {
-      const cursor = editor.getCursorPosition();
-      const lineRaw = Number(cursor?.line);
-      if (Number.isFinite(lineRaw)) {
-        return `Line ${Math.max(1, Math.floor(lineRaw) + 1)}`;
-      }
-    }
-  } catch {
-    // Ignore location inference errors and fallback to a generic label.
-  }
-
-  return notebookMode === 'plain_py' ? 'Line' : 'Selection';
-}
-
-function toSelectionPreview(context: SelectedContext | null): SelectionPreview | undefined {
-  if (!context) {
-    return undefined;
-  }
-  const normalized = normalizeSelectionPreviewText(context.text);
-  if (!normalized) {
-    return undefined;
-  }
-  const locationLabel = context.kind === 'cell' ? `Cell ${context.number}` : `Line ${context.number}`;
-  return {
-    locationLabel,
-    previewText: truncateEnd(normalized, MESSAGE_SELECTION_PREVIEW_STORED_MAX_CHARS)
-  };
-}
-
-function formatSelectionPreviewTextForDisplay(previewText: string): string {
-  return truncateEnd(normalizeSelectionPreviewText(previewText), MESSAGE_SELECTION_PREVIEW_DISPLAY_MAX_CHARS);
-}
-
-function toFallbackSelectionPreview(
-  widget: DocumentWidgetLike | null,
-  notebookMode: NotebookMode,
-  text: string
-): SelectionPreview | undefined {
-  const normalized = normalizeSelectionPreviewText(text);
-  if (!normalized) {
-    return undefined;
-  }
-  return {
-    locationLabel: inferLocationLabelFromWidget(widget, notebookMode),
-    previewText: truncateEnd(normalized, MESSAGE_SELECTION_PREVIEW_STORED_MAX_CHARS)
-  };
-}
-
-function toCellOutputPreview(
-  context: SelectedContext | null,
-  widget: DocumentWidgetLike | null,
-  notebookMode: NotebookMode,
-  outputText: string
-): SelectionPreview | undefined {
-  const normalized = normalizeSelectionPreviewText(outputText);
-  if (!normalized) {
-    return undefined;
-  }
-  const locationBase =
-    context?.kind === 'cell'
-      ? `Cell ${context.number}`
-      : inferLocationLabelFromWidget(widget, notebookMode);
-  return {
-    locationLabel: `${locationBase} Output`,
-    previewText: truncateEnd(normalized, MESSAGE_SELECTION_PREVIEW_STORED_MAX_CHARS)
-  };
-}
-
-const ACTIVE_CELL_OUTPUT_MAX_CHARS = 6000;
-const ACTIVE_CELL_OUTPUT_MAX_ITEMS = 24;
-
-function stripAnsi(value: string): string {
-  // Best-effort removal of ANSI escape codes (tracebacks sometimes include them).
-  return value.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
-}
-
-function coerceText(value: unknown): string {
-  if (typeof value === 'string') {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    return value.filter(item => typeof item === 'string').join('');
-  }
-  return '';
-}
-
-function formatJupyterOutput(output: any): string {
-  if (!output || typeof output !== 'object') {
-    return '';
-  }
-  const outputType = typeof output.output_type === 'string' ? output.output_type : '';
-  if (!outputType) {
-    return '';
-  }
-
-  if (outputType === 'stream') {
-    const text = coerceText(output.text);
-    if (!text) {
-      return '';
-    }
-    const name = typeof output.name === 'string' ? output.name : '';
-    const cleaned = stripAnsi(text).replace(/\s+$/, '');
-    if (!cleaned) {
-      return '';
-    }
-    return name === 'stderr' ? `[stderr]\n${cleaned}` : cleaned;
-  }
-
-  if (outputType === 'error') {
-    const traceback = Array.isArray(output.traceback)
-      ? output.traceback.filter((line: unknown) => typeof line === 'string')
-      : [];
-    const tbText = stripAnsi(traceback.join('\n')).replace(/\s+$/, '');
-    if (tbText) {
-      return tbText;
-    }
-    const ename = typeof output.ename === 'string' ? output.ename : '';
-    const evalue = typeof output.evalue === 'string' ? output.evalue : '';
-    const summary = [ename, evalue].filter(Boolean).join(': ').trim();
-    return summary;
-  }
-
-  if (outputType === 'execute_result' || outputType === 'display_data' || outputType === 'update_display_data') {
-    const data = output.data && typeof output.data === 'object' ? output.data : null;
-    if (!data) {
-      return '';
-    }
-    const textPlain = coerceText((data as any)['text/plain']);
-    if (textPlain) {
-      const cleaned = stripAnsi(textPlain).replace(/\s+$/, '');
-      if (!cleaned) {
-        return '';
-      }
-      if (outputType === 'execute_result' && typeof output.execution_count === 'number') {
-        return `Out[${output.execution_count}]:\n${cleaned}`;
-      }
-      return cleaned;
-    }
-
-    const mimeTypes = Object.keys(data as any).filter(mime => mime && mime !== 'text/plain');
-    if (mimeTypes.length > 0) {
-      return `[non-text output omitted: ${mimeTypes.slice(0, 6).join(', ')}${mimeTypes.length > 6 ? ', ...' : ''}]`;
-    }
-    return '';
-  }
-
-  return '';
-}
-
-function summarizeJupyterOutputs(outputs: any[]): string {
-  if (!Array.isArray(outputs) || outputs.length === 0) {
-    return '';
-  }
-
-  let combined = '';
-  let appended = 0;
-  let truncated = false;
-
-  for (const output of outputs) {
-    if (appended >= ACTIVE_CELL_OUTPUT_MAX_ITEMS) {
-      truncated = true;
-      break;
-    }
-    const chunk = formatJupyterOutput(output);
-    if (!chunk) {
-      continue;
-    }
-    appended += 1;
-
-    const sep = combined ? '\n\n' : '';
-    const remaining = ACTIVE_CELL_OUTPUT_MAX_CHARS - combined.length - sep.length;
-    if (remaining <= 0) {
-      truncated = true;
-      break;
-    }
-
-    const slice = chunk.length > remaining ? chunk.slice(0, remaining) : chunk;
-    combined += sep + slice;
-    if (slice.length !== chunk.length) {
-      truncated = true;
-      break;
-    }
-  }
-
-  combined = combined.replace(/\s+$/, '');
-  if (!combined) {
-    return '';
-  }
-  if (truncated) {
-    combined += '\n\n... (truncated)';
-  }
-  return combined;
-}
-
-function getActiveCellOutput(widget: DocumentWidgetLike | null): string {
-  if (!isNotebookWidget(widget)) {
-    return '';
-  }
-  const activeCell = (widget as any).content.activeCell;
-  if (!activeCell) {
-    return '';
-  }
-
-  try {
-    const model: any = activeCell.model as any;
-    const cellType = typeof model?.type === 'string' ? model.type : '';
-    if (cellType && cellType !== 'code') {
-      return '';
-    }
-    const json = typeof model?.toJSON === 'function' ? model.toJSON() : null;
-    const outputs = json && Array.isArray((json as any).outputs) ? (json as any).outputs : [];
-    return summarizeJupyterOutputs(outputs);
-  } catch {
-    return '';
-  }
 }
