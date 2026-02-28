@@ -2416,6 +2416,14 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     if (!trimmed) {
       return;
     }
+    if (queuedTurnsRef.current.has(sessionKey)) {
+      appendMessage(
+        sessionKey,
+        'system',
+        'A queued follow-up is already set. Remove it before queueing another message.'
+      );
+      return;
+    }
 
     if (pendingImagesRef.current.length > 0) {
       clearPendingImages();
@@ -4265,6 +4273,19 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const hasQueuedTurnForCurrentSession = Boolean(queuedTurnForCurrentSession);
 
   useEffect(() => {
+    if (!socketConnected || isReconnecting || queuedTurns.size === 0) {
+      return;
+    }
+    for (const sessionKey of queuedTurns.keys()) {
+      const session = sessions.get(sessionKey);
+      if (!session || session.runState !== 'ready') {
+        continue;
+      }
+      onSessionDoneForQueue(sessionKey);
+    }
+  }, [queuedTurns, sessions, socketConnected, isReconnecting]);
+
+  useEffect(() => {
     closeSelectionPopover();
   }, [currentNotebookSessionKey]);
 
@@ -5100,8 +5121,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 
 	            <div className="jp-CodexComposer-toolbarRight">
 	              <button
-	                type="button"
-	                className={`jp-CodexSendBtn${sendButtonMode === 'stop' ? ' is-stop' : ''}${sendButtonMode === 'queue' ? ' is-queue' : ''}`}
+		                type="button"
+		                className={`jp-CodexSendBtn${sendButtonMode === 'stop' ? ' is-stop' : ''}${sendButtonMode === 'queue' ? ' is-queue' : ''}`}
                 onClick={() => {
                   if (sendButtonMode === 'queue') {
                     queueCurrentInput();
@@ -5113,11 +5134,11 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                   }
                   void sendMessage();
                 }}
-                disabled={sendButtonDisabled}
+                disabled={sendButtonDisabled || (sendButtonMode === 'queue' && hasQueuedTurnForCurrentSession)}
                 aria-label={
                   sendButtonMode === 'queue'
                     ? hasQueuedTurnForCurrentSession
-                      ? 'Update queued follow-up'
+                      ? 'Queued follow-up already set'
                       : 'Queue follow-up'
                     : sendButtonMode === 'stop'
                     ? 'Stop run'
@@ -5126,7 +5147,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                 title={
                   sendButtonMode === 'queue'
                     ? hasQueuedTurnForCurrentSession
-                      ? 'Replace queued follow-up for this notebook'
+                      ? 'Remove queued follow-up to queue a new one'
                       : 'Queue follow-up for automatic send after the current run'
                     : sendButtonMode === 'stop'
                     ? currentSession?.activeRunId

@@ -20,10 +20,8 @@ import tempfile
 import numpy as np
 
 # Use a writable cache path in restricted/sandboxed environments.
-if not os.environ.get("MPLCONFIGDIR"):
-    os.environ["MPLCONFIGDIR"] = os.path.join(tempfile.gettempdir(), "matplotlib")
-if not os.environ.get("XDG_CACHE_HOME"):
-    os.environ["XDG_CACHE_HOME"] = tempfile.gettempdir()
+os.environ.setdefault("MPLCONFIGDIR", os.path.join(tempfile.gettempdir(), "matplotlib"))
+os.environ.setdefault("XDG_CACHE_HOME", tempfile.gettempdir())
 
 import matplotlib.pyplot as plt
 
@@ -91,7 +89,7 @@ def simulate_1d_scattering(
 
     psi = np.exp(-((x - x0) ** 2) / (4.0 * sigma**2)) * np.exp(1j * k0 * x)
     psi /= np.sqrt(np.sum(np.abs(psi) ** 2) * dx)
-    norm_initial = np.sum(np.abs(psi) ** 2) * dx
+    norm_initial = 1.0
 
     # 분할 연산자(퍼텐셜 반 스텝 + 운동에너지 한 스텝)
     exp_v_half = np.exp(-1j * V * dt / (2.0 * hbar))
@@ -188,7 +186,8 @@ plt.figure(figsize=(10, 5))
 for idx in snapshot_idx:
     plt.plot(x, density_map[idx], label=f"t = {times[idx]:.2f}")
 
-v_scale = np.max(V) if np.max(V) > 0 else 1.0
+v_max = np.max(V)
+v_scale = v_max if v_max > 0 else 1.0
 plt.plot(x, V / (v_scale * 8.0), "k--", alpha=0.7, label="Potential (scaled)")
 plt.xlim(-150, 120)
 plt.ylim(bottom=0)
@@ -239,7 +238,6 @@ def simulate_two_level(delta=1.0, omega=2.0, dt=0.01, n_steps=3000):
         p0[i] = np.abs(psi[0]) ** 2
         p1[i] = np.abs(psi[1]) ** 2
         psi = U_dt @ psi
-        psi /= np.linalg.norm(psi)
 
     return t, p0, p1
 

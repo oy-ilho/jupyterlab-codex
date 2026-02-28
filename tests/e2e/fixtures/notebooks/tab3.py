@@ -43,21 +43,10 @@ def momentum_squared_operator(psi_state, k, hbar):
     return np.fft.ifft((hbar * k) ** 2 * psi_k_state)
 
 
-def simulate_1d_quantum_scattering(
-    hbar=1.0,
-    mass=1.0,
-    grid_size=2048,
-    x_min=-100.0,
-    x_max=100.0,
-    dt=0.05,
-    steps=900,
-    save_every=90,
-    barrier_height=1.6,
-    barrier_width=2.2,
-    x0=-35.0,
-    sigma=3.5,
-    k0=1.6,
-    barrier_region=6.0,
+# %%
+# Simulation helpers
+def _validate_simulation_params(
+    hbar, mass, grid_size, x_min, x_max, dt, steps, save_every, sigma, barrier_width, barrier_region
 ):
     if grid_size <= 0:
         raise ValueError("grid_size must be positive.")
@@ -80,20 +69,91 @@ def simulate_1d_quantum_scattering(
     if barrier_region < 0:
         raise ValueError("barrier_region must be non-negative.")
 
+
+def _initialize_system(
+    hbar, mass, grid_size, x_min, x_max, dt, barrier_height, barrier_width, x0, sigma, k0
+):
     x = np.linspace(x_min, x_max, grid_size, endpoint=False)
     dx = x[1] - x[0]
     k = 2.0 * np.pi * np.fft.fftfreq(grid_size, d=dx)
 
-    # Potential: Gaussian barrier
     V = barrier_height * np.exp(-(x / barrier_width) ** 2)
-
-    # Initial state: Gaussian wave packet moving to the right
     psi = np.exp(-((x - x0) ** 2) / (2.0 * sigma**2)) * np.exp(1j * k0 * x)
     psi /= np.sqrt(np.sum(np.abs(psi) ** 2) * dx)
 
     phase_v_half = np.exp(-1j * V * dt / (2.0 * hbar))
     T_k = (hbar**2) * (k**2) / (2.0 * mass)
     phase_t = np.exp(-1j * T_k * dt / hbar)
+    return x, dx, k, V, psi, phase_v_half, phase_t
+
+
+def _record_observables(psi, x, dx, k, hbar):
+    density = np.abs(psi) ** 2
+    norm = np.sum(density) * dx
+
+    x_mean = np.sum(x * density) * dx
+    x2_mean = np.sum((x**2) * density) * dx
+    p_psi = momentum_operator(psi, k, hbar)
+    p2_psi = momentum_squared_operator(psi, k, hbar)
+    p_mean = np.real(np.sum(np.conj(psi) * p_psi) * dx)
+    p2_mean = np.real(np.sum(np.conj(psi) * p2_psi) * dx)
+
+    x_var = max(x2_mean - x_mean**2, 0.0)
+    p_var = max(p2_mean - p_mean**2, 0.0)
+    uncertainty = np.sqrt(x_var) * np.sqrt(p_var)
+    return density, norm, x_mean, p_mean, uncertainty
+
+
+def _compute_diagnostics(final_density, x, dx, barrier_region, uncertainty_history, hbar):
+    reflection = np.sum(final_density[x < -barrier_region]) * dx
+    transmission = np.sum(final_density[x > barrier_region]) * dx
+    near_barrier = np.sum(final_density[np.abs(x) <= barrier_region]) * dx
+
+    return {
+        "final_norm": np.sum(final_density) * dx,
+        "reflection": reflection,
+        "transmission": transmission,
+        "near_barrier": near_barrier,
+        "probability_sum": reflection + transmission + near_barrier,
+        "min_uncertainty": float(np.min(uncertainty_history)),
+        "uncertainty_bound": 0.5 * hbar,
+    }
+
+
+# %%
+# Main simulation
+def simulate_1d_quantum_scattering(
+    hbar=1.0,
+    mass=1.0,
+    grid_size=2048,
+    x_min=-100.0,
+    x_max=100.0,
+    dt=0.05,
+    steps=900,
+    save_every=90,
+    barrier_height=1.6,
+    barrier_width=2.2,
+    x0=-35.0,
+    sigma=3.5,
+    k0=1.6,
+    barrier_region=6.0,
+):
+    _validate_simulation_params(
+        hbar,
+        mass,
+        grid_size,
+        x_min,
+        x_max,
+        dt,
+        steps,
+        save_every,
+        sigma,
+        barrier_width,
+        barrier_region,
+    )
+    x, dx, k, V, psi, phase_v_half, phase_t = _initialize_system(
+        hbar, mass, grid_size, x_min, x_max, dt, barrier_height, barrier_width, x0, sigma, k0
+    )
 
     snapshots = []
     times = []
@@ -104,40 +164,18 @@ def simulate_1d_quantum_scattering(
 
     for n in range(steps + 1):
         if n % save_every == 0:
-            density = np.abs(psi) ** 2
+            density, norm, x_mean, p_mean, uncertainty = _record_observables(psi, x, dx, k, hbar)
             snapshots.append(density.copy())
             times.append(n * dt)
-            norm_history.append(np.sum(density) * dx)
-
-            x_mean = np.sum(x * density) * dx
-            x2_mean = np.sum((x**2) * density) * dx
-            p_psi = momentum_operator(psi, k, hbar)
-            p2_psi = momentum_squared_operator(psi, k, hbar)
-            p_mean = np.real(np.sum(np.conj(psi) * p_psi) * dx)
-            p2_mean = np.real(np.sum(np.conj(psi) * p2_psi) * dx)
-
-            x_var = max(x2_mean - x_mean**2, 0.0)
-            p_var = max(p2_mean - p_mean**2, 0.0)
-            uncertainty_history.append(np.sqrt(x_var) * np.sqrt(p_var))
+            norm_history.append(norm)
             x_mean_history.append(x_mean)
             p_mean_history.append(p_mean)
+            uncertainty_history.append(uncertainty)
 
         psi = split_operator_step(psi, phase_v_half, phase_t)
 
     final_density = np.abs(psi) ** 2
-    reflection = np.sum(final_density[x < -barrier_region]) * dx
-    transmission = np.sum(final_density[x > barrier_region]) * dx
-    near_barrier = np.sum(final_density[np.abs(x) <= barrier_region]) * dx
-
-    diagnostics = {
-        "final_norm": np.sum(final_density) * dx,
-        "reflection": reflection,
-        "transmission": transmission,
-        "near_barrier": near_barrier,
-        "probability_sum": reflection + transmission + near_barrier,
-        "min_uncertainty": float(np.min(uncertainty_history)),
-        "uncertainty_bound": 0.5 * hbar,
-    }
+    diagnostics = _compute_diagnostics(final_density, x, dx, barrier_region, uncertainty_history, hbar)
 
     return {
         "x": x,
@@ -152,6 +190,50 @@ def simulate_1d_quantum_scattering(
     }
 
 
+# %%
+# Plot helpers
+def _plot_density_panel(ax, x, snapshots, times, V):
+    for density, t in zip(snapshots, times):
+        ax.plot(x, density, label=f"t={t:.1f}")
+    scale = np.max(snapshots[0]) / np.max(V)
+    ax.plot(x, V * scale, "--", linewidth=2, label="Barrier (scaled)")
+    ax.set_title("1D Quantum Wave Packet Scattering")
+    ax.set_xlabel("x")
+    ax.set_ylabel(r"Probability density $|\psi|^2$")
+    ax.legend()
+    ax.grid(alpha=0.25)
+
+
+def _plot_norm_panel(ax, times, norm_history):
+    ax.plot(times, norm_history, marker="o")
+    ax.set_title("Normalization Conservation Check")
+    ax.set_xlabel("time")
+    ax.set_ylabel("Integral |psi|^2 dx")
+    ax.grid(alpha=0.25)
+
+
+def _plot_expectation_panel(ax, times, x_mean_history, p_mean_history):
+    ax.plot(times, x_mean_history, marker="o", label="<x>")
+    ax.plot(times, p_mean_history, marker="s", label="<p>")
+    ax.set_title("Expectation Values Over Time")
+    ax.set_xlabel("time")
+    ax.set_ylabel("value")
+    ax.legend()
+    ax.grid(alpha=0.25)
+
+
+def _plot_uncertainty_panel(ax, times, uncertainty_history, hbar):
+    ax.plot(times, uncertainty_history, marker="^", label="DxDp")
+    ax.axhline(0.5 * hbar, linestyle="--", color="red", label="hbar/2")
+    ax.set_title("Uncertainty Principle Check")
+    ax.set_xlabel("time")
+    ax.set_ylabel("DxDp")
+    ax.legend()
+    ax.grid(alpha=0.25)
+
+
+# %%
+# Plot entrypoint
 def plot_results(result, hbar=1.0):
     x = result["x"]
     V = result["V"]
@@ -163,41 +245,10 @@ def plot_results(result, hbar=1.0):
     uncertainty_history = result["uncertainty_history"]
     fig, axes = plt.subplots(4, 1, figsize=(10, 14), sharex=False)
 
-    ax0 = axes[0]
-    for density, t in zip(snapshots, times):
-        ax0.plot(x, density, label=f"t={t:.1f}")
-    scale = np.max(snapshots[0]) / np.max(V)
-    ax0.plot(x, V * scale, "--", linewidth=2, label="Barrier (scaled)")
-    ax0.set_title("1D Quantum Wave Packet Scattering")
-    ax0.set_xlabel("x")
-    ax0.set_ylabel(r"Probability density $|\psi|^2$")
-    ax0.legend()
-    ax0.grid(alpha=0.25)
-
-    ax1 = axes[1]
-    ax1.plot(times, norm_history, marker="o")
-    ax1.set_title("Normalization Conservation Check")
-    ax1.set_xlabel("time")
-    ax1.set_ylabel("Integral |psi|^2 dx")
-    ax1.grid(alpha=0.25)
-
-    ax2 = axes[2]
-    ax2.plot(times, x_mean_history, marker="o", label="<x>")
-    ax2.plot(times, p_mean_history, marker="s", label="<p>")
-    ax2.set_title("Expectation Values Over Time")
-    ax2.set_xlabel("time")
-    ax2.set_ylabel("value")
-    ax2.legend()
-    ax2.grid(alpha=0.25)
-
-    ax3 = axes[3]
-    ax3.plot(times, uncertainty_history, marker="^", label="DxDp")
-    ax3.axhline(0.5 * hbar, linestyle="--", color="red", label="hbar/2")
-    ax3.set_title("Uncertainty Principle Check")
-    ax3.set_xlabel("time")
-    ax3.set_ylabel("DxDp")
-    ax3.legend()
-    ax3.grid(alpha=0.25)
+    _plot_density_panel(axes[0], x, snapshots, times, V)
+    _plot_norm_panel(axes[1], times, norm_history)
+    _plot_expectation_panel(axes[2], times, x_mean_history, p_mean_history)
+    _plot_uncertainty_panel(axes[3], times, uncertainty_history, hbar)
 
     plt.tight_layout()
     plt.show()
