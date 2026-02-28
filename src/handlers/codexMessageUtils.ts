@@ -6,6 +6,8 @@ import type {
   TextRole
 } from './codexMessageTypes';
 
+export type { HistoryEntry, TextRole };
+
 export type ProgressKind = '' | 'reasoning';
 export type ActivityPhase = 'started' | 'completed' | '';
 export type ActivityCategory = 'reasoning' | 'command' | 'file' | 'tool' | 'event';
