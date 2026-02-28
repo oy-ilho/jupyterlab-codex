@@ -1,13 +1,15 @@
 import { type SetStateAction } from 'react';
 import { parseServerMessage, type ModelCatalogEntry } from '../protocol';
 import {
-  type CodexRateLimitsSnapshot,
   type HistoryEntry,
-  type ProgressKind,
   type TextRole,
+  type ProgressKind,
   splitStoredMessagePreview as splitStoredMessagePreviewShared,
   truncateEnd
 } from './codexMessageUtils';
+import type {
+  CodexRateLimitsSnapshot
+} from './codexMessageTypes';
 
 type ActivityPhase = 'started' | 'completed' | '';
 type ActivityCategory = 'reasoning' | 'command' | 'file' | 'tool' | 'event';

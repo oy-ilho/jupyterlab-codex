@@ -1,4 +1,10 @@
-export type TextRole = 'user' | 'assistant' | 'system';
+import type {
+  CodexRateLimitsSnapshot,
+  ContextWindowSnapshot,
+  HistoryEntry,
+  RateLimitWindowSnapshot,
+  TextRole
+} from './codexMessageTypes';
 
 export type ProgressKind = '' | 'reasoning';
 export type ActivityPhase = 'started' | 'completed' | '';
@@ -12,33 +18,6 @@ export interface SelectionPreview {
 export interface MessageContextPreview {
   selectionPreview?: SelectionPreview;
   cellOutputPreview?: SelectionPreview;
-}
-
-export interface HistoryEntry {
-  role: TextRole;
-  content: string;
-  selectionPreview?: SelectionPreview;
-  cellOutputPreview?: SelectionPreview;
-}
-
-export interface RateLimitWindowSnapshot {
-  usedPercent: number | null;
-  windowMinutes: number | null;
-  resetsAt: number | null;
-}
-
-export interface ContextWindowSnapshot {
-  windowTokens: number | null;
-  usedTokens: number | null;
-  leftTokens: number | null;
-  usedPercent: number | null;
-}
-
-export interface CodexRateLimitsSnapshot {
-  updatedAt: string | null;
-  primary: RateLimitWindowSnapshot | null;
-  secondary: RateLimitWindowSnapshot | null;
-  contextWindow: ContextWindowSnapshot | null;
 }
 
 export interface ActivityItem {
