@@ -19,12 +19,21 @@ import {
   buildSendMessage,
   buildStartSessionMessage
 } from './protocol';
+import {
+  coerceMessageContextPreview as coerceMessageContextPreviewShared,
+  coerceRateLimitsSnapshot as coerceRateLimitsSnapshotShared,
+  coerceSessionHistory as coerceSessionHistoryShared,
+  coerceSelectionPreview as coerceSelectionPreviewShared,
+  truncateEnd as truncateEndShared
+} from './handlers/codexMessageUtils';
 
 marked.use(
   markedKatex({
     throwOnError: false
   })
 );
+
+const truncateEnd = truncateEndShared;
 
 function PlusIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
   return (
@@ -1041,41 +1050,17 @@ function coerceSessionThreadSyncEvent(value: string): SessionThreadSyncEvent | n
 }
 
 function coerceSelectionPreview(value: unknown): SelectionPreview | undefined {
-  if (!value || typeof value !== 'object') {
-    return undefined;
-  }
-  const raw = value as Record<string, unknown>;
-  const locationLabel = typeof raw.locationLabel === 'string' ? raw.locationLabel.trim() : '';
-  const previewText =
-    typeof raw.previewText === 'string'
-      ? truncateEnd(normalizeSelectionPreviewText(raw.previewText), MESSAGE_SELECTION_PREVIEW_STORED_MAX_CHARS)
-      : '';
-  if (!locationLabel || !previewText) {
-    return undefined;
-  }
-  return { locationLabel, previewText };
+  return coerceSelectionPreviewShared(value, {
+    normalize: normalizeSelectionPreviewText,
+    maxChars: MESSAGE_SELECTION_PREVIEW_STORED_MAX_CHARS
+  });
 }
 
 function coerceMessageContextPreview(value: unknown): MessageContextPreview | undefined {
-  if (!value || typeof value !== 'object') {
-    return undefined;
-  }
-  const raw = value as Record<string, unknown>;
-  const selectionPreview = coerceSelectionPreview(raw.selectionPreview);
-  const cellOutputPreview = coerceSelectionPreview(raw.cellOutputPreview);
-  if (selectionPreview || cellOutputPreview) {
-    return {
-      ...(selectionPreview ? { selectionPreview } : {}),
-      ...(cellOutputPreview ? { cellOutputPreview } : {})
-    };
-  }
-
-  // Legacy format: a single preview object was stored as selection preview.
-  const legacySelectionPreview = coerceSelectionPreview(raw);
-  if (legacySelectionPreview) {
-    return { selectionPreview: legacySelectionPreview };
-  }
-  return undefined;
+  return coerceMessageContextPreviewShared(value, {
+    normalize: normalizeSelectionPreviewText,
+    maxChars: MESSAGE_SELECTION_PREVIEW_STORED_MAX_CHARS
+  });
 }
 
 function coerceSessionHistory(
@@ -1086,29 +1071,15 @@ function coerceSessionHistory(
   selectionPreview?: SelectionPreview;
   cellOutputPreview?: SelectionPreview;
 }> {
-  if (!Array.isArray(raw)) {
-    return [];
-  }
-  const result: Array<{
+  return coerceSessionHistoryShared(raw, {
+    normalize: normalizeSelectionPreviewText,
+    maxChars: MESSAGE_SELECTION_PREVIEW_STORED_MAX_CHARS
+  }) as Array<{
     role: TextRole;
     content: string;
     selectionPreview?: SelectionPreview;
     cellOutputPreview?: SelectionPreview;
-  }> = [];
-  for (const item of raw) {
-    if (!item || typeof item !== 'object') {
-      continue;
-    }
-    const role = (item as any).role;
-    const content = (item as any).content;
-    if ((role !== 'user' && role !== 'assistant' && role !== 'system') || typeof content !== 'string') {
-      continue;
-    }
-    const selectionPreview = coerceSelectionPreview((item as any).selectionPreview);
-    const cellOutputPreview = coerceSelectionPreview((item as any).cellOutputPreview);
-    result.push({ role, content, selectionPreview, cellOutputPreview });
-  }
-  return result;
+  }>;
 }
 
 function createSession(
@@ -1409,46 +1380,8 @@ function safePreview(value: unknown, max = 220): string {
   }
 }
 
-function coerceRateLimitWindow(raw: any): RateLimitWindowSnapshot | null {
-  if (!raw || typeof raw !== 'object') {
-    return null;
-  }
-  const usedPercent = typeof raw.usedPercent === 'number' && Number.isFinite(raw.usedPercent) ? raw.usedPercent : null;
-  const windowMinutes =
-    typeof raw.windowMinutes === 'number' && Number.isFinite(raw.windowMinutes) ? Math.round(raw.windowMinutes) : null;
-  const resetsAt = typeof raw.resetsAt === 'number' && Number.isFinite(raw.resetsAt) ? Math.round(raw.resetsAt) : null;
-  return { usedPercent, windowMinutes, resetsAt };
-}
-
-function coerceContextWindowSnapshot(raw: any): ContextWindowSnapshot | null {
-  if (!raw || typeof raw !== 'object') {
-    return null;
-  }
-  const windowTokens =
-    typeof raw.windowTokens === 'number' && Number.isFinite(raw.windowTokens) ? Math.round(raw.windowTokens) : null;
-  const usedTokens =
-    typeof raw.usedTokens === 'number' && Number.isFinite(raw.usedTokens) ? Math.round(raw.usedTokens) : null;
-  const leftTokens =
-    typeof raw.leftTokens === 'number' && Number.isFinite(raw.leftTokens) ? Math.round(raw.leftTokens) : null;
-  const usedPercent =
-    typeof raw.usedPercent === 'number' && Number.isFinite(raw.usedPercent) ? raw.usedPercent : null;
-  if (windowTokens == null && usedTokens == null && leftTokens == null && usedPercent == null) {
-    return null;
-  }
-  return { windowTokens, usedTokens, leftTokens, usedPercent };
-}
-
 function coerceRateLimitsSnapshot(raw: any): CodexRateLimitsSnapshot | null {
-  if (!raw || typeof raw !== 'object') {
-    return null;
-  }
-  const updatedAt = typeof raw.updatedAt === 'string' && raw.updatedAt.trim() ? raw.updatedAt : null;
-  return {
-    updatedAt,
-    primary: coerceRateLimitWindow(raw.primary),
-    secondary: coerceRateLimitWindow(raw.secondary),
-    contextWindow: coerceContextWindowSnapshot(raw.contextWindow)
-  };
+  return coerceRateLimitsSnapshotShared(raw);
 }
 
 function clampNumber(value: number, min: number, max: number): number {
@@ -1516,16 +1449,6 @@ function formatTokenCount(value: number | null): string {
     return '--';
   }
   return value.toLocaleString();
-}
-
-function truncateEnd(text: string, max: number): string {
-  if (text.length <= max) {
-    return text;
-  }
-  if (max <= 3) {
-    return text.slice(0, max);
-  }
-  return `${text.slice(0, max - 3)}...`;
 }
 
 function safeJsonPreview(value: any, maxChars = 6000): string {

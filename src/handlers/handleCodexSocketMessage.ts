@@ -1,5 +1,6 @@
 import { type SetStateAction } from 'react';
 import { parseServerMessage, type ModelCatalogEntry } from '../protocol';
+import { splitStoredMessagePreview as splitStoredMessagePreviewShared, truncateEnd } from './codexMessageUtils';
 
 type TextRole = 'user' | 'assistant' | 'system';
 type ActivityPhase = 'started' | 'completed' | '';
@@ -274,7 +275,7 @@ export function handleCodexSocketMessage(
                       if (!candidate || candidate.contentHash !== contentHash) {
                         continue;
                       }
-                      const storedPreview = splitStoredMessagePreview(candidate.preview);
+                      const storedPreview = splitStoredMessagePreviewShared(candidate.preview);
                       selectionPreview = storedPreview.selectionPreview;
                       cellOutputPreview = storedPreview.cellOutputPreview;
                       break;
@@ -440,41 +441,4 @@ export function handleCodexSocketMessage(
       context.runToSessionKeyRef.current.delete(runId);
     }
   }
-}
-
-function truncateEnd(input: string, maxLength: number): string {
-  if (!input) {
-    return '';
-  }
-  if (maxLength <= 0) {
-    return '';
-  }
-  const text = String(input);
-  return text.length <= maxLength ? text : `${text.slice(0, maxLength)}...`;
-}
-
-function splitStoredMessagePreview(value: unknown): {
-  selectionPreview?: unknown;
-  cellOutputPreview?: unknown;
-} {
-  if (!value || typeof value !== 'object') {
-    return {};
-  }
-
-  const raw = value as Record<string, unknown>;
-  const hasNestedPreview =
-    Object.prototype.hasOwnProperty.call(raw, 'selectionPreview') ||
-    Object.prototype.hasOwnProperty.call(raw, 'cellOutputPreview');
-  if (hasNestedPreview) {
-    return {
-      selectionPreview: raw.selectionPreview,
-      cellOutputPreview: raw.cellOutputPreview
-    };
-  }
-
-  // Legacy format: a single preview object was stored directly as selectionPreview.
-  if (Object.prototype.hasOwnProperty.call(raw, 'locationLabel') && Object.prototype.hasOwnProperty.call(raw, 'previewText')) {
-    return { selectionPreview: raw };
-  }
-  return {};
 }

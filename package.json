@@ -27,6 +27,7 @@
     "watch:lib": "tsc -w -p tsconfig.json",
     "watch:labextension": "jupyter labextension watch . --development --source-map",
     "clean": "rimraf lib tsconfig.tsbuildinfo",
+    "test:unit": "playwright test --config playwright.unit.config.cjs",
     "test:e2e": "playwright test",
     "test:e2e:queue-repro": "playwright test tests/e2e/queue-multitab-repro.spec.js",
     "test:e2e:headed": "playwright test --headed",
