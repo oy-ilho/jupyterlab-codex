@@ -43,7 +43,18 @@ if [[ -z "$BASE_URL" ]]; then
 fi
 
 echo "[playwright] running queue reproduction e2e against $BASE_URL"
-PLAYWRIGHT_BASE_URL="$BASE_URL" \
-PLAYWRIGHT_CODEX_COMMAND="${PLAYWRIGHT_CODEX_COMMAND:-$ROOT_DIR/tests/e2e/mock-codex-cli.py}" \
-MOCK_CODEX_DELAY_MS="${MOCK_CODEX_DELAY_MS:-2600}" \
-playwright test tests/e2e/queue-multitab-repro.spec.js "$@"
+if [ -x "$ROOT_DIR/node_modules/.bin/playwright" ]; then
+  env \
+    PLAYWRIGHT_BASE_URL="$BASE_URL" \
+    PLAYWRIGHT_CODEX_COMMAND="${PLAYWRIGHT_CODEX_COMMAND:-$ROOT_DIR/tests/e2e/mock-codex-cli.py}" \
+    MOCK_CODEX_DELAY_MS="${MOCK_CODEX_DELAY_MS:-2600}" \
+    "$ROOT_DIR/node_modules/.bin/playwright" \
+      test tests/e2e/queue-multitab-repro.spec.js "$@"
+else
+  env \
+    PLAYWRIGHT_BASE_URL="$BASE_URL" \
+    PLAYWRIGHT_CODEX_COMMAND="${PLAYWRIGHT_CODEX_COMMAND:-$ROOT_DIR/tests/e2e/mock-codex-cli.py}" \
+    MOCK_CODEX_DELAY_MS="${MOCK_CODEX_DELAY_MS:-2600}" \
+    npx playwright \
+      test tests/e2e/queue-multitab-repro.spec.js "$@"
+fi

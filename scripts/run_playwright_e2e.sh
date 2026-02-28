@@ -43,5 +43,10 @@ if [[ -z "$BASE_URL" ]]; then
   exit 1
 fi
 
-PLAYWRIGHT_BASE_URL="$BASE_URL" \
-playwright test "$@"
+if [ -x "$ROOT_DIR/node_modules/.bin/playwright" ]; then
+  env PLAYWRIGHT_BASE_URL="$BASE_URL" \
+    "$ROOT_DIR/node_modules/.bin/playwright" test "$@"
+else
+  env PLAYWRIGHT_BASE_URL="$BASE_URL" \
+    npx playwright test "$@"
+fi
