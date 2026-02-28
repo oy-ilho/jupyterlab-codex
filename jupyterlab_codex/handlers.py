@@ -274,21 +274,31 @@ class CodexWSHandler(WebSocketHandler):
             # Prefer the client-provided thread id when available, but validate
             # that it belongs to the current notebook before trusting it.
             if resolved_session_id:
-                requested_matches_notebook = self._store.session_matches_notebook(
-                    resolved_session_id, notebook_path, notebook_os_path
-                )
-                if requested_matches_notebook:
-                    session_resolution = "client"
-                else:
+                requested_session_exists = self._store.has_session(resolved_session_id)
+                if not requested_session_exists:
+                    # The client can send a brand-new local thread id before the
+                    # server has persisted metadata for it. That is not a mismatch.
                     if mapped_session_id and mapped_session_id != resolved_session_id:
                         resolved_session_id = mapped_session_id
-                        session_resolution = "mapping-on-mismatch"
+                        session_resolution = "mapping-on-missing"
                     else:
-                        resolved_session_id = str(uuid.uuid4())
-                        session_resolution = "new-on-mismatch"
-                    session_resolution_notice = (
-                        "Thread mismatch detected. Switched to a notebook-matched thread to avoid context loss."
+                        session_resolution = "client-new"
+                else:
+                    requested_matches_notebook = self._store.session_matches_notebook(
+                        resolved_session_id, notebook_path, notebook_os_path
                     )
+                    if requested_matches_notebook:
+                        session_resolution = "client"
+                    else:
+                        if mapped_session_id and mapped_session_id != resolved_session_id:
+                            resolved_session_id = mapped_session_id
+                            session_resolution = "mapping-on-mismatch"
+                        else:
+                            resolved_session_id = str(uuid.uuid4())
+                            session_resolution = "new-on-mismatch"
+                        session_resolution_notice = (
+                            "Thread mismatch detected. Switched to a notebook-matched thread to avoid context loss."
+                        )
             else:
                 resolved_session_id = mapped_session_id or ""
                 session_resolution = "mapping" if resolved_session_id else "new"

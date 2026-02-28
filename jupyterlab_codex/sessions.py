@@ -291,6 +291,15 @@ class SessionStore:
         meta = self._load_meta(session_id)
         return meta.get("notebook_path", "")
 
+    def has_session(self, session_id: str) -> bool:
+        normalized_session_id = (session_id or "").strip()
+        if not normalized_session_id:
+            return False
+        if not self._logging_enabled:
+            return False
+        meta = self._load_meta(normalized_session_id)
+        return isinstance(meta, dict) and bool(meta)
+
     def session_matches_notebook(
         self, session_id: str, notebook_path: str, notebook_os_path: str = ""
     ) -> bool:
