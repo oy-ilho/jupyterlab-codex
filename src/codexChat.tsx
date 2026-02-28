@@ -4005,48 +4005,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     if (!sessionKey) {
       return;
     }
-    if (queueSendLocksRef.current.has(sessionKey)) {
-      return;
-    }
-
-    const queuedTurn = queuedTurnsRef.current.get(sessionKey);
-    if (!queuedTurn) {
-      return;
-    }
-
-    const socket = wsRef.current;
-    if (!socketConnected || isReconnecting || !socket || socket.readyState !== WebSocket.OPEN) {
-      clearQueuedTurn(sessionKey, { restoreInput: true });
-      return;
-    }
-
-    queueSendLocksRef.current.add(sessionKey);
-    window.setTimeout(() => {
-      void (async () => {
-        try {
-          const pending = queuedTurnsRef.current.get(sessionKey);
-          if (!pending) {
-            return;
-          }
-          const sent = await sendMessage({
-            forcedText: pending.text,
-            forcedNotebookPath: pending.notebookPath,
-            forcedSessionKey: sessionKey,
-            skipRunStateCheck: true
-          });
-          if (!sent) {
-            clearQueuedTurn(sessionKey, { restoreInput: true, fallbackText: pending.text });
-            return;
-          }
-          clearQueuedTurn(sessionKey);
-        } catch (err) {
-          clearQueuedTurn(sessionKey, { restoreInput: true });
-          console.error('[Codex] queue auto-send failed', err);
-        } finally {
-          queueSendLocksRef.current.delete(sessionKey);
-        }
-      })();
-    }, 0);
+    clearQueuedTurn(sessionKey);
   }
 
   async function sendMessage(options?: {
@@ -4267,23 +4226,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const progress = currentSession?.progress ?? '';
   const progressKind = currentSession?.progressKind ?? '';
   const status: PanelStatus = socketConnected ? currentSession?.runState ?? 'ready' : 'disconnected';
-  const queuedTurnForCurrentSession = currentNotebookSessionKey
-    ? queuedTurns.get(currentNotebookSessionKey) || null
-    : null;
-  const hasQueuedTurnForCurrentSession = Boolean(queuedTurnForCurrentSession);
-
-  useEffect(() => {
-    if (!socketConnected || isReconnecting || queuedTurns.size === 0) {
-      return;
-    }
-    for (const sessionKey of queuedTurns.keys()) {
-      const session = sessions.get(sessionKey);
-      if (!session || session.runState !== 'ready') {
-        continue;
-      }
-      onSessionDoneForQueue(sessionKey);
-    }
-  }, [queuedTurns, sessions, socketConnected, isReconnecting]);
 
   useEffect(() => {
     closeSelectionPopover();
@@ -4338,13 +4280,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     status !== 'disconnected' &&
     currentNotebookPath.length > 0 &&
     currentSession?.pairedOk !== false;
-  const canQueueFollowUp =
-    status === 'running' &&
-    currentNotebookPath.length > 0 &&
-    currentSession?.pairedOk !== false &&
-    Boolean(trimmedInput);
-  const sendButtonMode: 'send' | 'stop' | 'queue' =
-    status === 'running' ? (canQueueFollowUp ? 'queue' : 'stop') : 'send';
+  const sendButtonMode: 'send' | 'stop' = status === 'running' ? 'stop' : 'send';
   const runningSummary = status === 'running' ? progress || 'Working...' : '';
   const activeModelOption = currentSession?.selectedModelOption ?? modelOption;
   const activeReasoningEffort = currentSession?.selectedReasoningEffort ?? reasoningEffort;
@@ -4842,26 +4778,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                 </button>
               </div>
             </div>
-            {queuedTurnForCurrentSession && (
-              <div
-                className="jp-CodexComposer-queued"
-                role="status"
-                aria-live="polite"
-                title={queuedTurnForCurrentSession.text}
-              >
-                <span className="jp-CodexComposer-queuedLabel">Queued</span>
-                <span className="jp-CodexComposer-queuedText">{queuedTurnForCurrentSession.text}</span>
-                <button
-                  type="button"
-                  className="jp-CodexComposer-queuedRemove"
-                  onClick={removeQueuedTurnForCurrentSession}
-                  aria-label="Remove queued follow-up"
-                  title="Remove queued follow-up"
-                >
-                  <XIcon width={10} height={10} />
-                </button>
-              </div>
-            )}
 	          <textarea
 	            ref={composerTextareaRef}
 	            value={input}
@@ -4888,9 +4804,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 	              if (e.key !== 'Enter' || e.shiftKey) {
                   return;
                 }
-                if (status === 'running' && trimmedInput) {
+                if (status === 'running') {
                   e.preventDefault();
-                  queueCurrentInput();
                   return;
                 }
                 if (canSendNow) {
@@ -5122,34 +5037,18 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 	            <div className="jp-CodexComposer-toolbarRight">
 	              <button
 		                type="button"
-		                className={`jp-CodexSendBtn${sendButtonMode === 'stop' ? ' is-stop' : ''}${sendButtonMode === 'queue' ? ' is-queue' : ''}`}
+		                className={`jp-CodexSendBtn${sendButtonMode === 'stop' ? ' is-stop' : ''}`}
                 onClick={() => {
-                  if (sendButtonMode === 'queue') {
-                    queueCurrentInput();
-                    return;
-                  }
                   if (sendButtonMode === 'stop') {
                     cancelRun();
                     return;
                   }
                   void sendMessage();
                 }}
-                disabled={sendButtonDisabled || (sendButtonMode === 'queue' && hasQueuedTurnForCurrentSession)}
-                aria-label={
-                  sendButtonMode === 'queue'
-                    ? hasQueuedTurnForCurrentSession
-                      ? 'Queued follow-up already set'
-                      : 'Queue follow-up'
-                    : sendButtonMode === 'stop'
-                    ? 'Stop run'
-                    : 'Send'
-                }
+                disabled={sendButtonDisabled}
+                aria-label={sendButtonMode === 'stop' ? 'Stop run' : 'Send'}
                 title={
-                  sendButtonMode === 'queue'
-                    ? hasQueuedTurnForCurrentSession
-                      ? 'Remove queued follow-up to queue a new one'
-                      : 'Queue follow-up for automatic send after the current run'
-                    : sendButtonMode === 'stop'
+                  sendButtonMode === 'stop'
                     ? currentSession?.activeRunId
                       ? `runId: ${currentSession.activeRunId}`
                       : 'Waiting for run id...'
@@ -5158,9 +5057,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                       : 'Send'
                 }
               >
-                {sendButtonMode === 'queue' ? (
-                  <QueueIcon width={18} height={18} />
-                ) : sendButtonMode === 'stop' ? (
+                {sendButtonMode === 'stop' ? (
                   <StopIcon width={18} height={18} />
                 ) : (
                   <ArrowUpIcon width={18} height={18} />
