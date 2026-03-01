@@ -48,6 +48,8 @@ class TestProtocolBuilders(unittest.TestCase):
             "images": [{"a": 1}],
             "uiSelectionPreview": {"locationLabel": "x", "previewText": "y"},
             "uiCellOutputPreview": {"locationLabel": "Cell 8 Output", "previewText": "42"},
+            "selectionTruncated": "true",
+            "cellOutputTruncated": 0,
         }
         msg_type, payload = parse_client_message(message)
         self.assertEqual(msg_type, "send")
@@ -58,6 +60,8 @@ class TestProtocolBuilders(unittest.TestCase):
         self.assertEqual(payload["selection"], "sel")
         self.assertEqual(payload["images"], [{"a": 1}])
         self.assertEqual(payload["uiCellOutputPreview"], {"locationLabel": "Cell 8 Output", "previewText": "42"})
+        self.assertTrue(payload["selectionTruncated"])
+        self.assertFalse(payload["cellOutputTruncated"])
 
     def test_parse_client_invalid_message(self):
         with self.assertRaises(ProtocolParseError):

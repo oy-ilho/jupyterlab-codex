@@ -163,6 +163,8 @@ export interface ParsedClientSendMessage {
   images: unknown[];
   uiSelectionPreview?: unknown;
   uiCellOutputPreview?: unknown;
+  selectionTruncated: boolean;
+  cellOutputTruncated: boolean;
 }
 
 export interface ParsedClientDeleteSessionMessage {
@@ -230,6 +232,8 @@ export interface ClientSendMessage {
   images?: { name: string; dataUrl: string }[];
   uiSelectionPreview?: unknown;
   uiCellOutputPreview?: unknown;
+  selectionTruncated?: boolean;
+  cellOutputTruncated?: boolean;
 }
 
 export interface ClientCancelMessage {
@@ -511,6 +515,8 @@ export function buildSendMessage(input: {
   images?: { name: string; dataUrl: string }[];
   uiSelectionPreview?: unknown;
   uiCellOutputPreview?: unknown;
+  selectionTruncated?: boolean;
+  cellOutputTruncated?: boolean;
 }): ClientSendMessage {
   return {
     type: 'send',
@@ -526,7 +532,9 @@ export function buildSendMessage(input: {
     ...(input.cellOutput ? { cellOutput: input.cellOutput } : {}),
     ...(input.images ? { images: input.images } : {}),
     ...(input.uiSelectionPreview ? { uiSelectionPreview: input.uiSelectionPreview } : {}),
-    ...(input.uiCellOutputPreview ? { uiCellOutputPreview: input.uiCellOutputPreview } : {})
+    ...(input.uiCellOutputPreview ? { uiCellOutputPreview: input.uiCellOutputPreview } : {}),
+    ...(input.selectionTruncated ? { selectionTruncated: true } : {}),
+    ...(input.cellOutputTruncated ? { cellOutputTruncated: true } : {})
   };
 }
 

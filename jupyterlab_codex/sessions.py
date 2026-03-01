@@ -170,6 +170,8 @@ class SessionStore:
         user_content: str,
         selection: str,
         cell_output: str,
+        selection_truncated: bool = False,
+        cell_output_truncated: bool = False,
         cwd: str | None = None,
         notebook_mode: str = "",
         include_history: bool = True,
@@ -276,10 +278,20 @@ class SessionStore:
             parts.append("Current Cell Content:")
             parts.append(selection)
             parts.append("")
+        if include_selection and selection_truncated:
+            parts.append(
+                "System: Current Cell Content was truncated before sending due size limits. If full context is needed, inspect the source file directly."
+            )
+            parts.append("")
 
         if include_cell_output and cell_output:
             parts.append("Current Cell Output:")
             parts.append(cell_output)
+            parts.append("")
+        if include_cell_output and cell_output_truncated:
+            parts.append(
+                "System: Current Cell Output was truncated before sending due size limits."
+            )
             parts.append("")
 
         parts.append("User:")

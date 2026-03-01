@@ -64,6 +64,8 @@ def parse_client_message(raw: Any) -> Tuple[str, Dict[str, Any]]:
                 "images": raw.get("images") if isinstance(raw.get("images"), list) else [],
                 "uiSelectionPreview": raw.get("uiSelectionPreview"),
                 "uiCellOutputPreview": raw.get("uiCellOutputPreview"),
+                "selectionTruncated": _coerce_bool(raw.get("selectionTruncated")),
+                "cellOutputTruncated": _coerce_bool(raw.get("cellOutputTruncated")),
             },
         )
 

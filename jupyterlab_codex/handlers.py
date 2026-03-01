@@ -396,6 +396,8 @@ class CodexWSHandler(WebSocketHandler):
             cell_output = str(cell_output) if cell_output is not None else ""
         ui_selection_preview = _coerce_ui_selection_preview(payload.get("uiSelectionPreview"))
         ui_cell_output_preview = _coerce_ui_cell_output_preview(payload.get("uiCellOutputPreview"))
+        selection_truncated = bool(payload.get("selectionTruncated"))
+        cell_output_truncated = bool(payload.get("cellOutputTruncated"))
         images_payload = payload.get("images")
         notebook_path = payload.get("notebookPath", "")
         requested_model_raw = payload.get("model")
@@ -593,6 +595,8 @@ class CodexWSHandler(WebSocketHandler):
             content,
             selection,
             cell_output,
+            selection_truncated=selection_truncated,
+            cell_output_truncated=cell_output_truncated,
             cwd=cwd,
             notebook_mode=notebook_mode,
             include_history=False,
@@ -778,6 +782,8 @@ class CodexWSHandler(WebSocketHandler):
                         content,
                         selection,
                         cell_output,
+                        selection_truncated=selection_truncated,
+                        cell_output_truncated=cell_output_truncated,
                         cwd=cwd,
                         notebook_mode=notebook_mode,
                         include_history=True,
@@ -823,6 +829,8 @@ class CodexWSHandler(WebSocketHandler):
                         content,
                         selection,
                         cell_output,
+                        selection_truncated=selection_truncated,
+                        cell_output_truncated=cell_output_truncated,
                         cwd=cwd,
                         notebook_mode=notebook_mode,
                         include_history=True,

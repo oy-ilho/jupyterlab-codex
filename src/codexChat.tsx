@@ -77,7 +77,6 @@ import {
   restoreDocumentViewState,
   toCellOutputPreview,
   toFallbackSelectionPreview,
-  toSelectionPreview,
 } from './codexChatDocumentUtils';
 import {
   buildActiveCellOutputSignature,
@@ -85,6 +84,10 @@ import {
   isDuplicateActiveCellAttachmentSignature,
   makeActiveCellAttachmentDedupKey
 } from './codexChatAttachmentDedup';
+import {
+  buildAttachmentTruncationNotice,
+  limitActiveCellAttachmentPayload
+} from './codexChatAttachmentLimit';
 import {
   ArrowDownIcon,
   ArrowUpIcon,
@@ -303,6 +306,7 @@ const SELECTION_PREVIEWS_STORAGE_KEY = 'jupyterlab-codex:selection-previews';
 const MAX_IMAGE_ATTACHMENTS = 4;
 const MAX_IMAGE_ATTACHMENT_BYTES = 4 * 1024 * 1024; // Avoid huge WebSocket payloads.
 const MAX_IMAGE_ATTACHMENT_TOTAL_BYTES = 6 * 1024 * 1024;
+const MAX_ACTIVE_CELL_ATTACHMENT_TOTAL_CHARS = 4000;
 const MAX_STORED_SELECTION_PREVIEW_THREADS = 80;
 const MAX_STORED_SELECTION_PREVIEW_MESSAGES_PER_THREAD = 10;
 const MAX_SESSION_MESSAGES = 100;
@@ -2544,32 +2548,42 @@ function CodexChat(props: CodexChatProps): JSX.Element {
           selectedTextForContext || getActiveCellText(activeWidget) || getSelectedTextFromFileEditor(activeWidget);
       }
     }
-    const messageSelectionPreview =
-      toSelectionPreview(selectedContext) ||
-      (includeSelectionKey ? toFallbackSelectionPreview(activeWidget, notebookMode, selection) : undefined);
     const includeCellOutputKey =
       includeActiveCellForNextSend && includeActiveCellOutput && notebookMode === 'ipynb';
-    const cellOutput = includeCellOutputKey ? getActiveCellOutput(activeWidget) : '';
-    const messageCellOutputPreview =
-      includeCellOutputKey && cellOutput
-        ? toCellOutputPreview(selectedContext, activeWidget, notebookMode, cellOutput)
+    const cellOutputRaw = includeCellOutputKey ? getActiveCellOutput(activeWidget) : '';
+    const attachmentLimit = limitActiveCellAttachmentPayload(
+      includeSelectionKey ? selection : '',
+      includeCellOutputKey ? cellOutputRaw : '',
+      MAX_ACTIVE_CELL_ATTACHMENT_TOTAL_CHARS
+    );
+    const selectionForAttachment = includeSelectionKey ? attachmentLimit.selection : '';
+    const cellOutputForAttachment = includeCellOutputKey ? attachmentLimit.cellOutput : '';
+    const includeSelectionKeyAfterLimit = Boolean(selectionForAttachment);
+    const includeCellOutputKeyAfterLimit = Boolean(cellOutputForAttachment);
+    const messageSelectionPreview =
+      includeSelectionKeyAfterLimit
+        ? toFallbackSelectionPreview(activeWidget, notebookMode, selectionForAttachment)
         : undefined;
-    const shouldDeduplicateSelection = includeActiveCellForNextSend && includeSelectionKey;
-    const shouldDeduplicateCellOutput = includeActiveCellForNextSend && includeCellOutputKey;
+    const messageCellOutputPreview =
+      includeCellOutputKeyAfterLimit
+        ? toCellOutputPreview(selectedContext, activeWidget, notebookMode, cellOutputForAttachment)
+        : undefined;
+    const shouldDeduplicateSelection = includeActiveCellForNextSend && includeSelectionKeyAfterLimit;
+    const shouldDeduplicateCellOutput = includeActiveCellForNextSend && includeCellOutputKeyAfterLimit;
     const activeCellAttachmentDedupKey = makeActiveCellAttachmentDedupKey(sessionKey, session.threadId);
     const previousActiveCellSignatures =
       lastActiveCellAttachmentSignatureRef.current.get(activeCellAttachmentDedupKey);
     const activeCellSelectionSignature = shouldDeduplicateSelection
       ? buildActiveCellSelectionSignature({
           notebookMode,
-          text: selection,
+          text: selectionForAttachment,
           locationLabel: messageSelectionPreview?.locationLabel
         })
       : '';
     const activeCellOutputSignature = shouldDeduplicateCellOutput
       ? buildActiveCellOutputSignature({
           notebookMode,
-          text: cellOutput,
+          text: cellOutputForAttachment,
           locationLabel: messageCellOutputPreview?.locationLabel
         })
       : '';
@@ -2585,8 +2599,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         previousActiveCellSignatures?.cellOutputSignature,
         activeCellOutputSignature
       );
-    const includeSelectionKeyForSend = includeSelectionKey && !hasDuplicateSelectionAttachment;
-    const includeCellOutputKeyForSend = includeCellOutputKey && !hasDuplicateCellOutputAttachment;
+    const includeSelectionKeyForSend = includeSelectionKeyAfterLimit && !hasDuplicateSelectionAttachment;
+    const includeCellOutputKeyForSend = includeCellOutputKeyAfterLimit && !hasDuplicateCellOutputAttachment;
     const messageSelectionPreviewForSend = hasDuplicateSelectionAttachment ? undefined : messageSelectionPreview;
     const messageCellOutputPreviewForSend = hasDuplicateCellOutputAttachment ? undefined : messageCellOutputPreview;
     const messageContextPreview: MessageContextPreview | undefined =
@@ -2644,8 +2658,10 @@ function CodexChat(props: CodexChatProps): JSX.Element {
             model: selectedModelForSend,
             reasoningEffort: selectedReasoningForSend,
             sandbox: sandboxForSend,
-            ...(includeSelectionKeyForSend ? { selection } : {}),
-            ...(includeCellOutputKeyForSend ? { cellOutput } : {}),
+            ...(includeSelectionKeyForSend ? { selection: selectionForAttachment } : {}),
+            ...(includeCellOutputKeyForSend ? { cellOutput: cellOutputForAttachment } : {}),
+            ...(attachmentLimit.selectionTruncated ? { selectionTruncated: true } : {}),
+            ...(attachmentLimit.cellOutputTruncated ? { cellOutputTruncated: true } : {}),
             ...(images ? { images } : {}),
             ...(messageSelectionPreviewForSend ? { uiSelectionPreview: messageSelectionPreviewForSend } : {}),
             ...(messageCellOutputPreviewForSend ? { uiCellOutputPreview: messageCellOutputPreviewForSend } : {})
@@ -2675,6 +2691,11 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 
     const imageCount = images ? images.length : 0;
     const showReadOnlyWarning = sandboxForSend === 'read-only';
+    const attachmentTruncationNotice = buildAttachmentTruncationNotice(
+      attachmentLimit.selectionTruncated,
+      attachmentLimit.cellOutputTruncated,
+      MAX_ACTIVE_CELL_ATTACHMENT_TOTAL_CHARS
+    );
     if (notebookMode === 'plain_py' || notebookMode === 'jupytext_py') {
       plainPyRunSessionKeyRef.current = sessionKey;
       setIsPlainPyRunInProgress(true);
@@ -2692,6 +2713,16 @@ function CodexChat(props: CodexChatProps): JSX.Element {
             }
           ]
         : [];
+      const truncationNoticeEntry: ChatEntry[] = attachmentTruncationNotice
+        ? [
+            {
+              kind: 'text',
+              id: crypto.randomUUID(),
+              role: 'system',
+              text: normalizeSystemText('system', attachmentTruncationNotice)
+            }
+          ]
+        : [];
       const updatedMessages: ChatEntry[] = [
         ...existing.messages,
         ...warningEntry,
@@ -2703,7 +2734,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
           attachments: imageCount > 0 ? { images: imageCount } : undefined,
           selectionPreview: messageSelectionPreviewForSend,
           cellOutputPreview: messageCellOutputPreviewForSend
-        }
+        },
+        ...truncationNoticeEntry
       ];
       next.set(sessionKey, {
         ...existing,
