@@ -35,6 +35,16 @@ export interface ServerRateLimitsMessage extends ServerMessageBase {
   snapshot: unknown;
 }
 
+export type ServerSessionResolution =
+  | 'client'
+  | 'client-new'
+  | 'force-new'
+  | 'mapping'
+  | 'mapping-on-missing'
+  | 'mapping-on-mismatch'
+  | 'new'
+  | 'new-on-mismatch';
+
 export interface ServerDeleteAllSessionsMessage extends ServerMessageBase {
   type: 'delete_all_sessions';
   ok: boolean;
@@ -56,7 +66,7 @@ export interface ServerStatusMessage extends ServerMessageBase {
   pairedOsPath?: string;
   pairedMessage?: string;
   notebookMode?: string;
-  sessionResolution?: string;
+  sessionResolution?: ServerSessionResolution | string;
   sessionResolutionNotice?: string;
   history?: Array<{
     role: 'user' | 'assistant' | 'system';

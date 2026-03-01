@@ -32,6 +32,8 @@ test('isSessionStartNotice accepts locale variants', () => {
   expect(isSessionStartNotice('スレッドが開始')).toBe(true);
   expect(isSessionStartNotice('セッション開始')).toBe(true);
   expect(isSessionStartNotice('Nueva sesión iniciada')).toBe(true);
+  expect(isSessionStartNotice('任意 메세지', 'new')).toBe(true);
+  expect(isSessionStartNotice('irrelevant text', 'mapping')).toBe(true);
 });
 
 test('isSessionStartNotice rejects unrelated system messages', () => {
@@ -39,4 +41,5 @@ test('isSessionStartNotice rejects unrelated system messages', () => {
   expect(isSessionStartNotice('Authentication required')).toBe(false);
   expect(isSessionStartNotice('Session is running normally')).toBe(false);
   expect(isSessionStartNotice('会話は進行中です')).toBe(false);
+  expect(isSessionStartNotice('Session already running', null)).toBe(false);
 });

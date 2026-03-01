@@ -152,12 +152,27 @@ type StoredSelectionPreviewEntry = {
   contentHash: string;
   preview: MessageContextPreview | null;
 };
+
+function markLocalizedStartNotice(session: NotebookSession): NotebookSession {
+  const firstEntry = session.messages[0];
+  if (
+    firstEntry &&
+    firstEntry.kind === 'text' &&
+    firstEntry.role === 'system' &&
+    isSessionStartNotice(firstEntry.text)
+  ) {
+    firstEntry.sessionResolution = 'client';
+  }
+  return session;
+}
+
 type ChatEntry =
   | {
       kind: 'text';
       id: string;
       role: TextRole;
       text: string;
+      sessionResolution?: unknown;
       attachments?: ChatAttachments;
       selectionPreview?: SelectionPreview;
       cellOutputPreview?: SelectionPreview;
@@ -572,7 +587,7 @@ function createSession(
     sessionKey?: string;
   }
 ): NotebookSession {
-  return createBaseSession<NotebookSession, ModelOptionValue, ReasoningOptionValue, SandboxMode>(
+  const session = createBaseSession<NotebookSession, ModelOptionValue, ReasoningOptionValue, SandboxMode>(
     path,
     intro,
     options as SessionCreateOptions | undefined,
@@ -584,10 +599,11 @@ function createSession(
       normalizeSystemText
     }
   );
+  return markLocalizedStartNotice(session);
 }
 
 function createThreadResetSession(path: string, sessionKey: string, threadId: string): NotebookSession {
-  return createBaseThreadResetSession<NotebookSession, ModelOptionValue, ReasoningOptionValue, SandboxMode>(
+  const session = createBaseThreadResetSession<NotebookSession, ModelOptionValue, ReasoningOptionValue, SandboxMode>(
     path,
     sessionKey,
     threadId,
@@ -599,6 +615,7 @@ function createThreadResetSession(path: string, sessionKey: string, threadId: st
       normalizeSystemText
     }
   );
+  return markLocalizedStartNotice(session);
 }
 
 function normalizeSystemText(role: TextRole, text: string): string {
@@ -2938,7 +2955,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 		            if (entry.kind === 'text') {
 	              const systemVariant =
 	                entry.role === 'system'
-	                  ? isSessionStartNotice(entry.text)
+	                  ? isSessionStartNotice(entry.text, entry.sessionResolution)
 	                    ? ' is-success'
 	                    : ''
 	                  : '';

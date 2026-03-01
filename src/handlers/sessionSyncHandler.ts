@@ -3,6 +3,7 @@ import {
   truncateEnd
 } from './codexMessageUtils';
 import type { CodexSocketMessageHandlerContext } from './handleCodexSocketMessage';
+import { isStructuredSessionStartResolution } from '../codexChatNotice';
 
 type ChatEntry =
   | {
@@ -10,6 +11,7 @@ type ChatEntry =
       id: string;
       role: 'user' | 'assistant' | 'system';
       text: string;
+      sessionResolution?: unknown;
       attachments?: unknown;
       selectionPreview?: unknown;
       cellOutputPreview?: unknown;
@@ -35,6 +37,7 @@ type SessionSyncMessage = {
   type: 'status' | 'error' | 'done';
   runId?: string;
   sessionId?: unknown;
+  sessionResolution?: unknown;
   pairedOk?: unknown;
   pairedPath?: unknown;
   pairedOsPath?: unknown;
@@ -56,6 +59,22 @@ type SessionSyncMessage = {
   effectiveSandbox?: unknown;
   notebookPath?: unknown;
 };
+
+function makeSessionStartIntro(
+  context: CodexSocketMessageHandlerContext,
+  sessionResolution?: unknown
+): Extract<
+  ChatEntry,
+  { kind: 'text'; role: 'system'; text: string }
+> {
+  return {
+    kind: 'text',
+    id: crypto.randomUUID(),
+    role: 'system',
+    text: context.normalizeSystemText('system', 'Session started'),
+    sessionResolution
+  };
+}
 
 function applySyncPairing(context: CodexSocketMessageHandlerContext, targetSessionKey: string, payload: any): void {
   const pairedOk = typeof payload?.pairedOk === 'boolean' ? payload.pairedOk : null;
@@ -107,24 +126,21 @@ function appendHistoryFromStatus(
         entry.kind === 'text' && (entry.role === 'user' || entry.role === 'assistant')
     );
     if (!hasConversation && history.length > 0) {
+      const existingSystemEntry =
+        existing.messages.find((entry): entry is Extract<ChatEntry, { kind: 'text'; role: 'system'; text: string }> =>
+          entry.kind === 'text' && entry.role === 'system'
+        ) ?? undefined;
+      const existingStartNoticeEntry =
+        existingSystemEntry &&
+        context.isSessionStartNotice(existingSystemEntry.text || '', msg.sessionResolution);
+      const hasStructuredStartNotice = isStructuredSessionStartResolution(msg.sessionResolution);
       const introEntry =
-        existing.messages.find(
-          (entry): entry is Extract<ChatEntry, { kind: 'text'; role: 'system'; text: string }> =>
-            entry.kind === 'text' &&
-            entry.role === 'system' &&
-            context.isSessionStartNotice(entry.text || '')
-        ) ??
-        ({
-          kind: 'text',
-          id: crypto.randomUUID(),
-          role: 'system',
-          text: context.normalizeSystemText('system', 'Session started')
-        } as {
-          kind: 'text';
-          id: string;
-          role: 'system';
-          text: string;
-        });
+        hasStructuredStartNotice
+          ? makeSessionStartIntro(context, msg.sessionResolution)
+          : existingStartNoticeEntry
+            ? existingSystemEntry
+            : existingSystemEntry ??
+              makeSessionStartIntro(context, msg.sessionResolution);
 
       const storedUserEntries = context.getStoredSelectionPreviews().get(nextThreadId) ?? [];
       let storedUserCursor = 0;

@@ -234,6 +234,98 @@ test('status message restores history and maps thread id', () => {
   expect(state.sessionPairs.get('doc:test')?.runState).toBe('running');
 });
 
+test('status message normalizes intro to canonical start text when sessionResolution is structured', () => {
+  const { state, context } = createFixture();
+  context.createSession('', 'セッション開始', { sessionKey: 'doc:test' });
+
+  handleCodexSocketMessage(
+    {
+      type: 'status',
+      state: 'running',
+      sessionContextKey: 'doc:test',
+      sessionId: 'thread-restore',
+      notebookPath: '/notebook.ipynb',
+      sessionResolution: 'mapping',
+      history: [{ role: 'user', content: 'hello' }]
+    },
+    context
+  );
+
+  const session = state.sessions.get('doc:test') as Record<string, any>;
+  const intro = session?.messages.find((entry: any) => entry.kind === 'text' && entry.role === 'system')?.text;
+  expect(intro).toBe('Session started');
+  const introEntry = session?.messages.find(
+    (entry: any) => entry.kind === 'text' && entry.role === 'system'
+  ) as { sessionResolution?: unknown } | undefined;
+  expect(introEntry?.sessionResolution).toBe('mapping');
+});
+
+test('status message uses existing localized intro when it is detected as a start notice and no structured sessionResolution is present', () => {
+  const { state, context } = createFixture();
+  context.createSession('', '세션 시작됨', { sessionKey: 'doc:test' });
+  context.isSessionStartNotice = (text: string) => text.includes('세션 시작');
+
+  handleCodexSocketMessage(
+    {
+      type: 'status',
+      state: 'running',
+      sessionContextKey: 'doc:test',
+      sessionId: 'thread-restore',
+      notebookPath: '/notebook.ipynb',
+      history: [{ role: 'user', content: 'hello' }]
+    },
+    context
+  );
+
+  const session = state.sessions.get('doc:test') as Record<string, any>;
+  const intro = session?.messages.find((entry: any) => entry.kind === 'text' && entry.role === 'system')?.text;
+  expect(intro).toBe('세션 시작됨');
+});
+
+test('status message normalizes intro to canonical start text for structured sessionResolution regardless of existing intro text', () => {
+  const { state, context } = createFixture();
+  context.createSession('', '세션 시작됨', { sessionKey: 'doc:test' });
+
+  handleCodexSocketMessage(
+    {
+      type: 'status',
+      state: 'running',
+      sessionContextKey: 'doc:test',
+      sessionId: 'thread-restore',
+      notebookPath: '/notebook.ipynb',
+      sessionResolution: 'new',
+      history: [{ role: 'user', content: 'hello' }]
+    },
+    context
+  );
+
+  const session = state.sessions.get('doc:test') as Record<string, any>;
+  const intro = session?.messages.find((entry: any) => entry.kind === 'text' && entry.role === 'system')?.text;
+  expect(intro).toBe('Session started');
+});
+
+test('status message treats structured sessionResolution case-insensitively', () => {
+  const { state, context } = createFixture();
+  context.createSession('', '세션 시작됨', { sessionKey: 'doc:test' });
+
+  handleCodexSocketMessage(
+    {
+      type: 'status',
+      state: 'running',
+      sessionContextKey: 'doc:test',
+      sessionId: 'thread-restore',
+      notebookPath: '/notebook.ipynb',
+      sessionResolution: '  New-On-Mismatch ',
+      history: [{ role: 'user', content: 'hello' }]
+    },
+    context
+  );
+
+  const session = state.sessions.get('doc:test') as Record<string, any>;
+  const intro = session?.messages.find((entry: any) => entry.kind === 'text' && entry.role === 'system')?.text;
+  expect(intro).toBe('Session started');
+});
+
 test('error message saves suggested command path and logs error', () => {
   const { state, context } = createFixture();
   context.createSession('', 'Session started', { sessionKey: 'doc:test' });

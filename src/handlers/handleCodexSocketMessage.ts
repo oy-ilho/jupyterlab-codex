@@ -92,7 +92,7 @@ export interface CodexSocketMessageHandlerContext {
   getStoredSelectionPreviews: () => Map<string, Array<{ contentHash: string; preview: unknown | null }>>;
   hashSelectionPreviewContent: (text: string) => string;
   hasDeleteAllPending: () => boolean;
-  isSessionStartNotice: (text: string) => boolean;
+  isSessionStartNotice: (text: string, sessionResolution?: unknown) => boolean;
   markDeleteAllPending: () => void;
   normalizeSystemText: (role: 'user' | 'assistant' | 'system', text: string) => string;
   notifyRunDone: (sessionKey: string, notebookPath: string, cancelled: boolean, exitCode: number | null) => void;
@@ -202,4 +202,3 @@ export function handleCodexSocketMessage(
     return;
   }
 }
-
