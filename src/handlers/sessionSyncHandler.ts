@@ -33,6 +33,17 @@ type ChatEntry =
       };
     };
 
+type SessionStartTextEntry = {
+  kind: 'text';
+  id: string;
+  role: 'system';
+  text: string;
+  sessionResolution?: unknown;
+  attachments?: unknown;
+  selectionPreview?: unknown;
+  cellOutputPreview?: unknown;
+};
+
 type SessionSyncMessage = {
   type: 'status' | 'error' | 'done';
   runId?: string;
@@ -60,13 +71,7 @@ type SessionSyncMessage = {
   notebookPath?: unknown;
 };
 
-function makeSessionStartIntro(
-  context: CodexSocketMessageHandlerContext,
-  sessionResolution?: unknown
-): Extract<
-  ChatEntry,
-  { kind: 'text'; role: 'system'; text: string }
-> {
+function makeSessionStartIntro(context: CodexSocketMessageHandlerContext, sessionResolution?: unknown): SessionStartTextEntry {
   return {
     kind: 'text',
     id: crypto.randomUUID(),
@@ -127,9 +132,9 @@ function appendHistoryFromStatus(
     );
     if (!hasConversation && history.length > 0) {
       const existingSystemEntry =
-        existing.messages.find((entry): entry is Extract<ChatEntry, { kind: 'text'; role: 'system'; text: string }> =>
-          entry.kind === 'text' && entry.role === 'system'
-        ) ?? undefined;
+        existing.messages.find((entry): entry is ChatEntry => entry.kind === 'text' && entry.role === 'system') as
+          | SessionStartTextEntry
+          | undefined;
       const existingStartNoticeEntry =
         existingSystemEntry &&
         context.isSessionStartNotice(existingSystemEntry.text || '', msg.sessionResolution);
