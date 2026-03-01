@@ -35,6 +35,7 @@
     "test:e2e:install": "playwright install chromium",
     "test:e2e:repro-local": "bash scripts/run_playwright_repro.sh"
   },
+  "packageManager": "yarn@4.6.0",
   "dependencies": {
     "@jupyterlab/application": "^4.0.0",
     "@jupyterlab/apputils": "^4.0.0",
