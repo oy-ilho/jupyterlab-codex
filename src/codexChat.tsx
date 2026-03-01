@@ -80,7 +80,8 @@ import {
   toSelectionPreview,
 } from './codexChatDocumentUtils';
 import {
-  buildActiveCellAttachmentSignature,
+  buildActiveCellOutputSignature,
+  buildActiveCellSelectionSignature,
   isDuplicateActiveCellAttachmentSignature,
   makeActiveCellAttachmentDedupKey
 } from './codexChatAttachmentDedup';
@@ -244,6 +245,11 @@ type NotebookSession = {
   selectedSandboxMode: SandboxMode;
   effectiveSandboxMode: SandboxMode | null;
   conversationMode: ConversationMode;
+};
+
+type ActiveCellAttachmentSignatures = {
+  selectionSignature?: string;
+  cellOutputSignature?: string;
 };
 
 type ModelOptionValue = '__config__' | string;
@@ -788,7 +794,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const socketMessageQueueRef = useRef<unknown[]>([]);
   const socketMessageFlushTimerRef = useRef<number | null>(null);
   const socketMessageFlushRafRef = useRef<number | null>(null);
-  const lastActiveCellAttachmentSignatureRef = useRef<Map<string, string>>(new Map());
+  const lastActiveCellAttachmentSignatureRef = useRef<Map<string, ActiveCellAttachmentSignatures>>(new Map());
   const notifyOnDoneRef = useRef<boolean>(notifyOnDone);
   const notifyOnDoneMinSecondsRef = useRef<number>(notifyOnDoneMinSeconds);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -2548,32 +2554,41 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       includeCellOutputKey && cellOutput
         ? toCellOutputPreview(selectedContext, activeWidget, notebookMode, cellOutput)
         : undefined;
-    const shouldDeduplicateActiveCellAttachment =
-      includeActiveCellForNextSend && (includeSelectionKey || includeCellOutputKey);
+    const shouldDeduplicateSelection = includeActiveCellForNextSend && includeSelectionKey;
+    const shouldDeduplicateCellOutput = includeActiveCellForNextSend && includeCellOutputKey;
     const activeCellAttachmentDedupKey = makeActiveCellAttachmentDedupKey(sessionKey, session.threadId);
-    const activeCellAttachmentSignature = shouldDeduplicateActiveCellAttachment
-      ? buildActiveCellAttachmentSignature({
+    const previousActiveCellSignatures =
+      lastActiveCellAttachmentSignatureRef.current.get(activeCellAttachmentDedupKey);
+    const activeCellSelectionSignature = shouldDeduplicateSelection
+      ? buildActiveCellSelectionSignature({
           notebookMode,
-          selection: includeSelectionKey ? selection : '',
-          cellOutput: includeCellOutputKey ? cellOutput : '',
-          selectionLocationLabel: messageSelectionPreview?.locationLabel,
-          cellOutputLocationLabel: messageCellOutputPreview?.locationLabel
+          text: selection,
+          locationLabel: messageSelectionPreview?.locationLabel
         })
       : '';
-    const hasDuplicateActiveCellAttachment =
-      shouldDeduplicateActiveCellAttachment &&
+    const activeCellOutputSignature = shouldDeduplicateCellOutput
+      ? buildActiveCellOutputSignature({
+          notebookMode,
+          text: cellOutput,
+          locationLabel: messageCellOutputPreview?.locationLabel
+        })
+      : '';
+    const hasDuplicateSelectionAttachment =
+      shouldDeduplicateSelection &&
       isDuplicateActiveCellAttachmentSignature(
-        lastActiveCellAttachmentSignatureRef.current.get(activeCellAttachmentDedupKey),
-        activeCellAttachmentSignature
+        previousActiveCellSignatures?.selectionSignature,
+        activeCellSelectionSignature
       );
-    const includeSelectionKeyForSend = includeSelectionKey && !hasDuplicateActiveCellAttachment;
-    const includeCellOutputKeyForSend = includeCellOutputKey && !hasDuplicateActiveCellAttachment;
-    const messageSelectionPreviewForSend = hasDuplicateActiveCellAttachment
-      ? undefined
-      : messageSelectionPreview;
-    const messageCellOutputPreviewForSend = hasDuplicateActiveCellAttachment
-      ? undefined
-      : messageCellOutputPreview;
+    const hasDuplicateCellOutputAttachment =
+      shouldDeduplicateCellOutput &&
+      isDuplicateActiveCellAttachmentSignature(
+        previousActiveCellSignatures?.cellOutputSignature,
+        activeCellOutputSignature
+      );
+    const includeSelectionKeyForSend = includeSelectionKey && !hasDuplicateSelectionAttachment;
+    const includeCellOutputKeyForSend = includeCellOutputKey && !hasDuplicateCellOutputAttachment;
+    const messageSelectionPreviewForSend = hasDuplicateSelectionAttachment ? undefined : messageSelectionPreview;
+    const messageCellOutputPreviewForSend = hasDuplicateCellOutputAttachment ? undefined : messageCellOutputPreview;
     const messageContextPreview: MessageContextPreview | undefined =
       messageSelectionPreviewForSend || messageCellOutputPreviewForSend
         ? {
@@ -2642,10 +2657,19 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       return false;
     }
 
-    if (shouldDeduplicateActiveCellAttachment && activeCellAttachmentSignature) {
-      lastActiveCellAttachmentSignatureRef.current.set(activeCellAttachmentDedupKey, activeCellAttachmentSignature);
-    } else {
-      lastActiveCellAttachmentSignatureRef.current.delete(activeCellAttachmentDedupKey);
+    if (shouldDeduplicateSelection || shouldDeduplicateCellOutput) {
+      const nextActiveCellSignatures: ActiveCellAttachmentSignatures = { ...(previousActiveCellSignatures ?? {}) };
+      if (shouldDeduplicateSelection && activeCellSelectionSignature) {
+        nextActiveCellSignatures.selectionSignature = activeCellSelectionSignature;
+      }
+      if (shouldDeduplicateCellOutput && activeCellOutputSignature) {
+        nextActiveCellSignatures.cellOutputSignature = activeCellOutputSignature;
+      }
+      if (nextActiveCellSignatures.selectionSignature || nextActiveCellSignatures.cellOutputSignature) {
+        lastActiveCellAttachmentSignatureRef.current.set(activeCellAttachmentDedupKey, nextActiveCellSignatures);
+      } else {
+        lastActiveCellAttachmentSignatureRef.current.delete(activeCellAttachmentDedupKey);
+      }
     }
     appendStoredSelectionPreviewEntry(session.threadId, content, messageContextPreview);
 
