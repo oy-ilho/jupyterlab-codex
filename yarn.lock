@@ -3,7 +3,7 @@
 
 __metadata:
   version: 8
-  cacheKey: 10
+  cacheKey: 10c0
 
 "@antfu/install-pkg@npm:^1.1.0":
   version: 1.1.0
