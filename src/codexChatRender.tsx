@@ -179,6 +179,25 @@ function normalizeHighlightLanguage(lang: string): string {
   return aliasMap[normalized] ?? normalized;
 }
 
+function inferHighlightLanguage(code: string): string {
+  const source = code.trim();
+  if (!source) {
+    return '';
+  }
+  const pythonSignals = [
+    /^\s*from\s+[A-Za-z0-9_.]+\s+import\s+/m,
+    /^\s*import\s+[A-Za-z0-9_.]+/m,
+    /^\s*def\s+[A-Za-z_][A-Za-z0-9_]*\s*\(/m,
+    /^\s*class\s+[A-Za-z_][A-Za-z0-9_]*\s*(\(|:)/m,
+    /\bNone\b|\bTrue\b|\bFalse\b/,
+    /:\s*$/m
+  ];
+  if (pythonSignals.some(pattern => pattern.test(source))) {
+    return 'python';
+  }
+  return '';
+}
+
 export function renderHighlightedCodeToSafeHtml(code: string, lang: string): string {
   const fallback = escapeHtml(code);
   let highlighted = fallback;
@@ -187,7 +206,12 @@ export function renderHighlightedCodeToSafeHtml(code: string, lang: string): str
     if (normalizedLang && hljs.getLanguage(normalizedLang)) {
       highlighted = hljs.highlight(code, { language: normalizedLang, ignoreIllegals: true }).value;
     } else {
-      highlighted = hljs.highlightAuto(code).value;
+      const inferredLang = inferHighlightLanguage(code);
+      if (inferredLang && hljs.getLanguage(inferredLang)) {
+        highlighted = hljs.highlight(code, { language: inferredLang, ignoreIllegals: true }).value;
+      } else {
+        highlighted = hljs.highlightAuto(code).value;
+      }
     }
   } catch {
     highlighted = fallback;

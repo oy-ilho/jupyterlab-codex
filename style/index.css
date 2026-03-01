@@ -1191,12 +1191,6 @@
   white-space: pre;
 }
 
-/* Keep unknown highlight.js token classes legible across JupyterLab themes. */
-.jp-CodexCodeBlock code.hljs span,
-.jp-CodexCodeBlock code.hljs a {
-  color: inherit;
-}
-
 .jp-CodexCodeBlock .hljs-comment,
 .jp-CodexCodeBlock .hljs-quote {
   color: var(--cdx-code-comment);
@@ -1247,6 +1241,16 @@
 .jp-CodexCodeBlock .hljs-meta,
 .jp-CodexCodeBlock .hljs-punctuation {
   color: var(--cdx-code-operator);
+}
+
+/* Fallback for highlight.js token classes we do not theme explicitly. */
+.jp-CodexCodeBlock .hljs-subst,
+.jp-CodexCodeBlock .hljs-type,
+.jp-CodexCodeBlock .hljs-name,
+.jp-CodexCodeBlock .hljs-class,
+.jp-CodexCodeBlock .hljs-tag,
+.jp-CodexCodeBlock .hljs-link {
+  color: var(--cdx-code-text);
 }
 
 .jp-CodexCodeBlockCopyBtn {
