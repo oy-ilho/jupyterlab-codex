@@ -1191,6 +1191,12 @@
   white-space: pre;
 }
 
+/* Keep unknown highlight.js token classes legible across JupyterLab themes. */
+.jp-CodexCodeBlock code.hljs span,
+.jp-CodexCodeBlock code.hljs a {
+  color: inherit;
+}
+
 .jp-CodexCodeBlock .hljs-comment,
 .jp-CodexCodeBlock .hljs-quote {
   color: var(--cdx-code-comment);

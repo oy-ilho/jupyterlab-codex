@@ -17,7 +17,7 @@ Examples:
 Description:
   - If [version] is provided, updates package.json and pyproject.toml to that version
   - If [version] is omitted, uses the current synced version from manifests
-  - Runs jlpm install and jlpm build
+  - Runs jlpm install --immutable and jlpm build
   - Builds Python distribution (dist/*)
   - Uploads to PyPI using twine (unless --skip-pypi)
   - Publishes to npm (unless --skip-npm)
@@ -202,7 +202,7 @@ echo "[2/5] Cleaning previous artifacts"
 rm -rf dist
 
 echo "[3/5] Installing JS dependencies and building frontend"
-jlpm install
+jlpm install --immutable
 jlpm run build
 
 echo "[4/5] Building Python distributions"
