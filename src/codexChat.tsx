@@ -2569,21 +2569,22 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         ? toCellOutputPreview(selectedContext, activeWidget, notebookMode, cellOutputForAttachment)
         : undefined;
     const shouldDeduplicateSelection = includeActiveCellForNextSend && includeSelectionKeyAfterLimit;
-    const shouldDeduplicateCellOutput = includeActiveCellForNextSend && includeCellOutputKeyAfterLimit;
+    const shouldDeduplicateCellOutput =
+      includeActiveCellForNextSend && includeCellOutputKeyAfterLimit;
     const activeCellAttachmentDedupKey = makeActiveCellAttachmentDedupKey(sessionKey, session.threadId);
     const previousActiveCellSignatures =
       lastActiveCellAttachmentSignatureRef.current.get(activeCellAttachmentDedupKey);
     const activeCellSelectionSignature = shouldDeduplicateSelection
       ? buildActiveCellSelectionSignature({
           notebookMode,
-          text: selectionForAttachment,
+          text: selection,
           locationLabel: messageSelectionPreview?.locationLabel
         })
       : '';
     const activeCellOutputSignature = shouldDeduplicateCellOutput
       ? buildActiveCellOutputSignature({
           notebookMode,
-          text: cellOutputForAttachment,
+          text: cellOutputRaw,
           locationLabel: messageCellOutputPreview?.locationLabel
         })
       : '';

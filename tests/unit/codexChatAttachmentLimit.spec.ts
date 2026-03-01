@@ -38,5 +38,5 @@ test('limitActiveCellAttachmentPayload truncates output first when output exceed
 test('buildAttachmentTruncationNotice includes source hint when input is truncated', () => {
   const notice = buildAttachmentTruncationNotice(true, false, 4000);
   expect(notice).toContain('source file/cell');
-  expect(notice).toContain('4,000');
+  expect(notice).toContain('4000');
 });

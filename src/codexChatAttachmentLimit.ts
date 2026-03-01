@@ -71,7 +71,7 @@ export function buildAttachmentTruncationNotice(
     return null;
   }
 
-  const maxChars = clampNonNegativeInteger(maxTotalChars).toLocaleString();
+  const maxChars = String(clampNonNegativeInteger(maxTotalChars));
   if (selectionTruncated && cellOutputTruncated) {
     return `Attached input and output were truncated to stay within ${maxChars} total characters before sending. The full input can be checked directly from the source file/cell.`;
   }
