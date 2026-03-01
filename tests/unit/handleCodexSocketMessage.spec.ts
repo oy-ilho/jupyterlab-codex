@@ -181,11 +181,12 @@ function createFixture(sessionKey = 'doc:test') {
     },
     setSessionRunState(sessionKeyArg: string, runState: 'ready' | 'running', activeRunId: string | null) {
       const session = state.sessions.get(sessionKeyArg) as any;
+      const nextActiveRunId = runState === 'running' ? activeRunId : null;
       if (session) {
         session.runState = runState;
-        session.activeRunId = activeRunId;
+        session.activeRunId = nextActiveRunId;
       }
-      state.sessionPairs.set(sessionKeyArg, { runState, activeRunId });
+      state.sessionPairs.set(sessionKeyArg, { runState, activeRunId: nextActiveRunId });
     },
     appendActivityItem(sessionKeyArg: string, item: { category: string; phase: string; title: string; detail: string; raw: string }) {
       state.messages.push({

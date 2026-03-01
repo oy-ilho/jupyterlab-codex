@@ -764,6 +764,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const [reasoningMenuOpen, setReasoningMenuOpen] = useState(false);
   const [usagePopoverOpen, setUsagePopoverOpen] = useState(false);
   const [permissionMenuOpen, setPermissionMenuOpen] = useState(false);
+  const [isPlainPyRunInProgress, setIsPlainPyRunInProgress] = useState<boolean>(false);
   const [selectionPopover, setSelectionPopover] = useState<{
     messageId: string;
     preview: MessageContextPreview;
@@ -798,6 +799,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const usagePopoverRef = useRef<HTMLDivElement>(null);
   const permissionBtnRef = useRef<HTMLButtonElement>(null);
   const permissionPopoverRef = useRef<HTMLDivElement>(null);
+  const plainPyRunSessionKeyRef = useRef<string>('');
   const selectionPopoverAnchorRef = useRef<HTMLElement | null>(null);
   const selectionPopoverRef = useRef<HTMLDivElement>(null);
   const notebookLabelRef = useRef<HTMLSpanElement | null>(null);
@@ -1501,25 +1503,51 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     if (!sessionKey) {
       return;
     }
+    const targetSessionKey = sessionKey.trim();
+    const isRunStart = runState === 'running';
+    const isRunDone = runState === 'ready';
+    let shouldClearPythonRunState = false;
 
     const now = Date.now();
     updateSessions(prev => {
       const next = new Map(prev);
-      const existing = next.get(sessionKey) ?? createSession('', `Session started`, { sessionKey });
-      const session = next.get(sessionKey) ?? existing;
+      const existing = next.get(targetSessionKey) ?? createSession('', `Session started`, { sessionKey: targetSessionKey });
+      const session = next.get(targetSessionKey) ?? existing;
       let messages = session.messages;
       let runStartedAt = session.runStartedAt;
+      let activeRunId = session.activeRunId;
+      const wasRunning = session.runState === 'running';
+      const hasActiveRunId = Boolean(activeRunId && activeRunId.trim());
 
-      if (runState === 'running' && session.runState !== 'running') {
-        runStartedAt = now;
+      if (isRunStart && !runId && wasRunning && hasActiveRunId) {
+        return prev;
       }
-      if (runState === 'ready' && session.runState === 'running') {
+
+      if (isRunDone && wasRunning && hasActiveRunId) {
+        if (!runId || runId !== activeRunId) {
+          return prev;
+        }
+      }
+
+      if (isRunStart) {
+        if (!wasRunning) {
+          runStartedAt = now;
+        }
+        if (runId) {
+          activeRunId = runId;
+        }
+      }
+      if (isRunDone && wasRunning) {
         const startedAt = runStartedAt;
         if (typeof startedAt === 'number' && Number.isFinite(startedAt)) {
           const elapsedMs = Math.max(0, now - startedAt);
           messages = [...messages, { kind: 'run-divider', id: crypto.randomUUID(), elapsedMs }];
         }
         runStartedAt = null;
+        activeRunId = null;
+        shouldClearPythonRunState = true;
+      } else if (isRunDone) {
+        activeRunId = null;
       }
 
       const progress = session.runState === runState ? session.progress : '';
@@ -1528,13 +1556,20 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         ...session,
         messages: trimSessionMessages(messages),
         runState,
-        activeRunId: runId,
+        activeRunId,
         runStartedAt,
         progress,
         progressKind
       });
       return next;
     });
+
+    if (isRunStart && plainPyRunSessionKeyRef.current === targetSessionKey) {
+      setIsPlainPyRunInProgress(true);
+    } else if (isRunDone && shouldClearPythonRunState && plainPyRunSessionKeyRef.current === targetSessionKey) {
+      plainPyRunSessionKeyRef.current = '';
+      setIsPlainPyRunInProgress(false);
+    }
   }
 
   function setSessionProgress(sessionKey: string, progress: string, kind: ProgressKind = ''): void {
@@ -2028,6 +2063,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   function onSocketClose(): void {
     resetSocketMessageQueue();
     runToSessionKeyRef.current = new Map();
+    setIsPlainPyRunInProgress(false);
+    plainPyRunSessionKeyRef.current = '';
   }
 
   function processSocketMessage(rawMessage: unknown): void {
@@ -2568,6 +2605,10 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 
     const imageCount = images ? images.length : 0;
     const showReadOnlyWarning = sandboxForSend === 'read-only';
+    if (notebookMode === 'plain_py' || notebookMode === 'jupytext_py') {
+      plainPyRunSessionKeyRef.current = sessionKey;
+      setIsPlainPyRunInProgress(true);
+    }
     updateSessions(prev => {
       const next = new Map(prev);
       const existing = next.get(sessionKey) ?? createSession('', `Session started`, { sessionKey });
@@ -2705,11 +2746,22 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       : notificationPermission === 'default'
           ? 'Permission will be requested when enabling this option.'
           : `Shows a browser notification for ${minimumNotifyDurationLabel}.`;
+  const hasPythonRunInProgress = Array.from(sessions.entries()).some(([sessionKey, session]) => {
+    if (session.runState !== 'running') {
+      return false;
+    }
+    const mode = session.notebookMode ?? inferNotebookModeFromPath(parseSessionKey(sessionKey).path);
+    return mode === 'plain_py' || mode === 'jupytext_py';
+  });
+  const hasPythonRunLockRef = Boolean(plainPyRunSessionKeyRef.current);
   const canStop = status === 'running' && Boolean(currentSession?.activeRunId);
   const canSendNow = canSend && (Boolean(trimmedInput) || pendingImages.length > 0);
+  const isPythonNotebookModeForLock = composerNotebookMode === 'plain_py' || composerNotebookMode === 'jupytext_py';
+  const plainPythonSessionActive =
+    isPythonNotebookModeForLock && (hasPythonRunInProgress || hasPythonRunLockRef) && sendButtonMode === 'send';
   const sendButtonDisabled =
     sendButtonMode === 'send'
-      ? !canSendNow
+      ? !canSendNow || plainPythonSessionActive
       : sendButtonMode === 'stop'
       ? !canStop
       : false;
@@ -2929,7 +2981,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 
       <div className="jp-CodexChat-body">
         <div className="jp-CodexChat-messages" ref={scrollRef} onScroll={onScrollMessages}>
-          {status === 'disconnected' && (
+          {status === 'disconnected' && !isReconnecting && (
             <div className="jp-CodexChat-message jp-CodexChat-system jp-CodexChat-reconnectNotice">
               <div className="jp-CodexChat-role">system</div>
               <div className="jp-CodexChat-text">Codex connection was lost. Reconnect to continue.</div>

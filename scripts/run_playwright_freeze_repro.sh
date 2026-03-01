@@ -14,6 +14,7 @@ HOST="${JUPYTERLAB_HOST:-127.0.0.1}"
 BASE_URL="${PLAYWRIGHT_BASE_URL:-http://${HOST}:${PORT}/lab}"
 MOCK_CODEX="${PLAYWRIGHT_CODEX_COMMAND:-$ROOT_DIR/tests/e2e/mock-codex-cli-flood.py}"
 LOG_FILE="${PLAYWRIGHT_JUPYTER_LOG:-$ROOT_DIR/.jupyterlab-playwright-freeze.log}"
+MOCK_CODEX_EVENT_DELAY_MS_DEFAULT="${MOCK_CODEX_EVENT_DELAY_MS:-120}"
 
 cleanup() {
   if [ -n "${JUPYTER_PID:-}" ] && kill -0 "$JUPYTER_PID" >/dev/null 2>&1; then
@@ -52,6 +53,6 @@ echo "[playwright] running notebook-tab freeze reproduction e2e"
 PLAYWRIGHT_BASE_URL="$BASE_URL" \
 PLAYWRIGHT_CODEX_COMMAND="$MOCK_CODEX" \
 MOCK_CODEX_EVENT_COUNT="${MOCK_CODEX_EVENT_COUNT:-360}" \
-MOCK_CODEX_EVENT_DELAY_MS="${MOCK_CODEX_EVENT_DELAY_MS:-20}" \
+MOCK_CODEX_EVENT_DELAY_MS="${MOCK_CODEX_EVENT_DELAY_MS_DEFAULT}" \
 MOCK_CODEX_CHUNK_WORDS="${MOCK_CODEX_CHUNK_WORDS:-14}" \
 npx playwright test tests/e2e/freeze-notebook-tabs-repro.spec.js "$@"

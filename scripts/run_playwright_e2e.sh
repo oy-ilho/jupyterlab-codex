@@ -22,7 +22,19 @@ else
     BASE_URL_CANDIDATES+=("http://${HOST}:${port}/lab")
   done
 fi
+
 BASE_URL=""
+JUPYTER_PID=""
+LOG_FILE="${PLAYWRIGHT_JUPYTER_LOG:-$ROOT_DIR/.jupyterlab-playwright.log}"
+
+cleanup() {
+  if [ -n "${JUPYTER_PID}" ] && kill -0 "$JUPYTER_PID" >/dev/null 2>&1; then
+    kill "$JUPYTER_PID" >/dev/null 2>&1 || true
+    wait "$JUPYTER_PID" >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup EXIT
+
 for candidate in "${BASE_URL_CANDIDATES[@]}"; do
   if curl -fsS "$candidate" >/dev/null 2>&1; then
     BASE_URL="$candidate"
@@ -31,16 +43,48 @@ for candidate in "${BASE_URL_CANDIDATES[@]}"; do
 done
 
 if [[ -z "$BASE_URL" ]]; then
-  echo "[playwright] JupyterLab is not reachable."
   if [[ "${PLAYWRIGHT_BASE_URL:-}" != "" ]]; then
+    echo "[playwright] JupyterLab is not reachable."
     echo "[playwright] Tried: $PLAYWRIGHT_BASE_URL"
-  else
-    echo "[playwright] Tried: ${FALLBACK_PORTS_RAW}"
+    echo "[playwright] Start JupyterLab first and retry."
+    exit 1
   fi
-  echo "[playwright] Start JupyterLab first and retry."
-  echo "[playwright] Or run auto-start mode:"
-  echo "[playwright]   jlpm test:e2e:repro-local"
-  exit 1
+
+  echo "[playwright] JupyterLab is not reachable. launching automatically..."
+  for port in ${FALLBACK_PORTS_RAW}; do
+    BASE_URL_CANDIDATE="http://${HOST}:${port}/lab"
+    echo "[playwright] launching JupyterLab on ${BASE_URL_CANDIDATE}"
+
+    jupyter lab \
+      --no-browser \
+      --ServerApp.open_browser=False \
+      --ServerApp.port="$port" \
+      --ServerApp.ip="$HOST" \
+      --IdentityProvider.token='' \
+      --ServerApp.token='' \
+      --ServerApp.password='' \
+      >"$LOG_FILE" 2>&1 &
+    JUPYTER_PID=$!
+
+    for _ in $(seq 1 60); do
+      if curl -fsS "$BASE_URL_CANDIDATE" >/dev/null 2>&1; then
+        BASE_URL="$BASE_URL_CANDIDATE"
+        break 2
+      fi
+      sleep 1
+    done
+
+    if [ -n "$JUPYTER_PID" ] && kill -0 "$JUPYTER_PID" >/dev/null 2>&1; then
+      kill "$JUPYTER_PID" >/dev/null 2>&1 || true
+      wait "$JUPYTER_PID" >/dev/null 2>&1 || true
+    fi
+    JUPYTER_PID=""
+  done
+
+  if [[ -z "$BASE_URL" ]]; then
+    echo "[playwright] JupyterLab failed to start. Log: $LOG_FILE"
+    exit 1
+  fi
 fi
 
 if [ -x "$ROOT_DIR/node_modules/.bin/playwright" ]; then

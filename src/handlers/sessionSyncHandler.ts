@@ -219,7 +219,7 @@ export function handleSessionSyncMessage(
       context.setSessionProgress(targetSessionKey, '', '');
     } else if (msg.state === 'ready' && targetSessionKey) {
       if (runId) {
-        context.setSessionRunState(targetSessionKey, 'ready', null);
+        context.setSessionRunState(targetSessionKey, 'ready', runId);
         context.setSessionProgress(targetSessionKey, '', '');
         context.runToSessionKeyRef.current.delete(runId);
       }
@@ -249,7 +249,7 @@ export function handleSessionSyncMessage(
     }
 
     if (targetSessionKey) {
-      context.setSessionRunState(targetSessionKey, 'ready', null);
+      context.setSessionRunState(targetSessionKey, 'ready', runId || null);
       context.setSessionProgress(targetSessionKey, '', '');
     }
     if (runId) {
@@ -295,7 +295,7 @@ export function handleSessionSyncMessage(
       exitCode
     );
     if (targetSessionKey) {
-      context.setSessionRunState(targetSessionKey, 'ready', null);
+      context.setSessionRunState(targetSessionKey, 'ready', runId || null);
       context.setSessionProgress(targetSessionKey, '', '');
     }
     if (runId) {

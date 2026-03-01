@@ -21,6 +21,7 @@ export function useCodexSocket(callbacks: SocketCallbacks = {}): UseCodexSocketR
   callbacksRef.current = callbacks;
 
   const socketRef = useRef<WebSocket | null>(null);
+  const reconnectTimerRef = useRef<number | null>(null);
   const [socketConnected, setSocketConnected] = useState(false);
   const [isReconnecting, setIsReconnecting] = useState(false);
   const [reconnectCounter, setReconnectCounter] = useState(0);
@@ -30,6 +31,8 @@ export function useCodexSocket(callbacks: SocketCallbacks = {}): UseCodexSocketR
     const settings = ServerConnection.makeSettings();
     const wsUrl = URLExt.join(settings.wsUrl, 'codex', 'ws');
     let socket: WebSocket;
+    let disposed = false;
+    let reconnectScheduled = false;
 
     try {
       socket = new WebSocket(wsUrl);
@@ -41,6 +44,18 @@ export function useCodexSocket(callbacks: SocketCallbacks = {}): UseCodexSocketR
 
     socketRef.current = socket;
 
+    const scheduleReconnect = () => {
+      if (disposed || reconnectScheduled) {
+        return;
+      }
+      reconnectScheduled = true;
+      setIsReconnecting(true);
+      reconnectTimerRef.current = window.setTimeout(() => {
+        reconnectTimerRef.current = null;
+        setReconnectCounter(value => value + 1);
+      }, 800);
+    };
+
     socket.onopen = () => {
       setSocketConnected(true);
       setIsReconnecting(false);
@@ -49,14 +64,14 @@ export function useCodexSocket(callbacks: SocketCallbacks = {}): UseCodexSocketR
 
     socket.onclose = () => {
       setSocketConnected(false);
-      setIsReconnecting(false);
       callbacksRef.current.onClose?.();
+      scheduleReconnect();
     };
 
     socket.onerror = () => {
       setSocketConnected(false);
-      setIsReconnecting(false);
       callbacksRef.current.onError?.();
+      scheduleReconnect();
     };
 
     socket.onmessage = event => {
@@ -64,6 +79,15 @@ export function useCodexSocket(callbacks: SocketCallbacks = {}): UseCodexSocketR
     };
 
     return () => {
+      disposed = true;
+      if (reconnectTimerRef.current !== null) {
+        window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+      socket.onopen = null;
+      socket.onclose = null;
+      socket.onerror = null;
+      socket.onmessage = null;
       socket.close();
       socketRef.current = null;
     };

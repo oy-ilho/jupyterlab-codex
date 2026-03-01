@@ -151,7 +151,7 @@ async function ensureCodexPanel(page) {
 async function sendMessage(page, text) {
   await dismissBlockingDialogs(page);
   const composer = page.locator('.jp-CodexComposer textarea');
-  const sendBtn = page.locator('.jp-CodexSendBtn');
+  const sendBtn = page.locator('.jp-CodexSendBtn:visible');
 
   await expect(composer).toBeVisible({ timeout: 20000 });
   await composer.fill(text);
@@ -168,7 +168,7 @@ async function sendMessageFromCurrentTab(page, text, options = {}) {
   const sendAllowed = options.sendAllowed ?? true;
   await dismissBlockingDialogs(page);
   const composer = page.locator('.jp-CodexComposer textarea');
-  const sendBtn = page.locator('.jp-CodexSendBtn');
+  const sendBtn = page.locator('.jp-CodexSendBtn:visible');
 
   await expect(composer).toBeVisible({ timeout: 20000 });
   await composer.fill(text);
@@ -280,7 +280,7 @@ test('4 notebook-tab rapid sends with immediate tab switching keep final .py tab
       await activateDocumentTab(page, document.name);
       const sent = await sendMessageFromCurrentTab(page, STRESS_PROMPT, { sendAllowed: false });
       expect(sent).toBe(false);
-      await expect(page.locator('.jp-CodexSendBtn')).toBeDisabled({ timeout: 5000 });
+  await expect(page.locator('.jp-CodexSendBtn:visible')).toBeDisabled({ timeout: 5000 });
     }
   }
 
