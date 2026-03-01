@@ -16,7 +16,6 @@ import {
 } from './protocol';
 import {
   coerceMessageContextPreview as coerceMessageContextPreviewShared,
-  coerceRateLimitsSnapshot as coerceRateLimitsSnapshotShared,
   coerceSessionHistory as coerceSessionHistoryShared,
   coerceSelectionPreview as coerceSelectionPreviewShared,
   type MessageContextPreview,
@@ -24,6 +23,41 @@ import {
   truncateEnd as truncateEndShared
 } from './handlers/codexMessageUtils';
 import { type CodexRateLimitsSnapshot } from './handlers/codexMessageTypes';
+import {
+  clampNumber,
+  coerceRateLimitsSnapshot,
+  formatDurationShort,
+  formatResetsIn,
+  formatRunDuration,
+  formatTokenCount,
+  getBrowserNotificationPermission,
+  percentLeftFromUsed,
+  safeParseDateMs,
+  truncateMiddle
+} from './codexChatFormatting';
+import { isSessionStartNotice, normalizeSessionStartedNotice } from './codexChatNotice';
+import {
+  type SessionThreadSyncEvent,
+  STORAGE_KEY_SESSION_THREADS,
+  STORAGE_KEY_SESSION_THREADS_EVENT,
+  buildSessionThreadSyncEvent,
+  coerceSessionThreadSyncEvent,
+  getStoredSessionThreadCount,
+  writeSessionThreadSyncEvent,
+  markDeleteAllPending,
+  clearDeleteAllPending,
+  hasDeleteAllPending,
+  parseSessionKey,
+  persistStoredSessionThreads,
+  readStoredThreadId
+} from './codexChatPersistence';
+import {
+  createSession as createBaseSession,
+  createThreadResetSession as createBaseThreadResetSession,
+  type SessionCreateOptions
+} from './codexChatSessionFactory';
+import { resolveCurrentSessionKey, resolveSessionKey } from './codexChatSessionKey';
+import { resolveMessageSessionKey as resolveMessageSessionKeyForMessage } from './codexSessionResolver';
 import {
   type DocumentWidgetLike,
   type NotebookMode,
@@ -69,7 +103,6 @@ import {
   safeLocalStorageRemove,
   safeLocalStorageSet
 } from './codexChatStorage';
-import { isSessionStartNotice, normalizeSessionStartedNotice } from './codexChatNotice';
 
 const truncateEnd = truncateEndShared;
 
@@ -193,16 +226,6 @@ type NotebookSession = {
   conversationMode: ConversationMode;
 };
 
-type SessionThreadSyncEvent = {
-  kind: 'new-thread';
-  sessionKey: string;
-  notebookPath: string;
-  threadId: string;
-  source: string;
-  id: string;
-  issuedAt: number;
-};
-
 type ModelOptionValue = '__config__' | string;
 type ModelOption = {
   label: string;
@@ -249,11 +272,7 @@ const NOTIFY_ON_DONE_STORAGE_KEY = 'jupyterlab-codex:notify-on-done';
 const NOTIFY_ON_DONE_MIN_SECONDS_STORAGE_KEY = 'jupyterlab-codex:notify-on-done-min-seconds';
 const INCLUDE_ACTIVE_CELL_STORAGE_KEY = 'jupyterlab-codex:include-active-cell';
 const INCLUDE_ACTIVE_CELL_OUTPUT_STORAGE_KEY = 'jupyterlab-codex:include-active-cell-output';
-const SESSION_THREADS_STORAGE_KEY = 'jupyterlab-codex:session-threads';
-const SESSION_THREADS_EVENT_KEY = 'jupyterlab-codex:session-threads:event';
 const SELECTION_PREVIEWS_STORAGE_KEY = 'jupyterlab-codex:selection-previews';
-const DELETE_ALL_PENDING_KEY = 'jupyterlab-codex:delete-all-pending';
-const SESSION_KEY_SEPARATOR = '\u0000';
 
 const MAX_IMAGE_ATTACHMENTS = 4;
 const MAX_IMAGE_ATTACHMENT_BYTES = 4 * 1024 * 1024; // Avoid huge WebSocket payloads.
@@ -402,111 +421,11 @@ function inferNotebookModeFromPath(path: string): NotebookMode {
   return 'unsupported';
 }
 
-function makeSessionKey(path: string): string {
-  const normalizedPath = (path || '').trim();
-  if (!normalizedPath) {
-    return '';
-  }
-  return normalizedPath;
-}
-
 function createSessionEventId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID();
   }
   return `${Date.now()}-${Math.floor(Math.random() * 0x100000000).toString(16)}`;
-}
-
-function parseSessionKey(sessionKey: string): { path: string } {
-  if (!sessionKey) {
-    return { path: '' };
-  }
-  const separatorIndex = sessionKey.indexOf(SESSION_KEY_SEPARATOR);
-  if (separatorIndex < 0) {
-    return { path: sessionKey };
-  }
-  return { path: sessionKey.slice(0, separatorIndex) };
-}
-
-function readStoredSessionThreads(): Record<string, string> {
-  const raw = safeLocalStorageGet(SESSION_THREADS_STORAGE_KEY);
-  if (!raw) {
-    return {};
-  }
-  try {
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') {
-      return {};
-    }
-    const result: Record<string, string> = {};
-    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
-      if (!key || typeof value !== 'string') {
-        continue;
-      }
-      const threadId = value.trim();
-      if (!threadId) {
-        continue;
-      }
-      result[key] = threadId;
-    }
-    return result;
-  } catch {
-    return {};
-  }
-}
-
-function getStoredSessionThreadCount(): number {
-  const mapping = readStoredSessionThreads();
-  const uniquePaths = new Set<string>();
-  for (const key of Object.keys(mapping)) {
-    const { path } = parseSessionKey(key);
-    if (path) {
-      uniquePaths.add(path);
-    }
-  }
-  return uniquePaths.size;
-}
-
-function readStoredThreadId(path: string, sessionKey: string): string {
-  const normalizedPath = path.trim();
-  const normalizedSessionKey = sessionKey || '';
-  if (!normalizedSessionKey) {
-    return '';
-  }
-  const mapping = readStoredSessionThreads();
-  const exactMatch = mapping[normalizedSessionKey];
-  if (exactMatch) {
-    return exactMatch;
-  }
-
-  if (!normalizedPath) {
-    return '';
-  }
-  for (const [key, threadId] of Object.entries(mapping)) {
-    if (!threadId) {
-      continue;
-    }
-    const parsed = parseSessionKey(key);
-    if (parsed.path === normalizedPath) {
-      return threadId;
-    }
-  }
-  return '';
-}
-
-function persistStoredSessionThreads(sessions: Map<string, NotebookSession>): void {
-  const mapping: Record<string, string> = {};
-  for (const [sessionKey, session] of sessions) {
-    if (!sessionKey || !session?.threadId) {
-      continue;
-    }
-    mapping[sessionKey] = session.threadId;
-  }
-  try {
-    safeLocalStorageSet(SESSION_THREADS_STORAGE_KEY, JSON.stringify(mapping));
-  } catch {
-    // Ignore storage failures; in-memory sessions still work.
-  }
 }
 
 function hashSelectionPreviewContent(content: string): string {
@@ -611,33 +530,6 @@ function persistStoredSelectionPreviewsByThread(
   safeLocalStorageSet(SELECTION_PREVIEWS_STORAGE_KEY, JSON.stringify(serialized));
 }
 
-function coerceSessionThreadSyncEvent(value: string): SessionThreadSyncEvent | null {
-  if (!value) {
-    return null;
-  }
-  let raw: unknown;
-  try {
-    raw = JSON.parse(value);
-  } catch {
-    return null;
-  }
-  if (!raw || typeof raw !== 'object') {
-    return null;
-  }
-
-  const event = raw as Record<string, unknown>;
-  const sessionKey = typeof event.sessionKey === 'string' ? event.sessionKey.trim() : '';
-  const notebookPath = typeof event.notebookPath === 'string' ? event.notebookPath.trim() : '';
-  const threadId = typeof event.threadId === 'string' ? event.threadId.trim() : '';
-  const source = typeof event.source === 'string' ? event.source.trim() : '';
-  const id = typeof event.id === 'string' ? event.id.trim() : '';
-  if (!sessionKey || !notebookPath || !threadId || !id || event.kind !== 'new-thread') {
-    return null;
-  }
-  const issuedAt = typeof event.issuedAt === 'number' && Number.isFinite(event.issuedAt) ? event.issuedAt : Date.now();
-  return { kind: 'new-thread', sessionKey, notebookPath, threadId, source, id, issuedAt };
-}
-
 function coerceSelectionPreview(value: unknown): SelectionPreview | undefined {
   return coerceSelectionPreviewShared(value, {
     normalize: normalizeSelectionPreviewText,
@@ -680,46 +572,33 @@ function createSession(
     sessionKey?: string;
   }
 ): NotebookSession {
-  const defaultIntro = 'Session started';
-  const systemText = normalizeSystemText('system', intro || defaultIntro);
-  const requestedThreadId = (options?.threadId || '').trim();
-  const storedThreadId = options?.reuseStoredThread === false ? '' : readStoredThreadId(path, options?.sessionKey || '');
-  const threadId = requestedThreadId || storedThreadId || crypto.randomUUID();
-  return {
-    threadId,
-    runState: 'ready',
-    activeRunId: null,
-    runStartedAt: null,
-    progress: '',
-    progressKind: '',
-    messages: [
-      {
-        kind: 'text',
-        id: crypto.randomUUID(),
-        role: 'system',
-        text: systemText
-      }
-    ],
-    pairedOk: null,
-    pairedPath: '',
-    pairedOsPath: '',
-    pairedMessage: '',
-    notebookMode: null,
-    selectedModelOption: readDefaultModelOption(),
-    selectedReasoningEffort: readDefaultReasoningEffortOption(),
-    selectedSandboxMode: readDefaultSandboxModeOption(),
-    effectiveSandboxMode: null,
-    conversationMode: 'resume',
-  };
+  return createBaseSession<NotebookSession, ModelOptionValue, ReasoningOptionValue, SandboxMode>(
+    path,
+    intro,
+    options as SessionCreateOptions | undefined,
+    {
+      readStoredThreadId,
+      readDefaultModelOption,
+      readDefaultReasoningEffortOption,
+      readDefaultSandboxModeOption,
+      normalizeSystemText
+    }
+  );
 }
 
 function createThreadResetSession(path: string, sessionKey: string, threadId: string): NotebookSession {
-  const time = new Date().toLocaleTimeString();
-  return createSession(path, `Session started (${time})`, {
+  return createBaseThreadResetSession<NotebookSession, ModelOptionValue, ReasoningOptionValue, SandboxMode>(
+    path,
+    sessionKey,
     threadId,
-    reuseStoredThread: false,
-    sessionKey
-  });
+    {
+      readStoredThreadId,
+      readDefaultModelOption,
+      readDefaultReasoningEffortOption,
+      readDefaultSandboxModeOption,
+      normalizeSystemText
+    }
+  );
 }
 
 function normalizeSystemText(role: TextRole, text: string): string {
@@ -727,18 +606,6 @@ function normalizeSystemText(role: TextRole, text: string): string {
     return text;
   }
   return normalizeSessionStartedNotice(text) ?? text;
-}
-
-function markDeleteAllPending(): void {
-  safeLocalStorageSet(DELETE_ALL_PENDING_KEY, '1');
-}
-
-function clearDeleteAllPending(): void {
-  safeLocalStorageRemove(DELETE_ALL_PENDING_KEY);
-}
-
-function hasDeleteAllPending(): boolean {
-  return safeLocalStorageGet(DELETE_ALL_PENDING_KEY) === '1';
 }
 
 function readStoredModel(): string {
@@ -834,97 +701,6 @@ function readStoredNotifyOnDoneMinSeconds(): number {
 
 function persistNotifyOnDoneMinSeconds(seconds: number): void {
   safeLocalStorageSet(NOTIFY_ON_DONE_MIN_SECONDS_STORAGE_KEY, String(Math.max(0, Math.trunc(seconds))));
-}
-
-function getBrowserNotificationPermission(): NotificationPermission | 'unsupported' {
-  if (typeof window === 'undefined' || typeof window.Notification === 'undefined') {
-    return 'unsupported';
-  }
-  return window.Notification.permission;
-}
-
-function truncateMiddle(value: string, max: number): string {
-  if (value.length <= max) {
-    return value;
-  }
-  const ellipsis = '...';
-  if (max <= ellipsis.length) {
-    return value.slice(0, max);
-  }
-  const head = Math.max(0, Math.floor((max - ellipsis.length) * 0.6));
-  const tail = Math.max(0, max - head - ellipsis.length);
-  return `${value.slice(0, head)}${ellipsis}${value.slice(value.length - tail)}`;
-}
-
-function coerceRateLimitsSnapshot(raw: any): CodexRateLimitsSnapshot | null {
-  return coerceRateLimitsSnapshotShared(raw);
-}
-
-function clampNumber(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
-
-function percentLeftFromUsed(usedPercent: number | null): number | null {
-  if (typeof usedPercent !== 'number' || !Number.isFinite(usedPercent)) {
-    return null;
-  }
-  return Math.round(clampNumber(100 - usedPercent, 0, 100));
-}
-
-function safeParseDateMs(value: string | null): number | null {
-  if (!value) {
-    return null;
-  }
-  const ms = Date.parse(value);
-  return Number.isFinite(ms) ? ms : null;
-}
-
-function formatDurationShort(ms: number): string {
-  if (!Number.isFinite(ms)) {
-    return '0m';
-  }
-  const totalMinutes = Math.max(0, Math.floor(ms / 60000));
-  const days = Math.floor(totalMinutes / (60 * 24));
-  const hours = Math.floor((totalMinutes % (60 * 24)) / 60);
-  const minutes = totalMinutes % 60;
-  if (days > 0) {
-    return `${days}d ${hours}h`;
-  }
-  if (hours > 0) {
-    return `${hours}h ${minutes}m`;
-  }
-  return `${minutes}m`;
-}
-
-function formatRunDuration(ms: number): string {
-  if (!Number.isFinite(ms)) {
-    return '0s';
-  }
-  const totalSeconds = Math.max(0, Math.round(ms / 1000));
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  if (minutes > 0) {
-    return `${minutes}m ${seconds}s`;
-  }
-  return `${seconds}s`;
-}
-
-function formatResetsIn(resetsAtSec: number | null, nowMs: number): string {
-  if (typeof resetsAtSec !== 'number' || !Number.isFinite(resetsAtSec)) {
-    return 'Unknown';
-  }
-  const diffMs = resetsAtSec * 1000 - nowMs;
-  if (diffMs <= 0) {
-    return 'Overdue';
-  }
-  return formatDurationShort(diffMs);
-}
-
-function formatTokenCount(value: number | null): string {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    return '--';
-  }
-  return value.toLocaleString();
 }
 
 function CodexChat(props: CodexChatProps): JSX.Element {
@@ -1424,15 +1200,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     });
   }
 
-  function resolveSessionKey(path: string): string {
-    const normalizedPath = path || '';
-    return makeSessionKey(normalizedPath);
-  }
-
-  function resolveCurrentSessionKey(path: string): string {
-    return resolveSessionKey(path);
-  }
-
   function ensureSession(path: string, sessionKey?: string): NotebookSession {
     const normalizedPath = path || '';
     const effectiveSessionKey = sessionKey || resolveCurrentSessionKey(normalizedPath);
@@ -1658,20 +1425,14 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 
   function emitSessionThreadEvent(sessionKey: string, notebookPath: string, threadId: string): void {
     const source = sessionThreadSyncIdRef.current;
-    const payload: SessionThreadSyncEvent = {
-      kind: 'new-thread',
+    const payload: SessionThreadSyncEvent = buildSessionThreadSyncEvent({
       sessionKey,
       notebookPath,
       threadId,
       source,
-      id: createSessionEventId(),
-      issuedAt: Date.now()
-    };
-    try {
-      window.localStorage.setItem(SESSION_THREADS_EVENT_KEY, JSON.stringify(payload));
-    } catch {
-      // Ignore sync write failures; local tab still updates immediately.
-    }
+      createEventId: createSessionEventId
+    });
+    writeSessionThreadSyncEvent(payload);
   }
 
   function sendStartSession(
@@ -1955,43 +1716,12 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   }
 
   function resolveMessageSessionKey(msg: any): string {
-    const messagePath = typeof msg.notebookPath === 'string' ? msg.notebookPath : '';
-    const sessionContextKey = typeof msg.sessionContextKey === 'string' ? msg.sessionContextKey : '';
-    if (sessionContextKey) {
-      return sessionContextKey;
-    }
-
-    const runId = typeof msg.runId === 'string' ? msg.runId : '';
-    if (runId) {
-      const mapped = runToSessionKeyRef.current.get(runId);
-      if (mapped) {
-        return mapped;
-      }
-    }
-
-    if (messagePath) {
-      if (runId) {
-        const activeSessionKey = activeSessionKeyByPathRef.current.get(messagePath);
-        if (activeSessionKey) {
-          runToSessionKeyRef.current.set(runId, activeSessionKey);
-          return activeSessionKey;
-        }
-      }
-      const activeSessionKey = activeSessionKeyByPathRef.current.get(messagePath);
-      if (activeSessionKey) {
-        return activeSessionKey;
-      }
-      return makeSessionKey(messagePath);
-    }
-
-    if (runId) {
-      const mapped = runToSessionKeyRef.current.get(runId);
-      if (mapped) {
-        return mapped;
-      }
-    }
-
-    return currentNotebookSessionKeyRef.current || '';
+    return resolveMessageSessionKeyForMessage({
+      message: msg,
+      runToSessionKey: runToSessionKeyRef.current,
+      activeSessionKeyByPath: activeSessionKeyByPathRef.current,
+      currentSessionKey: currentNotebookSessionKeyRef.current || ''
+    });
   }
 
   function appendMessage(sessionKey: string, role: TextRole, text: string): void {
@@ -2069,7 +1799,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     }
     runToSessionKeyRef.current = new Map();
     activeSessionKeyByPathRef.current = new Map();
-    safeLocalStorageRemove(SESSION_THREADS_STORAGE_KEY);
+    safeLocalStorageRemove(STORAGE_KEY_SESSION_THREADS);
     clearStoredSelectionPreviews();
     replaceSessions(new Map());
     clearInputForCurrentSession();
@@ -2203,7 +1933,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 
   useEffect(() => {
     const onStorage = (event: StorageEvent) => {
-      if (event.key !== SESSION_THREADS_EVENT_KEY || !event.newValue) {
+      if (event.key !== STORAGE_KEY_SESSION_THREADS_EVENT || !event.newValue) {
         return;
       }
 
