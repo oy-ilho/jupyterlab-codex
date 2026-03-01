@@ -1085,10 +1085,12 @@
 
 .jp-CodexMarkdown code {
   font-family: var(--cdx-mono);
-  font-size: 11px;
+  font-size: 8px;
   color: var(--cdx-code-text);
-  padding: 2px 7px;
-  border-radius: 10px;
+  padding: 2px 5px;
+  margin-left: 2px;
+  margin-right: 2px;
+  border-radius: 8px;
   border: 0;
   background: color-mix(in srgb, var(--cdx-surface-2) 78%, transparent);
   line-height: 1.45;
@@ -1097,6 +1099,11 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.jp-CodexChat .jp-CodexMarkdown code {
+  font-family: var(--cdx-mono) !important;
+  font-size: 12px !important;
 }
 
 .jp-CodexMarkdown pre {

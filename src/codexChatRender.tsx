@@ -1,15 +1,70 @@
-import React, { memo, useMemo, useState } from 'react';
-import { marked } from 'marked';
-import markedKatex from 'marked-katex-extension';
+import React, { memo, useEffect, useMemo, useState } from 'react';
 import DOMPurify from 'dompurify';
-import hljs from 'highlight.js/lib/common';
+import hljs from 'highlight.js/lib/core';
+import bashLang from 'highlight.js/lib/languages/bash';
+import cssLang from 'highlight.js/lib/languages/css';
+import diffLang from 'highlight.js/lib/languages/diff';
+import javascriptLang from 'highlight.js/lib/languages/javascript';
+import jsonLang from 'highlight.js/lib/languages/json';
+import markdownLang from 'highlight.js/lib/languages/markdown';
+import pythonLang from 'highlight.js/lib/languages/python';
+import sqlLang from 'highlight.js/lib/languages/sql';
+import typescriptLang from 'highlight.js/lib/languages/typescript';
+import xmlLang from 'highlight.js/lib/languages/xml';
+import yamlLang from 'highlight.js/lib/languages/yaml';
 import { formatSelectionPreviewTextForDisplay } from './codexChatDocumentUtils';
 
-marked.use(
-  markedKatex({
-    throwOnError: false
-  })
-);
+hljs.registerLanguage('bash', bashLang);
+hljs.registerLanguage('css', cssLang);
+hljs.registerLanguage('diff', diffLang);
+hljs.registerLanguage('javascript', javascriptLang);
+hljs.registerLanguage('json', jsonLang);
+hljs.registerLanguage('markdown', markdownLang);
+hljs.registerLanguage('python', pythonLang);
+hljs.registerLanguage('sql', sqlLang);
+hljs.registerLanguage('typescript', typescriptLang);
+hljs.registerLanguage('xml', xmlLang);
+hljs.registerLanguage('yaml', yamlLang);
+
+type MarkdownParser = {
+  parse: (markdown: string) => string;
+};
+
+let markdownParser: MarkdownParser | null = null;
+let markdownParserPromise: Promise<MarkdownParser> | null = null;
+
+async function ensureMarkdownParser(): Promise<MarkdownParser> {
+  if (markdownParser) {
+    return markdownParser;
+  }
+  if (!markdownParserPromise) {
+    markdownParserPromise = Promise.all([import('marked'), import('marked-katex-extension')])
+      .then(([markedModule, katexModule]) => {
+        const marked = markedModule.marked;
+        const markedKatex = katexModule.default;
+        marked.use(
+          markedKatex({
+            throwOnError: false
+          })
+        );
+        const parser: MarkdownParser = {
+          parse(markdown: string): string {
+            return marked.parse(normalizeMathDelimiters(markdown), {
+              gfm: true,
+              breaks: true
+            }) as string;
+          }
+        };
+        markdownParser = parser;
+        return parser;
+      })
+      .catch(error => {
+        markdownParserPromise = null;
+        throw error;
+      });
+  }
+  return markdownParserPromise;
+}
 
 type MessageBlock =
   | { kind: 'text'; text: string }
@@ -148,13 +203,13 @@ export function renderMarkdownToSafeHtml(markdown: string): string {
   if (!markdown) {
     return '';
   }
-  const normalizedMarkdown = normalizeMathDelimiters(markdown);
+  const parser = markdownParser;
+  if (!parser) {
+    return escapeHtml(markdown).replace(/\n/g, '<br />');
+  }
   let html = '';
   try {
-    html = marked.parse(normalizedMarkdown, {
-      gfm: true,
-      breaks: true
-    }) as string;
+    html = parser.parse(markdown);
   } catch {
     return escapeHtml(markdown).replace(/\n/g, '<br />');
   }
@@ -251,6 +306,22 @@ const CodeBlock = memo(function CodeBlock(props: { lang: string; code: string; c
 CodeBlock.displayName = 'CodeBlock';
 
 export const MessageText = memo(function MessageText(props: { text: string; canCopyCode?: boolean }): JSX.Element {
+  const [, setMarkdownParserVersion] = useState(0);
+
+  useEffect(() => {
+    let disposed = false;
+    void ensureMarkdownParser()
+      .then(() => {
+        if (!disposed) {
+          setMarkdownParserVersion(version => version + 1);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+    };
+  }, []);
+
   const blocks = splitFencedCodeBlocks(props.text);
   return (
     <div className="jp-CodexChat-text">

@@ -60,6 +60,7 @@
   },
   "jupyterlab": {
     "extension": true,
-    "outputDir": "jupyterlab_codex/labextension"
+    "outputDir": "jupyterlab_codex/labextension",
+    "webpackConfig": "webpack.config.js"
   }
 }
