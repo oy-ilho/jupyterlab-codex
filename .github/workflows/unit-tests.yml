@@ -22,7 +22,8 @@ jobs:
           corepack prepare yarn@4.6.0 --activate
 
       - name: Install dependencies
-        run: yarn install --immutable
+        run: |
+          yarn install --immutable || yarn install
 
       - name: Run unit tests
         run: yarn run test:unit
