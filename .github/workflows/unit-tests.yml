@@ -23,7 +23,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          yarn install --immutable || yarn install
+          yarn install --immutable
 
       - name: Run unit tests
         run: yarn run test:unit
