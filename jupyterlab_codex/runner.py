@@ -61,9 +61,9 @@ class CodexRunner:
             "stdio://",
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
         )
-        if proc.stdin is None or proc.stdout is None or proc.stderr is None:
+        if proc.stdin is None or proc.stdout is None:
             raise RuntimeError("Failed to open app-server subprocess streams")
 
         buffer = bytearray()

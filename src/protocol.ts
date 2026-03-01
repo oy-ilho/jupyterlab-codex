@@ -367,6 +367,15 @@ export function parseServerMessage(raw: unknown): ServerMessage | null {
       ) {
         return null;
       }
+      let exitCode: number | null = null;
+      if (message.exitCode === null) {
+        exitCode = null;
+      } else if (typeof message.exitCode === 'number' && Number.isFinite(message.exitCode)) {
+        exitCode = message.exitCode;
+      } else if (typeof message.exitCode === 'string') {
+        const parsedExitCode = Number(message.exitCode.trim());
+        exitCode = Number.isFinite(parsedExitCode) ? parsedExitCode : null;
+      }
       return {
         type,
         protocolVersion: typeof message.protocolVersion === 'string' ? message.protocolVersion : undefined,
@@ -374,7 +383,7 @@ export function parseServerMessage(raw: unknown): ServerMessage | null {
         sessionId: message.sessionId,
         sessionContextKey: typeof message.sessionContextKey === 'string' ? message.sessionContextKey : undefined,
         notebookPath: message.notebookPath,
-        exitCode: message.exitCode === null ? null : Number(message.exitCode),
+        exitCode,
         cancelled: typeof message.cancelled === 'boolean' ? message.cancelled : false,
         fileChanged: typeof message.fileChanged === 'boolean' ? message.fileChanged : false,
         runMode: message.runMode === 'fallback' ? 'fallback' : message.runMode === 'resume' ? 'resume' : undefined,
@@ -396,7 +405,7 @@ export function parseServerMessage(raw: unknown): ServerMessage | null {
         sessionContextKey: typeof message.sessionContextKey === 'string' ? message.sessionContextKey : undefined,
         notebookPath: typeof message.notebookPath === 'string' ? message.notebookPath : undefined,
         message: message.message,
-        runMode: message.runMode === 'fallback' ? 'fallback' : undefined,
+        runMode: message.runMode === 'fallback' ? 'fallback' : message.runMode === 'resume' ? 'resume' : undefined,
         suggestedCommandPath:
           typeof message.suggestedCommandPath === 'string' ? message.suggestedCommandPath : undefined,
         pairedOk: typeof message.pairedOk === 'boolean' ? message.pairedOk : undefined,

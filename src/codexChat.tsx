@@ -69,6 +69,7 @@ import {
   safeLocalStorageRemove,
   safeLocalStorageSet
 } from './codexChatStorage';
+import { isSessionStartNotice, normalizeSessionStartedNotice } from './codexChatNotice';
 
 const truncateEnd = truncateEndShared;
 
@@ -721,70 +722,11 @@ function createThreadResetSession(path: string, sessionKey: string, threadId: st
   });
 }
 
-function extractTrailingParenValue(text: string): { rest: string; value: string | null } {
-  const trimmed = text.trim();
-  if (!trimmed.endsWith(')')) {
-    return { rest: trimmed, value: null };
-  }
-  const start = trimmed.lastIndexOf('(');
-  if (start < 0) {
-    return { rest: trimmed, value: null };
-  }
-  const inner = trimmed.slice(start + 1, -1).trim();
-  if (!inner) {
-    return { rest: trimmed, value: null };
-  }
-  return { rest: trimmed.slice(0, start).trimEnd(), value: inner };
-}
-
-function formatSessionStartedNotice(label: string, time: string | null): string {
-  return `${label}${time ? ` (${time})` : ''}`;
-}
-
-function normalizeSessionStartedNotice(text: string): string | null {
-  const raw = text.trim();
-
-  // Korean legacy messages (normalize to English UI text)
-  if (raw.startsWith('세션 시작')) {
-    const { rest, value } = extractTrailingParenValue(raw);
-    if (rest.startsWith('세션 시작')) {
-      return formatSessionStartedNotice('Session started', value);
-    }
-  }
-
-  // English (case-insensitive)
-  const lower = raw.toLowerCase();
-  if (lower.startsWith('session started')) {
-    const { rest, value } = extractTrailingParenValue(raw);
-    if (rest.toLowerCase().startsWith('session started')) {
-      return formatSessionStartedNotice('Session started', value);
-    }
-  }
-
-  return null;
-}
-
 function normalizeSystemText(role: TextRole, text: string): string {
   if (role !== 'system') {
     return text;
   }
   return normalizeSessionStartedNotice(text) ?? text;
-}
-
-function isSessionStartNotice(text: string): boolean {
-  if (normalizeSessionStartedNotice(text) !== null) {
-    return true;
-  }
-  const trimmed = text.trimStart();
-  if (trimmed.startsWith('새 스레드 시작:')) {
-    return true;
-  }
-  const lower = trimmed.toLowerCase();
-  return (
-    lower.startsWith('session start:') ||
-    lower.startsWith('new thread started:') ||
-    lower.startsWith('new thread started')
-  );
 }
 
 function markDeleteAllPending(): void {

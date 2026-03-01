@@ -62,6 +62,7 @@ _PY_JUPYTEXT_HEADER_HINTS = (
     "format_name:",
     "text_representation:",
 )
+_SAFE_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 def _strip_noisy_stderr_lines(text: str) -> str:
@@ -94,6 +95,15 @@ def _coerce_session_context_key(value: Any) -> str:
     if not isinstance(value, str):
         return ""
     return value.strip()
+
+
+def _coerce_session_id(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    session_id = value.strip()
+    if not session_id or not _SAFE_SESSION_ID_RE.fullmatch(session_id):
+        return ""
+    return session_id
 
 
 def _coerce_bool_flag(value: Any) -> bool:
@@ -269,10 +279,7 @@ class CodexWSHandler(WebSocketHandler):
             return
 
     async def _handle_start_session(self, payload: Dict[str, Any]):
-        requested_session_id = payload.get("sessionId") or ""
-        if not isinstance(requested_session_id, str):
-            requested_session_id = str(requested_session_id)
-        requested_session_id = requested_session_id.strip()
+        requested_session_id = _coerce_session_id(payload.get("sessionId"))
         force_new_thread = _coerce_bool_flag(payload.get("forceNewThread"))
         requested_command_path = _coerce_command_path(payload.get("commandPath"))
         self._send_model_catalog(command=requested_command_path, force_refresh=force_new_thread)
@@ -286,7 +293,9 @@ class CodexWSHandler(WebSocketHandler):
         resolved_session_id = requested_session_id
         session_resolution = "client"
         session_resolution_notice = ""
-        mapped_session_id = self._store.resolve_session_for_notebook(notebook_path, notebook_os_path)
+        mapped_session_id = _coerce_session_id(
+            self._store.resolve_session_for_notebook(notebook_path, notebook_os_path)
+        )
         if force_new_thread:
             session_resolution = "force-new"
             previous_session_id = mapped_session_id
@@ -376,10 +385,7 @@ class CodexWSHandler(WebSocketHandler):
         self._safe_write_message(json.dumps(status_payload))
 
     async def _handle_send(self, payload: Dict[str, Any]):
-        session_id = payload.get("sessionId") or ""
-        if not isinstance(session_id, str):
-            session_id = str(session_id)
-        session_id = session_id.strip() or str(uuid.uuid4())
+        session_id = _coerce_session_id(payload.get("sessionId")) or str(uuid.uuid4())
         content = payload.get("content", "")
         session_context_key = _coerce_session_context_key(payload.get("sessionContextKey"))
         selection = payload.get("selection", "")
@@ -655,10 +661,7 @@ class CodexWSHandler(WebSocketHandler):
                 if event.get("type") == "thread.started":
                     _flush_pending_output(force=True)
                     thread_id_raw = event.get("thread_id")
-                    if isinstance(thread_id_raw, str):
-                        thread_id = thread_id_raw.strip()
-                    else:
-                        thread_id = ""
+                    thread_id = _coerce_session_id(thread_id_raw)
                     if (
                         current_resume_session_id
                         and thread_id
@@ -955,10 +958,7 @@ class CodexWSHandler(WebSocketHandler):
         }
 
     def _handle_delete_session(self, payload: Dict[str, Any]) -> None:
-        session_id = payload.get("sessionId")
-        if not isinstance(session_id, str):
-            session_id = str(session_id) if session_id else ""
-        session_id = session_id.strip()
+        session_id = _coerce_session_id(payload.get("sessionId"))
         if session_id:
             self._store.delete_session(session_id)
 
@@ -1034,7 +1034,7 @@ class CodexWSHandler(WebSocketHandler):
         self._safe_write_message(json.dumps(status_payload))
 
     async def _handle_end_session(self, payload: Dict[str, Any]):
-        session_id = payload.get("sessionId")
+        session_id = _coerce_session_id(payload.get("sessionId"))
         if session_id:
             self._store.close_session(session_id)
         self._safe_write_message(json.dumps(build_status_payload(state="ready")))
