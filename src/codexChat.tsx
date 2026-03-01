@@ -80,6 +80,11 @@ import {
   toSelectionPreview,
 } from './codexChatDocumentUtils';
 import {
+  buildActiveCellAttachmentSignature,
+  isDuplicateActiveCellAttachmentSignature,
+  makeActiveCellAttachmentDedupKey
+} from './codexChatAttachmentDedup';
+import {
   ArrowDownIcon,
   ArrowUpIcon,
   CheckIcon,
@@ -783,6 +788,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const socketMessageQueueRef = useRef<unknown[]>([]);
   const socketMessageFlushTimerRef = useRef<number | null>(null);
   const socketMessageFlushRafRef = useRef<number | null>(null);
+  const lastActiveCellAttachmentSignatureRef = useRef<Map<string, string>>(new Map());
   const notifyOnDoneRef = useRef<boolean>(notifyOnDone);
   const notifyOnDoneMinSecondsRef = useRef<number>(notifyOnDoneMinSeconds);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -1851,6 +1857,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     }
     runToSessionKeyRef.current = new Map();
     activeSessionKeyByPathRef.current = new Map();
+    lastActiveCellAttachmentSignatureRef.current = new Map();
     safeLocalStorageRemove(STORAGE_KEY_SESSION_THREADS);
     clearStoredSelectionPreviews();
     replaceSessions(new Map());
@@ -2014,6 +2021,10 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       const existingSession = sessionsRef.current.get(sessionKey);
       if (existingSession && existingSession.threadId === threadId) {
         return;
+      }
+      if (existingSession?.threadId) {
+        const previousDedupKey = makeActiveCellAttachmentDedupKey(sessionKey, existingSession.threadId);
+        lastActiveCellAttachmentSignatureRef.current.delete(previousDedupKey);
       }
 
       updateSessions(prev => {
@@ -2284,6 +2295,10 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       selectedReasoningEffort: reasoningEffort,
       selectedSandboxMode: sandboxMode,
     };
+    if (existing?.threadId) {
+      const previousDedupKey = makeActiveCellAttachmentDedupKey(sessionKey, existing.threadId);
+      lastActiveCellAttachmentSignatureRef.current.delete(previousDedupKey);
+    }
     updateSessions(prev => {
       const next = new Map(prev);
       next.set(sessionKey, newSession);
@@ -2503,6 +2518,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     }
 
     const notebookMode = current?.notebookMode ?? inferNotebookModeFromPath(notebookPath);
+    const session = ensureSession(notebookPath, sessionKey);
     const selectedContext = getSelectedContext(activeWidget, notebookMode);
     const selectedTextForContext = selectedContext?.text || '';
     let includeSelectionKey = false;
@@ -2532,14 +2548,39 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       includeCellOutputKey && cellOutput
         ? toCellOutputPreview(selectedContext, activeWidget, notebookMode, cellOutput)
         : undefined;
+    const shouldDeduplicateActiveCellAttachment =
+      includeActiveCellForNextSend && (includeSelectionKey || includeCellOutputKey);
+    const activeCellAttachmentDedupKey = makeActiveCellAttachmentDedupKey(sessionKey, session.threadId);
+    const activeCellAttachmentSignature = shouldDeduplicateActiveCellAttachment
+      ? buildActiveCellAttachmentSignature({
+          notebookMode,
+          selection: includeSelectionKey ? selection : '',
+          cellOutput: includeCellOutputKey ? cellOutput : '',
+          selectionLocationLabel: messageSelectionPreview?.locationLabel,
+          cellOutputLocationLabel: messageCellOutputPreview?.locationLabel
+        })
+      : '';
+    const hasDuplicateActiveCellAttachment =
+      shouldDeduplicateActiveCellAttachment &&
+      isDuplicateActiveCellAttachmentSignature(
+        lastActiveCellAttachmentSignatureRef.current.get(activeCellAttachmentDedupKey),
+        activeCellAttachmentSignature
+      );
+    const includeSelectionKeyForSend = includeSelectionKey && !hasDuplicateActiveCellAttachment;
+    const includeCellOutputKeyForSend = includeCellOutputKey && !hasDuplicateActiveCellAttachment;
+    const messageSelectionPreviewForSend = hasDuplicateActiveCellAttachment
+      ? undefined
+      : messageSelectionPreview;
+    const messageCellOutputPreviewForSend = hasDuplicateActiveCellAttachment
+      ? undefined
+      : messageCellOutputPreview;
     const messageContextPreview: MessageContextPreview | undefined =
-      messageSelectionPreview || messageCellOutputPreview
+      messageSelectionPreviewForSend || messageCellOutputPreviewForSend
         ? {
-            ...(messageSelectionPreview ? { selectionPreview: messageSelectionPreview } : {}),
-            ...(messageCellOutputPreview ? { cellOutputPreview: messageCellOutputPreview } : {})
+            ...(messageSelectionPreviewForSend ? { selectionPreview: messageSelectionPreviewForSend } : {}),
+            ...(messageCellOutputPreviewForSend ? { cellOutputPreview: messageCellOutputPreviewForSend } : {})
           }
         : undefined;
-    const session = ensureSession(notebookPath, sessionKey);
     const modelForSend = current?.selectedModelOption ?? modelOption;
     const reasoningForSend = current?.selectedReasoningEffort ?? reasoningEffort;
     const sandboxForSend = current?.selectedSandboxMode ?? sandboxMode;
@@ -2588,11 +2629,11 @@ function CodexChat(props: CodexChatProps): JSX.Element {
             model: selectedModelForSend,
             reasoningEffort: selectedReasoningForSend,
             sandbox: sandboxForSend,
-            ...(includeSelectionKey ? { selection } : {}),
-            ...(includeCellOutputKey ? { cellOutput } : {}),
+            ...(includeSelectionKeyForSend ? { selection } : {}),
+            ...(includeCellOutputKeyForSend ? { cellOutput } : {}),
             ...(images ? { images } : {}),
-            ...(messageSelectionPreview ? { uiSelectionPreview: messageSelectionPreview } : {}),
-            ...(messageCellOutputPreview ? { uiCellOutputPreview: messageCellOutputPreview } : {})
+            ...(messageSelectionPreviewForSend ? { uiSelectionPreview: messageSelectionPreviewForSend } : {}),
+            ...(messageCellOutputPreviewForSend ? { uiCellOutputPreview: messageCellOutputPreviewForSend } : {})
           })
         )
       )
@@ -2601,6 +2642,11 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       return false;
     }
 
+    if (shouldDeduplicateActiveCellAttachment && activeCellAttachmentSignature) {
+      lastActiveCellAttachmentSignatureRef.current.set(activeCellAttachmentDedupKey, activeCellAttachmentSignature);
+    } else {
+      lastActiveCellAttachmentSignatureRef.current.delete(activeCellAttachmentDedupKey);
+    }
     appendStoredSelectionPreviewEntry(session.threadId, content, messageContextPreview);
 
     const imageCount = images ? images.length : 0;
@@ -2631,8 +2677,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
           role: 'user',
           text: content,
           attachments: imageCount > 0 ? { images: imageCount } : undefined,
-          selectionPreview: messageSelectionPreview,
-          cellOutputPreview: messageCellOutputPreview
+          selectionPreview: messageSelectionPreviewForSend,
+          cellOutputPreview: messageCellOutputPreviewForSend
         }
       ];
       next.set(sessionKey, {
