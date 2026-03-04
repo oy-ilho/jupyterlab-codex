@@ -11,6 +11,7 @@ class CodexRunner:
     def __init__(self, command: str = "codex", args: List[str] | None = None):
         configured_command = os.environ.get("JUPYTERLAB_CODEX_COMMAND", "").strip()
         self._command = self._resolve_command(configured_command or command)
+        self._model_catalog_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
         if args is not None:
             self._raw_args = list(args)
             self._common_args: List[str] = []
@@ -32,24 +33,24 @@ class CodexRunner:
             "never",
             "--skip-git-repo-check",
         ]
-        self._model_catalog_cache: list[dict[str, Any]] = []
-        self._model_catalog_cache_time = 0.0
 
-    async def list_available_models(self, command: str | None = None) -> list[dict[str, Any]]:
-        now = time.monotonic()
-        if self._model_catalog_cache and now - self._model_catalog_cache_time < 600:
-            return list(self._model_catalog_cache)
-
+    async def list_available_models(
+        self, command: str | None = None, force_refresh: bool = False
+    ) -> list[dict[str, Any]]:
         command_to_run = self._resolve_command((command or "").strip() or self._command)
+        now = time.monotonic()
+        cached = self._model_catalog_cache.get(command_to_run)
+        if not force_refresh and cached and now - cached[0] < 600:
+            return list(cached[1])
+
         try:
             models = await self._load_available_models(command_to_run)
         except Exception:
-            return []
+            return list(cached[1]) if cached else []
 
         if not isinstance(models, list) or not models:
-            return []
-        self._model_catalog_cache = models
-        self._model_catalog_cache_time = now
+            return list(cached[1]) if cached else []
+        self._model_catalog_cache[command_to_run] = (now, models)
         return list(models)
 
     async def _load_available_models(self, command_to_run: str) -> list[dict[str, Any]]:
@@ -60,9 +61,9 @@ class CodexRunner:
             "stdio://",
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
         )
-        if proc.stdin is None or proc.stdout is None or proc.stderr is None:
+        if proc.stdin is None or proc.stdout is None:
             raise RuntimeError("Failed to open app-server subprocess streams")
 
         buffer = bytearray()
@@ -275,10 +276,15 @@ class CodexRunner:
         sandbox: str | None = None,
         images: List[str] | None = None,
         command: str | None = None,
+        resume_session_id: str | None = None,
     ) -> int:
         command_to_run = self._resolve_command((command or "").strip() or self._command)
         args = self._args_for_options(
-            model=model, reasoning_effort=reasoning_effort, sandbox=sandbox, images=images
+            model=model,
+            reasoning_effort=reasoning_effort,
+            sandbox=sandbox,
+            images=images,
+            resume_session_id=resume_session_id,
         )
 
         proc = await asyncio.create_subprocess_exec(
@@ -371,11 +377,13 @@ class CodexRunner:
         reasoning_effort: str | None,
         sandbox: str | None,
         images: List[str] | None,
+        resume_session_id: str | None = None,
     ) -> List[str]:
         requested_model = (model or "").strip()
         requested_reasoning_effort = (reasoning_effort or "").strip()
         requested_sandbox = (sandbox or "").strip()
         requested_images = [p for p in (images or []) if isinstance(p, str) and p.strip()]
+        requested_resume_session_id = (resume_session_id or "").strip()
 
         if self._raw_args is not None:
             args = list(self._raw_args)
@@ -399,7 +407,17 @@ class CodexRunner:
                 cleaned.append(token)
                 idx += 1
 
-            insertion_index = cleaned.index("-") if "-" in cleaned else len(cleaned)
+            stdin_insertion_index = cleaned.index("-") if "-" in cleaned else len(cleaned)
+            if requested_resume_session_id and "resume" not in cleaned:
+                cleaned[stdin_insertion_index:stdin_insertion_index] = [
+                    "resume",
+                    requested_resume_session_id,
+                ]
+            options_insertion_index = (
+                cleaned.index("resume")
+                if "resume" in cleaned
+                else (cleaned.index("-") if "-" in cleaned else len(cleaned))
+            )
             to_insert: List[str] = []
             if requested_images:
                 to_insert.extend(["--image", *requested_images])
@@ -410,11 +428,36 @@ class CodexRunner:
             if requested_reasoning_effort:
                 to_insert.extend(["-c", f'model_reasoning_effort="{requested_reasoning_effort}"'])
 
-            cleaned[insertion_index:insertion_index] = to_insert
+            cleaned[options_insertion_index:options_insertion_index] = to_insert
             return cleaned
 
         effective_model = requested_model or self._default_model
         effective_sandbox = requested_sandbox or self._default_sandbox
+
+        if requested_resume_session_id:
+            # `codex exec resume` does not accept `--sandbox` after `resume`.
+            # Sandbox must be passed as an `exec` option before the `resume` subcommand.
+            args: List[str] = [
+                "--ask-for-approval",
+                "never",
+                "exec",
+                "--json",
+                "--color",
+                "never",
+                "--skip-git-repo-check",
+            ]
+            if effective_sandbox:
+                args.extend(["--sandbox", effective_sandbox])
+            args.append("resume")
+            if effective_model:
+                args.extend(["-m", effective_model])
+            if requested_reasoning_effort:
+                args.extend(["-c", f'model_reasoning_effort="{requested_reasoning_effort}"'])
+            if requested_images:
+                args.extend(["--image", *requested_images])
+            args.extend([requested_resume_session_id, "-"])
+            return args
+
         args = list(self._common_args)
         if effective_sandbox:
             args.extend(["--sandbox", effective_sandbox])

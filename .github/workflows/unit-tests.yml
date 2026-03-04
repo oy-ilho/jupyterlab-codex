@@ -1,0 +1,27 @@
+name: Unit Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Enable Corepack and select Yarn 4
+        run: |
+          corepack enable
+          corepack prepare yarn@4.6.0 --activate
+
+      - name: Install dependencies
+        run: corepack yarn install --immutable
+
+      - name: Run unit tests
+        run: corepack yarn run test:unit
