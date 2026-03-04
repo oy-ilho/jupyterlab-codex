@@ -17,6 +17,12 @@ def _coerce_string(value: Any) -> str:
     return value.strip()
 
 
+def _coerce_string_untrimmed(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value
+
+
 def _coerce_bool(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -59,8 +65,8 @@ def parse_client_message(raw: Any) -> Tuple[str, Dict[str, Any]]:
                 "model": _coerce_string(raw.get("model")),
                 "reasoningEffort": _coerce_string(raw.get("reasoningEffort")),
                 "sandbox": _coerce_string(raw.get("sandbox")),
-                "selection": _coerce_string(raw.get("selection")),
-                "cellOutput": _coerce_string(raw.get("cellOutput")),
+                "selection": _coerce_string_untrimmed(raw.get("selection")),
+                "cellOutput": _coerce_string_untrimmed(raw.get("cellOutput")),
                 "images": raw.get("images") if isinstance(raw.get("images"), list) else [],
                 "uiSelectionPreview": raw.get("uiSelectionPreview"),
                 "uiCellOutputPreview": raw.get("uiCellOutputPreview"),

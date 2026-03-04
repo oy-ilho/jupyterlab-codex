@@ -63,6 +63,20 @@ class TestProtocolBuilders(unittest.TestCase):
         self.assertTrue(payload["selectionTruncated"])
         self.assertFalse(payload["cellOutputTruncated"])
 
+    def test_parse_client_send_preserves_selection_and_cell_output_whitespace(self):
+        message = {
+            "type": "send",
+            "sessionId": "thread-1",
+            "sessionContextKey": "k",
+            "content": "  hello  ",
+            "selection": "  def run():\\n    return 1\\n",
+            "cellOutput": "\\n>>>   foo()\\nbar()  \\n",
+        }
+        msg_type, payload = parse_client_message(message)
+        self.assertEqual(msg_type, "send")
+        self.assertEqual(payload["selection"], "  def run():\\n    return 1\\n")
+        self.assertEqual(payload["cellOutput"], "\\n>>>   foo()\\nbar()  \\n")
+
     def test_parse_client_invalid_message(self):
         with self.assertRaises(ProtocolParseError):
             parse_client_message({"type": "unknown"})
