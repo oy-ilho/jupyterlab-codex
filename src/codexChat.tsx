@@ -780,6 +780,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const [usagePopoverOpen, setUsagePopoverOpen] = useState(false);
   const [permissionMenuOpen, setPermissionMenuOpen] = useState(false);
   const [isPlainPyRunInProgress, setIsPlainPyRunInProgress] = useState<boolean>(false);
+  const [cellAttachmentPopoverOpen, setCellAttachmentPopoverOpen] = useState(false);
   const [selectionPopover, setSelectionPopover] = useState<{
     messageId: string;
     preview: MessageContextPreview;
@@ -816,6 +817,9 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const permissionBtnRef = useRef<HTMLButtonElement>(null);
   const permissionPopoverRef = useRef<HTMLDivElement>(null);
   const plainPyRunSessionKeyRef = useRef<string>('');
+  const cellAttachmentAnchorRef = useRef<HTMLDivElement | null>(null);
+  const cellAttachmentPopoverRef = useRef<HTMLDivElement>(null);
+  const cellAttachmentPopoverCloseTimerRef = useRef<number | null>(null);
   const selectionPopoverAnchorRef = useRef<HTMLElement | null>(null);
   const selectionPopoverRef = useRef<HTMLDivElement>(null);
   const notebookLabelRef = useRef<HTMLSpanElement | null>(null);
@@ -1123,6 +1127,40 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   function closeSelectionPopover(): void {
     setSelectionPopover(null);
     selectionPopoverAnchorRef.current = null;
+  }
+
+  function clearCellAttachmentPopoverCloseTimer(): void {
+    if (cellAttachmentPopoverCloseTimerRef.current !== null) {
+      window.clearTimeout(cellAttachmentPopoverCloseTimerRef.current);
+      cellAttachmentPopoverCloseTimerRef.current = null;
+    }
+  }
+
+  function openCellAttachmentPopover(): void {
+    clearCellAttachmentPopoverCloseTimer();
+    if (!showCellAttachmentBadge) {
+      setCellAttachmentPopoverOpen(false);
+      return;
+    }
+    setCellAttachmentPopoverOpen(true);
+  }
+
+  function scheduleCloseCellAttachmentPopover(): void {
+    clearCellAttachmentPopoverCloseTimer();
+    cellAttachmentPopoverCloseTimerRef.current = window.setTimeout(() => {
+      setCellAttachmentPopoverOpen(false);
+      cellAttachmentPopoverCloseTimerRef.current = null;
+    }, 90);
+  }
+
+  function handleCellAttachmentBlur(event: React.FocusEvent<HTMLDivElement>): void {
+    const nextFocused = event.relatedTarget as Node | null;
+    const inAnchor = nextFocused ? cellAttachmentAnchorRef.current?.contains(nextFocused) ?? false : false;
+    const inPopover = nextFocused ? cellAttachmentPopoverRef.current?.contains(nextFocused) ?? false : false;
+    if (inAnchor || inPopover) {
+      return;
+    }
+    scheduleCloseCellAttachmentPopover();
   }
 
   function toggleSelectionPopover(
@@ -2817,9 +2855,21 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const cellAttachmentContentEnabled =
     includeActiveCellForNextSend && (composerNotebookMode === 'ipynb' || composerNotebookMode === 'jupytext_py');
   const cellAttachmentOutputEnabled = includeCellOutputForNextSend;
-  const cellAttachmentTooltip =
-    `Current cell content: ${cellAttachmentContentEnabled ? 'O' : 'X'}\n` +
-    `Current cell output: ${cellAttachmentOutputEnabled ? 'O' : 'X'}`;
+
+  useEffect(() => {
+    if (showCellAttachmentBadge) {
+      return;
+    }
+    setCellAttachmentPopoverOpen(false);
+    clearCellAttachmentPopoverCloseTimer();
+  }, [showCellAttachmentBadge]);
+
+  useEffect(() => {
+    return () => {
+      clearCellAttachmentPopoverCloseTimer();
+    };
+  }, []);
+
   const trimmedInput = input.trim();
   const canSend =
     status !== 'disconnected' &&
@@ -3291,6 +3341,38 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         )}
       </PortalMenu>
 
+      <PortalMenu
+        open={cellAttachmentPopoverOpen && showCellAttachmentBadge}
+        anchorRef={cellAttachmentAnchorRef as React.RefObject<HTMLElement>}
+        popoverRef={cellAttachmentPopoverRef}
+        className="jp-CodexCellAttachmentPopoverMenu"
+        ariaLabel="Cell attachment details"
+        role="dialog"
+        align="left"
+        onMouseEnter={openCellAttachmentPopover}
+        onMouseLeave={scheduleCloseCellAttachmentPopover}
+      >
+        <div className="jp-CodexCellAttachmentPopoverCard" role="note" aria-label="Cell attachment details">
+          <div className="jp-CodexCellAttachmentPopoverTitle">Attach On Next Send</div>
+          <div className="jp-CodexCellAttachmentPopoverRow">
+            <span>Current cell content</span>
+            <span
+              className={`jp-CodexCellAttachmentDot ${cellAttachmentContentEnabled ? 'is-on' : 'is-off'}`}
+              aria-label={cellAttachmentContentEnabled ? 'Attached' : 'Not attached'}
+              title={cellAttachmentContentEnabled ? 'Attached' : 'Not attached'}
+            />
+          </div>
+          <div className="jp-CodexCellAttachmentPopoverRow">
+            <span>Current cell output</span>
+            <span
+              className={`jp-CodexCellAttachmentDot ${cellAttachmentOutputEnabled ? 'is-on' : 'is-off'}`}
+              aria-label={cellAttachmentOutputEnabled ? 'Attached' : 'Not attached'}
+              title={cellAttachmentOutputEnabled ? 'Attached' : 'Not attached'}
+            />
+          </div>
+        </div>
+      </PortalMenu>
+
       <div className="jp-CodexChat-input">
         <div className={`jp-CodexJumpBar${isAtBottom ? '' : ' is-visible'}`}>
           <button
@@ -3307,14 +3389,18 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         </div>
 	        <div className="jp-CodexComposer">
             <div
-              className={`jp-CodexComposer-cellAttachmentWrap${showCellAttachmentBadge ? ' is-visible' : ''}`}
+              className={`jp-CodexCellAttachmentWrap jp-CodexComposer-cellAttachmentWrap${showCellAttachmentBadge ? ' is-visible' : ''}`}
+              ref={cellAttachmentAnchorRef}
               aria-hidden={!showCellAttachmentBadge}
+              onMouseEnter={openCellAttachmentPopover}
+              onMouseLeave={scheduleCloseCellAttachmentPopover}
+              onFocusCapture={openCellAttachmentPopover}
+              onBlurCapture={handleCellAttachmentBlur}
             >
               <div
                 className="jp-CodexComposer-cellAttachment"
                 role="group"
                 aria-label="Pending active-cell attachment"
-                title={cellAttachmentTooltip}
               >
                 <span className="jp-CodexComposer-cellAttachmentLabel">Cell Attached</span>
                 <button
