@@ -2549,7 +2549,9 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       }
     }
     const includeCellOutputKey =
-      includeActiveCellForNextSend && includeActiveCellOutput && notebookMode === 'ipynb';
+      includeActiveCellForNextSend &&
+      includeActiveCellOutput &&
+      (notebookMode === 'ipynb' || notebookMode === 'jupytext_py');
     const cellOutputRaw = includeCellOutputKey ? getActiveCellOutput(activeWidget) : '';
     const attachmentLimit = limitActiveCellAttachmentPayload(
       includeSelectionKey ? selection : '',
@@ -2804,12 +2806,20 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const includeActiveCellForNextSend = includeActiveCell && !excludeCellAttachmentForNextSend;
   const composerNotebookMode = currentSession?.notebookMode ?? inferNotebookModeFromPath(currentNotebookPath);
   const includeCellOutputForNextSend =
-    includeActiveCellForNextSend && includeActiveCellOutput && composerNotebookMode === 'ipynb';
+    includeActiveCellForNextSend &&
+    includeActiveCellOutput &&
+    (composerNotebookMode === 'ipynb' || composerNotebookMode === 'jupytext_py');
   const showCellAttachmentBadge =
     includeActiveCellForNextSend &&
     composerNotebookMode !== 'plain_py' &&
     currentNotebookPath.length > 0 &&
     currentSession?.pairedOk !== false;
+  const cellAttachmentContentEnabled =
+    includeActiveCellForNextSend && (composerNotebookMode === 'ipynb' || composerNotebookMode === 'jupytext_py');
+  const cellAttachmentOutputEnabled = includeCellOutputForNextSend;
+  const cellAttachmentTooltip =
+    `Current cell content: ${cellAttachmentContentEnabled ? 'O' : 'X'}\n` +
+    `Current cell output: ${cellAttachmentOutputEnabled ? 'O' : 'X'}`;
   const trimmedInput = input.trim();
   const canSend =
     status !== 'disconnected' &&
@@ -3304,11 +3314,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                 className="jp-CodexComposer-cellAttachment"
                 role="group"
                 aria-label="Pending active-cell attachment"
-                title={
-                  includeCellOutputForNextSend
-                    ? 'Active cell and output will be attached on next send.'
-                    : 'Active cell will be attached on next send.'
-                }
+                title={cellAttachmentTooltip}
               >
                 <span className="jp-CodexComposer-cellAttachmentLabel">Cell Attached</span>
                 <button

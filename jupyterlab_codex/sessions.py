@@ -272,7 +272,7 @@ class SessionStore:
             parts.append("")
 
         include_selection = mode in {"ipynb", "jupytext_py", "plain_py"}
-        include_cell_output = mode == "ipynb"
+        include_cell_output = mode in {"ipynb", "jupytext_py"}
 
         if include_selection and selection:
             parts.append("Current Cell Content:")

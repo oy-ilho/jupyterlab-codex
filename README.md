@@ -59,8 +59,16 @@ The backend runs `codex` as a local subprocess per request, streams JSONL events
 - Optional inclusion of active cell text
 - Mode-aware behavior by file type
   - `.ipynb`: requires paired `.py`; sends active cell context and optional active cell output
-  - `.py` (`jupytext_py`): sends active cell context, preserves Jupytext structure/markers
-  - `.py` (`plain_py`): sends `selection` only when text is explicitly selected, and avoids introducing Jupytext markers unless requested
+  - `.py` (`jupytext_py`): sends active cell context and optional active cell output when opened as notebook; text selection when opened in text editor
+  - `.py` (`plain_py`): sends `selection` only when text is explicitly selected
+
+  | File type | Open mode | Selection attachment | Output attachment |
+  | --- | --- | --- | --- |
+  | `.ipynb` | Notebook editor (`Open With > Notebook`) | Active cell | Active cell output |
+  | `.py` (Jupytext mode) | Notebook editor | Active cell | Active cell output |
+  | `.py` (Jupytext mode) | Text editor | Selected text | None |
+  | `.py` (plain mode) | Notebook editor | Active selected text | None |
+  | `.py` (plain mode) | Text editor | Selected text | None |
 - Conversation/session logs: `~/.jupyter/codex-sessions/`
 - Optional usage snapshot: best-effort scan of recent `~/.codex/sessions/`
 
@@ -291,8 +299,16 @@ JupyterLab 4 우측 사이드바에서 Codex CLI(`codex exec --json`)를 채팅 
 - 활성 셀 텍스트를 프롬프트에 포함할지 선택
 - 파일 타입별 모드 동작
   - `.ipynb`: 페어 `.py`가 필요하며, active cell/context 및 active cell output을 전송
-  - `.py` (`jupytext_py`): active cell context를 전송하고 Jupytext 구조/마커를 보존
+  - `.py` (`jupytext_py`): 노트북 모드로 열면 active cell과 active cell output을 전송하고, 텍스트 에디터로 열면 선택 텍스트를 전송
   - `.py` (`plain_py`): 텍스트를 명시적으로 선택한 경우에만 `selection`을 전송하고, 요청 없이는 Jupytext 마커를 추가하지 않음
+
+  | 파일 타입 | 열기 모드 | 첨부 동작(입력) | 첨부 동작(출력) |
+  | --- | --- | --- | --- |
+  | `.ipynb` | Notebook 에디터(`Open With > Notebook`) | 현재 활성 셀 | 현재 셀 output |
+  | `.py` (Jupytext 모드) | Notebook 에디터 | 현재 활성 셀 | 현재 셀 output |
+  | `.py` (Jupytext 모드) | 텍스트 에디터 | 선택 텍스트 | 없음 |
+  | `.py` (plain 모드) | Notebook 에디터 | 선택 텍스트(있을 때) | 없음 |
+  | `.py` (plain 모드) | 텍스트 에디터 | 선택 텍스트(있을 때) | 없음 |
 - 세션 로그 저장: `~/.jupyter/codex-sessions/`
 - (가능한 경우) Codex 사용량 스냅샷 표시: `~/.codex/sessions/` 를 best-effort로 스캔
 
