@@ -5,6 +5,11 @@ export type ActiveCellAttachmentLimitResult = {
   cellOutputTruncated: boolean;
 };
 
+export type SentAttachmentTruncationResult = {
+  selectionTruncated: boolean;
+  cellOutputTruncated: boolean;
+};
+
 function clampNonNegativeInteger(value: number): number {
   if (!Number.isFinite(value)) {
     return 0;
@@ -79,4 +84,16 @@ export function buildAttachmentTruncationNotice(
     return `Attached input was truncated to stay within ${maxChars} total characters before sending. The full input can be checked directly from the source file/cell.`;
   }
   return `Attached output was truncated to stay within ${maxChars} total characters before sending.`;
+}
+
+export function resolveSentAttachmentTruncation(input: {
+  includeSelection: boolean;
+  includeCellOutput: boolean;
+  selectionTruncated: boolean;
+  cellOutputTruncated: boolean;
+}): SentAttachmentTruncationResult {
+  return {
+    selectionTruncated: input.includeSelection && input.selectionTruncated,
+    cellOutputTruncated: input.includeCellOutput && input.cellOutputTruncated
+  };
 }

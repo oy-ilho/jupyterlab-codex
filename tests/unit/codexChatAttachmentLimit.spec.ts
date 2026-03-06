@@ -2,7 +2,8 @@ import { expect, test } from '@playwright/test';
 
 import {
   buildAttachmentTruncationNotice,
-  limitActiveCellAttachmentPayload
+  limitActiveCellAttachmentPayload,
+  resolveSentAttachmentTruncation
 } from '../../src/codexChatAttachmentLimit';
 
 test('limitActiveCellAttachmentPayload keeps payload unchanged when within max', () => {
@@ -39,4 +40,18 @@ test('buildAttachmentTruncationNotice includes source hint when input is truncat
   const notice = buildAttachmentTruncationNotice(true, false, 4000);
   expect(notice).toContain('source file/cell');
   expect(notice).toContain('4000');
+});
+
+test('resolveSentAttachmentTruncation only reports truncation for attachments that were sent', () => {
+  expect(
+    resolveSentAttachmentTruncation({
+      includeSelection: false,
+      includeCellOutput: true,
+      selectionTruncated: true,
+      cellOutputTruncated: true
+    })
+  ).toEqual({
+    selectionTruncated: false,
+    cellOutputTruncated: true
+  });
 });

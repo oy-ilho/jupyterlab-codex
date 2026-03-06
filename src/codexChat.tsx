@@ -73,11 +73,13 @@ import {
   getSelectedTextFromActiveCell,
   getSelectedTextFromFileEditor,
   getSupportedDocumentPath,
+  isNotebookWidget,
   normalizeSelectionPreviewText,
   restoreDocumentViewState,
   toCellOutputPreview,
   toFallbackSelectionPreview,
 } from './codexChatDocumentUtils';
+import { resolveCellAttachmentState } from './codexChatAttachmentState';
 import {
   buildActiveCellOutputSignature,
   buildActiveCellSelectionSignature,
@@ -86,7 +88,8 @@ import {
 } from './codexChatAttachmentDedup';
 import {
   buildAttachmentTruncationNotice,
-  limitActiveCellAttachmentPayload
+  limitActiveCellAttachmentPayload,
+  resolveSentAttachmentTruncation
 } from './codexChatAttachmentLimit';
 import {
   ArrowDownIcon,
@@ -756,6 +759,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     readStoredIncludeActiveCellOutput()
   );
   const [excludeCellAttachmentForNextSend, setExcludeCellAttachmentForNextSend] = useState<boolean>(false);
+  const [currentDocumentIsNotebookEditor, setCurrentDocumentIsNotebookEditor] = useState(false);
   const [notifyOnDone, setNotifyOnDone] = useState<boolean>(() => readStoredNotifyOnDone());
   const [notifyOnDoneMinSeconds, setNotifyOnDoneMinSeconds] = useState<number>(() => readStoredNotifyOnDoneMinSeconds());
   const [settingsOpen, setSettingsOpen] = useState<boolean>(() => readStoredSettingsOpen());
@@ -1967,6 +1971,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       if (activeWidget) {
         activeDocumentWidgetRef.current = activeWidget;
       }
+      const nextIsNotebookEditor = isNotebookWidget(activeWidget);
+      setCurrentDocumentIsNotebookEditor(prev => (prev === nextIsNotebookEditor ? prev : nextIsNotebookEditor));
       const path = getSupportedDocumentPath(activeWidget);
       const sessionKey = resolveSessionKey(path);
       const previousKey = currentNotebookSessionKeyRef.current;
@@ -2642,6 +2648,12 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       );
     const includeSelectionKeyForSend = includeSelectionKeyAfterLimit && !hasDuplicateSelectionAttachment;
     const includeCellOutputKeyForSend = includeCellOutputKeyAfterLimit && !hasDuplicateCellOutputAttachment;
+    const sentAttachmentTruncation = resolveSentAttachmentTruncation({
+      includeSelection: includeSelectionKeyForSend,
+      includeCellOutput: includeCellOutputKeyForSend,
+      selectionTruncated: attachmentLimit.selectionTruncated,
+      cellOutputTruncated: attachmentLimit.cellOutputTruncated
+    });
     const messageSelectionPreviewForSend = hasDuplicateSelectionAttachment ? undefined : messageSelectionPreview;
     const messageCellOutputPreviewForSend = hasDuplicateCellOutputAttachment ? undefined : messageCellOutputPreview;
     const messageContextPreview: MessageContextPreview | undefined =
@@ -2701,8 +2713,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
             sandbox: sandboxForSend,
             ...(includeSelectionKeyForSend ? { selection: selectionForAttachment } : {}),
             ...(includeCellOutputKeyForSend ? { cellOutput: cellOutputForAttachment } : {}),
-            ...(attachmentLimit.selectionTruncated ? { selectionTruncated: true } : {}),
-            ...(attachmentLimit.cellOutputTruncated ? { cellOutputTruncated: true } : {}),
+            ...(sentAttachmentTruncation.selectionTruncated ? { selectionTruncated: true } : {}),
+            ...(sentAttachmentTruncation.cellOutputTruncated ? { cellOutputTruncated: true } : {}),
             ...(images ? { images } : {}),
             ...(messageSelectionPreviewForSend ? { uiSelectionPreview: messageSelectionPreviewForSend } : {}),
             ...(messageCellOutputPreviewForSend ? { uiCellOutputPreview: messageCellOutputPreviewForSend } : {})
@@ -2733,8 +2745,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     const imageCount = images ? images.length : 0;
     const showReadOnlyWarning = sandboxForSend === 'read-only';
     const attachmentTruncationNotice = buildAttachmentTruncationNotice(
-      attachmentLimit.selectionTruncated,
-      attachmentLimit.cellOutputTruncated,
+      sentAttachmentTruncation.selectionTruncated,
+      sentAttachmentTruncation.cellOutputTruncated,
       MAX_ACTIVE_CELL_ATTACHMENT_TOTAL_CHARS
     );
     if (notebookMode === 'plain_py' || notebookMode === 'jupytext_py') {
@@ -2843,18 +2855,18 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     : 'No notebook';
   const includeActiveCellForNextSend = includeActiveCell && !excludeCellAttachmentForNextSend;
   const composerNotebookMode = currentSession?.notebookMode ?? inferNotebookModeFromPath(currentNotebookPath);
-  const includeCellOutputForNextSend =
-    includeActiveCellForNextSend &&
-    includeActiveCellOutput &&
-    (composerNotebookMode === 'ipynb' || composerNotebookMode === 'jupytext_py');
-  const showCellAttachmentBadge =
-    includeActiveCellForNextSend &&
-    composerNotebookMode !== 'plain_py' &&
-    currentNotebookPath.length > 0 &&
-    currentSession?.pairedOk !== false;
-  const cellAttachmentContentEnabled =
-    includeActiveCellForNextSend && (composerNotebookMode === 'ipynb' || composerNotebookMode === 'jupytext_py');
-  const cellAttachmentOutputEnabled = includeCellOutputForNextSend;
+  const cellAttachmentState = resolveCellAttachmentState({
+    includeActiveCellForNextSend,
+    includeActiveCellOutput,
+    notebookMode: composerNotebookMode,
+    isNotebookEditor: currentDocumentIsNotebookEditor,
+    currentNotebookPath,
+    pairedOk: currentSession?.pairedOk
+  });
+  const includeCellOutputForNextSend = cellAttachmentState.outputEnabled;
+  const showCellAttachmentBadge = cellAttachmentState.showBadge;
+  const cellAttachmentContentEnabled = cellAttachmentState.contentEnabled;
+  const cellAttachmentOutputEnabled = cellAttachmentState.outputEnabled;
 
   useEffect(() => {
     if (showCellAttachmentBadge) {
