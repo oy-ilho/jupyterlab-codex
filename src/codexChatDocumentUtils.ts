@@ -423,6 +423,26 @@ export function toSelectionPreview(context: SelectedContext | null): SelectionPr
   };
 }
 
+export function toMessageSelectionPreview(
+  context: SelectedContext | null,
+  widget: DocumentWidgetLike | null,
+  notebookMode: NotebookMode,
+  text: string
+): SelectionPreview | undefined {
+  const normalized = normalizeSelectionPreviewText(text);
+  if (!normalized) {
+    return undefined;
+  }
+  if (context) {
+    const locationLabel = context.kind === 'cell' ? `Cell ${context.number}` : `Line ${context.number}`;
+    return {
+      locationLabel,
+      previewText: truncateEnd(normalized, MESSAGE_SELECTION_PREVIEW_STORED_MAX_CHARS)
+    };
+  }
+  return toFallbackSelectionPreview(widget, notebookMode, normalized);
+}
+
 export function formatSelectionPreviewTextForDisplay(previewText: string): string {
   return truncateEnd(normalizeSelectionPreviewText(previewText), MESSAGE_SELECTION_PREVIEW_DISPLAY_MAX_CHARS);
 }

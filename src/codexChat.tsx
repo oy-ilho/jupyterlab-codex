@@ -77,7 +77,7 @@ import {
   normalizeSelectionPreviewText,
   restoreDocumentViewState,
   toCellOutputPreview,
-  toFallbackSelectionPreview,
+  toMessageSelectionPreview,
 } from './codexChatDocumentUtils';
 import { resolveCellAttachmentState } from './codexChatAttachmentState';
 import {
@@ -2608,7 +2608,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     const includeCellOutputKeyAfterLimit = Boolean(cellOutputForAttachment);
     const messageSelectionPreview =
       includeSelectionKeyAfterLimit
-        ? toFallbackSelectionPreview(activeWidget, notebookMode, selectionForAttachment)
+        ? toMessageSelectionPreview(selectedContext, activeWidget, notebookMode, selectionForAttachment)
         : undefined;
     const messageCellOutputPreview =
       includeCellOutputKeyAfterLimit
