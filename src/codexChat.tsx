@@ -3174,7 +3174,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 	              <GearIcon width={16} height={16} />
 	            </button>
 	          </div>
-	        </div>
+        </div>
 
         {currentSession?.pairedOk === false && (
           <div className="jp-CodexPairingNotice" role="status" aria-live="polite">
