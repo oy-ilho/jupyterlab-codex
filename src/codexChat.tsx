@@ -94,8 +94,9 @@ import {
 import {
   ArrowDownIcon,
   ArrowUpIcon,
+  BatteryIcon,
+  CellAttachmentIcon,
   CheckIcon,
-  ChipIcon,
   ContextWindowIcon,
   FileIcon,
   GaugeIcon,
@@ -106,8 +107,7 @@ import {
   ReasoningEffortIcon,
   ShieldIcon,
   StopIcon,
-  XIcon,
-  BatteryIcon
+  XIcon
 } from './codexChatPrimitives';
 import {
   hasStoredValue,
@@ -3396,9 +3396,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                   disabled={!showCellAttachmentBadge}
                   tabIndex={showCellAttachmentBadge ? 0 : -1}
                 >
-                  <span className="jp-CodexComposer-cellAttachmentLabel">
-                    {cellAttachmentContentEnabled ? 'Cell Attached' : 'Cell Attachment Off'}
-                  </span>
+                  <CellAttachmentIcon active={cellAttachmentContentEnabled} width={15} height={15} />
+                  <span className="jp-CodexComposer-cellAttachmentLabel">Cell Attatch</span>
                 </button>
               </div>
             </div>

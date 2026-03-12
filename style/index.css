@@ -1359,12 +1359,14 @@
   appearance: none;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
   width: fit-content;
   max-width: 100%;
-  padding: 4px 8px;
+  min-height: 28px;
+  padding: 0 10px 0 9px;
   border-radius: 999px;
-  border: none;
+  border: 1px solid transparent;
   background: color-mix(in srgb, var(--cdx-accent) 9%, var(--cdx-surface));
   color: color-mix(in srgb, var(--cdx-accent) 80%, var(--cdx-text));
   font-size: 11px;
@@ -1373,6 +1375,11 @@
   cursor: pointer;
   transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
   animation: cdx-cell-attachment-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.jp-CodexComposer-cellAttachment:not(.is-off) {
+  border-color: color-mix(in srgb, var(--cdx-accent) 42%, var(--cdx-border));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--cdx-accent) 16%, transparent);
 }
 
 .jp-CodexComposer-cellAttachment.is-off {
