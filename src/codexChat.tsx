@@ -309,7 +309,8 @@ const SELECTION_PREVIEWS_STORAGE_KEY = 'jupyterlab-codex:selection-previews';
 const MAX_IMAGE_ATTACHMENTS = 4;
 const MAX_IMAGE_ATTACHMENT_BYTES = 4 * 1024 * 1024; // Avoid huge WebSocket payloads.
 const MAX_IMAGE_ATTACHMENT_TOTAL_BYTES = 6 * 1024 * 1024;
-const MAX_ACTIVE_CELL_ATTACHMENT_TOTAL_CHARS = 4000;
+const MAX_ACTIVE_CELL_SELECTION_CHARS = 4000;
+const MAX_ACTIVE_CELL_OUTPUT_CHARS = 20000;
 const MAX_STORED_SELECTION_PREVIEW_THREADS = 80;
 const MAX_STORED_SELECTION_PREVIEW_MESSAGES_PER_THREAD = 10;
 const MAX_SESSION_MESSAGES = 100;
@@ -2600,7 +2601,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     const attachmentLimit = limitActiveCellAttachmentPayload(
       includeSelectionKey ? selection : '',
       includeCellOutputKey ? cellOutputRaw : '',
-      MAX_ACTIVE_CELL_ATTACHMENT_TOTAL_CHARS
+      MAX_ACTIVE_CELL_SELECTION_CHARS,
+      MAX_ACTIVE_CELL_OUTPUT_CHARS
     );
     const selectionForAttachment = includeSelectionKey ? attachmentLimit.selection : '';
     const cellOutputForAttachment = includeCellOutputKey ? attachmentLimit.cellOutput : '';
@@ -2747,7 +2749,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     const attachmentTruncationNotice = buildAttachmentTruncationNotice(
       sentAttachmentTruncation.selectionTruncated,
       sentAttachmentTruncation.cellOutputTruncated,
-      MAX_ACTIVE_CELL_ATTACHMENT_TOTAL_CHARS
+      MAX_ACTIVE_CELL_SELECTION_CHARS,
+      MAX_ACTIVE_CELL_OUTPUT_CHARS
     );
     if (notebookMode === 'plain_py' || notebookMode === 'jupytext_py') {
       plainPyRunSessionKeyRef.current = sessionKey;

@@ -1,6 +1,10 @@
 import { expect, test } from '@playwright/test';
 
-import { toMessageSelectionPreview } from '../../src/codexChatDocumentUtils';
+import {
+  ACTIVE_CELL_OUTPUT_MAX_CHARS,
+  summarizeJupyterOutputs,
+  toMessageSelectionPreview
+} from '../../src/codexChatDocumentUtils';
 
 test('toMessageSelectionPreview keeps line labels for jupytext text-editor selections', () => {
   expect(
@@ -28,4 +32,32 @@ test('toMessageSelectionPreview uses the attached text after payload truncation'
     locationLabel: 'Cell 3',
     previewText: 'trimmed content'
   });
+});
+
+test('summarizeJupyterOutputs keeps the start of non-error output when truncating', () => {
+  const output = summarizeJupyterOutputs([
+    {
+      output_type: 'stream',
+      name: 'stdout',
+      text: 'A'.repeat(ACTIVE_CELL_OUTPUT_MAX_CHARS + 100)
+    }
+  ]);
+
+  expect(output.startsWith('A'.repeat(16))).toBeTruthy();
+  expect(output.endsWith('... (truncated)')).toBeTruthy();
+  expect(output.length).toBeLessThanOrEqual(ACTIVE_CELL_OUTPUT_MAX_CHARS);
+});
+
+test('summarizeJupyterOutputs keeps the end of error output when truncating', () => {
+  const tail = 'ValueError: final failure details';
+  const output = summarizeJupyterOutputs([
+    {
+      output_type: 'error',
+      traceback: ['trace line', 'B'.repeat(ACTIVE_CELL_OUTPUT_MAX_CHARS), tail]
+    }
+  ]);
+
+  expect(output.startsWith('... (truncated)')).toBeTruthy();
+  expect(output.endsWith(tail)).toBeTruthy();
+  expect(output.length).toBeLessThanOrEqual(ACTIVE_CELL_OUTPUT_MAX_CHARS);
 });
