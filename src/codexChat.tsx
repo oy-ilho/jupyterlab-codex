@@ -783,6 +783,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const [reasoningMenuOpen, setReasoningMenuOpen] = useState(false);
   const [usagePopoverOpen, setUsagePopoverOpen] = useState(false);
   const [permissionMenuOpen, setPermissionMenuOpen] = useState(false);
+  const [contextPopoverOpen, setContextPopoverOpen] = useState(false);
   const [isPlainPyRunInProgress, setIsPlainPyRunInProgress] = useState<boolean>(false);
   const [cellAttachmentPopoverOpen, setCellAttachmentPopoverOpen] = useState(false);
   const [selectionPopover, setSelectionPopover] = useState<{
@@ -812,6 +813,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const reasoningMenuWrapRef = useRef<HTMLDivElement | null>(null);
   const usageMenuWrapRef = useRef<HTMLDivElement | null>(null);
   const permissionMenuWrapRef = useRef<HTMLDivElement | null>(null);
+  const contextMenuWrapRef = useRef<HTMLDivElement | null>(null);
   const modelBtnRef = useRef<HTMLButtonElement>(null);
   const modelPopoverRef = useRef<HTMLDivElement>(null);
   const reasoningBtnRef = useRef<HTMLButtonElement>(null);
@@ -820,10 +822,13 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const usagePopoverRef = useRef<HTMLDivElement>(null);
   const permissionBtnRef = useRef<HTMLButtonElement>(null);
   const permissionPopoverRef = useRef<HTMLDivElement>(null);
+  const contextBtnRef = useRef<HTMLButtonElement>(null);
+  const contextPopoverRef = useRef<HTMLDivElement>(null);
   const plainPyRunSessionKeyRef = useRef<string>('');
   const cellAttachmentAnchorRef = useRef<HTMLDivElement | null>(null);
   const cellAttachmentPopoverRef = useRef<HTMLDivElement>(null);
   const cellAttachmentPopoverCloseTimerRef = useRef<number | null>(null);
+  const contextPopoverCloseTimerRef = useRef<number | null>(null);
   const selectionPopoverAnchorRef = useRef<HTMLElement | null>(null);
   const selectionPopoverRef = useRef<HTMLDivElement>(null);
   const notebookLabelRef = useRef<HTMLSpanElement | null>(null);
@@ -1027,7 +1032,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   }, [notifyOnDoneMinSeconds]);
 
   useEffect(() => {
-    if (!modelMenuOpen && !reasoningMenuOpen && !usagePopoverOpen && !permissionMenuOpen) {
+    if (!modelMenuOpen && !reasoningMenuOpen && !usagePopoverOpen && !permissionMenuOpen && !contextPopoverOpen) {
       return;
     }
 
@@ -1041,19 +1046,23 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       const inReasoning = reasoningMenuWrapRef.current?.contains(target) ?? false;
       const inUsage = usageMenuWrapRef.current?.contains(target) ?? false;
       const inPermission = permissionMenuWrapRef.current?.contains(target) ?? false;
+      const inContext = contextMenuWrapRef.current?.contains(target) ?? false;
       const inModelPopover = modelPopoverRef.current?.contains(target) ?? false;
       const inReasoningPopover = reasoningPopoverRef.current?.contains(target) ?? false;
       const inUsagePopover = usagePopoverRef.current?.contains(target) ?? false;
       const inPermissionPopover = permissionPopoverRef.current?.contains(target) ?? false;
+      const inContextPopover = contextPopoverRef.current?.contains(target) ?? false;
       if (
         inModel ||
         inReasoning ||
         inUsage ||
         inPermission ||
+        inContext ||
         inModelPopover ||
         inReasoningPopover ||
         inUsagePopover ||
-        inPermissionPopover
+        inPermissionPopover ||
+        inContextPopover
       ) {
         return;
       }
@@ -1062,6 +1071,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       setReasoningMenuOpen(false);
       setUsagePopoverOpen(false);
       setPermissionMenuOpen(false);
+      setContextPopoverOpen(false);
     };
 
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1073,6 +1083,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       setReasoningMenuOpen(false);
       setUsagePopoverOpen(false);
       setPermissionMenuOpen(false);
+      setContextPopoverOpen(false);
     };
 
     window.addEventListener('pointerdown', onPointerDown, true);
@@ -1081,7 +1092,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       window.removeEventListener('pointerdown', onPointerDown, true);
       window.removeEventListener('keydown', onKeyDown);
     };
-  }, [modelMenuOpen, reasoningMenuOpen, usagePopoverOpen, permissionMenuOpen]);
+  }, [modelMenuOpen, reasoningMenuOpen, usagePopoverOpen, permissionMenuOpen, contextPopoverOpen]);
 
   useEffect(() => {
     if (!selectionPopover) {
@@ -1133,6 +1144,13 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     }
   }
 
+  function clearContextPopoverCloseTimer(): void {
+    if (contextPopoverCloseTimerRef.current !== null) {
+      window.clearTimeout(contextPopoverCloseTimerRef.current);
+      contextPopoverCloseTimerRef.current = null;
+    }
+  }
+
   function openCellAttachmentPopover(): void {
     clearCellAttachmentPopoverCloseTimer();
     if (!showCellAttachmentBadge) {
@@ -1148,6 +1166,33 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       setCellAttachmentPopoverOpen(false);
       cellAttachmentPopoverCloseTimerRef.current = null;
     }, 90);
+  }
+
+  function openContextPopover(): void {
+    clearContextPopoverCloseTimer();
+    if (!hasContextUsageSnapshot) {
+      setContextPopoverOpen(false);
+      return;
+    }
+    setContextPopoverOpen(true);
+  }
+
+  function scheduleCloseContextPopover(): void {
+    clearContextPopoverCloseTimer();
+    contextPopoverCloseTimerRef.current = window.setTimeout(() => {
+      setContextPopoverOpen(false);
+      contextPopoverCloseTimerRef.current = null;
+    }, 90);
+  }
+
+  function handleContextPopoverBlur(event: React.FocusEvent<HTMLDivElement>): void {
+    const nextFocused = event.relatedTarget as Node | null;
+    const inAnchor = nextFocused ? contextMenuWrapRef.current?.contains(nextFocused) ?? false : false;
+    const inPopover = nextFocused ? contextPopoverRef.current?.contains(nextFocused) ?? false : false;
+    if (inAnchor || inPopover) {
+      return;
+    }
+    scheduleCloseContextPopover();
   }
 
   function handleCellAttachmentBlur(event: React.FocusEvent<HTMLDivElement>): void {
@@ -1387,6 +1432,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     setModelMenuOpen(false);
     setReasoningMenuOpen(false);
     setPermissionMenuOpen(false);
+    setContextPopoverOpen(false);
   }
 
   async function updateNotifyOnDone(enabled: boolean): Promise<void> {
@@ -2855,6 +2901,12 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     };
   }, []);
 
+  useEffect(() => {
+    return () => {
+      clearContextPopoverCloseTimer();
+    };
+  }, []);
+
   const trimmedInput = input.trim();
   const canSend =
     status !== 'disconnected' &&
@@ -2947,6 +2999,14 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       ? `${Math.round(clampNumber(contextUsedPercent, 0, 100))}%`
       : 'Unknown';
   const hasContextUsageSnapshot = rateLimits?.contextWindow != null;
+
+  useEffect(() => {
+    if (hasContextUsageSnapshot) {
+      return;
+    }
+    setContextPopoverOpen(false);
+    clearContextPopoverCloseTimer();
+  }, [hasContextUsageSnapshot]);
 
   useLayoutEffect(() => {
     const target = notebookLabelRef.current;
@@ -3104,6 +3164,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                   setReasoningMenuOpen(false);
                   setUsagePopoverOpen(false);
                   setPermissionMenuOpen(false);
+                  setContextPopoverOpen(false);
                 }}
 	              className={`jp-CodexHeaderBtn jp-CodexHeaderBtn-icon${settingsOpen ? ' is-active' : ''}`}
 	              aria-label="Settings"
@@ -3467,6 +3528,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                     setReasoningMenuOpen(false);
                     setUsagePopoverOpen(false);
                     setPermissionMenuOpen(false);
+                    setContextPopoverOpen(false);
                   }}
                   disabled={status === 'running'}
                   aria-label={`Model: ${selectedModelLabel}`}
@@ -3523,6 +3585,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                     setModelMenuOpen(false);
                     setUsagePopoverOpen(false);
                     setPermissionMenuOpen(false);
+                    setContextPopoverOpen(false);
                   }}
                   disabled={status === 'running'}
                   aria-label={`Reasoning: ${selectedReasoningLabel}`}
@@ -3587,6 +3650,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                     setModelMenuOpen(false);
                     setReasoningMenuOpen(false);
                     setUsagePopoverOpen(false);
+                    setContextPopoverOpen(false);
                   }}
                   disabled={status === 'running'}
                   aria-label={`Permission: ${selectedSandboxLabel}`}
@@ -3621,10 +3685,18 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                 ))}
               </PortalMenu>
               {hasContextUsageSnapshot && (
-                <div className="jp-CodexContextWrap">
+                <div
+                  className="jp-CodexContextWrap"
+                  ref={contextMenuWrapRef}
+                  onMouseEnter={openContextPopover}
+                  onMouseLeave={scheduleCloseContextPopover}
+                  onFocusCapture={openContextPopover}
+                  onBlurCapture={handleContextPopoverBlur}
+                >
                   <button
                     type="button"
                     className={`jp-CodexIconBtn jp-CodexContextBtn${usageIsStale ? ' is-stale' : ''}`}
+                    ref={contextBtnRef}
                     aria-label={
                       contextUsedTokens == null || contextLeftTokens == null
                         ? 'Context window usage unavailable'
@@ -3638,7 +3710,17 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                   >
                     <ContextWindowIcon level={contextLevel} width={20} height={20} />
                   </button>
-                  <div className="jp-CodexContextPopover" role="tooltip">
+                  <PortalMenu
+                    open={contextPopoverOpen}
+                    anchorRef={contextBtnRef}
+                    popoverRef={contextPopoverRef}
+                    className="jp-CodexContextPopover"
+                    role="tooltip"
+                    ariaLabel="Context window"
+                    align="right"
+                    onMouseEnter={openContextPopover}
+                    onMouseLeave={scheduleCloseContextPopover}
+                  >
                     <div className="jp-CodexContextPopoverTitle">Context window</div>
                     <div className="jp-CodexContextPopoverRow">
                       <span>Used</span>
@@ -3653,7 +3735,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                         ? 'Window size unavailable'
                         : `Window: ${contextWindowLabel} tokens (${contextUsedPercentLabel} used)`}
                     </div>
-                  </div>
+                  </PortalMenu>
                 </div>
               )}
             </div>

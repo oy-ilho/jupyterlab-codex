@@ -2,7 +2,7 @@ import React from 'react';
 import { createPortal } from 'react-dom';
 
 type PortalAlign = 'left' | 'right';
-type PortalRole = 'dialog' | 'menu';
+type PortalRole = 'dialog' | 'menu' | 'tooltip';
 
 type PortalMenuProps = {
   open: boolean;
