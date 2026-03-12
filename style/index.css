@@ -1348,7 +1348,7 @@
 }
 
 .jp-CodexComposer-cellAttachmentWrap.is-visible {
-  max-height: 28px;
+  max-height: 32px;
   margin-bottom: 6px;
   opacity: 1;
   transform: translateY(0) scale(1);
@@ -1357,6 +1357,7 @@
 
 .jp-CodexComposer-cellAttachment {
   appearance: none;
+  -webkit-appearance: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1365,8 +1366,9 @@
   max-width: 100%;
   min-height: 28px;
   padding: 0 10px 0 9px;
-  border-radius: 999px;
+  border-radius: 9999px !important;
   border: 1px solid transparent;
+  overflow: hidden;
   background: color-mix(in srgb, var(--cdx-accent) 9%, var(--cdx-surface));
   color: color-mix(in srgb, var(--cdx-accent) 80%, var(--cdx-text));
   font-size: 11px;
