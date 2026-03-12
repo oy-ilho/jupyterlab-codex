@@ -759,7 +759,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const [includeActiveCellOutput, setIncludeActiveCellOutput] = useState<boolean>(() =>
     readStoredIncludeActiveCellOutput()
   );
-  const [excludeCellAttachmentForNextSend, setExcludeCellAttachmentForNextSend] = useState<boolean>(false);
   const [currentDocumentIsNotebookEditor, setCurrentDocumentIsNotebookEditor] = useState(false);
   const [notifyOnDone, setNotifyOnDone] = useState<boolean>(() => readStoredNotifyOnDone());
   const [notifyOnDoneMinSeconds, setNotifyOnDoneMinSeconds] = useState<number>(() => readStoredNotifyOnDoneMinSeconds());
@@ -999,13 +998,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   useEffect(() => {
     persistIncludeActiveCellOutput(includeActiveCellOutput);
   }, [includeActiveCellOutput]);
-
-  useEffect(() => {
-    // Reset one-time exclusion when the base setting is turned off.
-    if (!includeActiveCell && excludeCellAttachmentForNextSend) {
-      setExcludeCellAttachmentForNextSend(false);
-    }
-  }, [includeActiveCell, excludeCellAttachmentForNextSend]);
 
   useEffect(() => {
     persistCommandPath(commandPath);
@@ -2026,26 +2018,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   }, [props.app, props.notebooks]);
 
   useEffect(() => {
-    const onActiveCellChanged = (_tracker: INotebookTracker, _cell: unknown) => {
-      if (!includeActiveCell || !excludeCellAttachmentForNextSend) {
-        return;
-      }
-
-      const currentNotebookWidget = props.notebooks.currentWidget as DocumentWidgetLike | null;
-      const currentNotebookWidgetPath = getSupportedDocumentPath(currentNotebookWidget);
-      if (!currentNotebookWidgetPath || currentNotebookWidgetPath !== currentNotebookPathRef.current) {
-        return;
-      }
-      setExcludeCellAttachmentForNextSend(false);
-    };
-
-    props.notebooks.activeCellChanged.connect(onActiveCellChanged);
-    return () => {
-      props.notebooks.activeCellChanged.disconnect(onActiveCellChanged);
-    };
-  }, [props.notebooks, includeActiveCell, excludeCellAttachmentForNextSend]);
-
-  useEffect(() => {
     const onStorage = (event: StorageEvent) => {
       if (event.key !== STORAGE_KEY_SESSION_THREADS_EVENT || !event.newValue) {
         return;
@@ -2578,8 +2550,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     const selectedTextForContext = selectedContext?.text || '';
     let includeSelectionKey = false;
     let selection = '';
-    const includeActiveCellForNextSend = includeActiveCell && !excludeCellAttachmentForNextSend;
-    if (includeActiveCellForNextSend) {
+    if (includeActiveCell) {
       if (notebookMode === 'plain_py') {
         const selectedText =
           selectedTextForContext || getSelectedTextFromActiveCell(activeWidget) || getSelectedTextFromFileEditor(activeWidget);
@@ -2594,7 +2565,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       }
     }
     const includeCellOutputKey =
-      includeActiveCellForNextSend &&
+      includeActiveCell &&
       includeActiveCellOutput &&
       (notebookMode === 'ipynb' || notebookMode === 'jupytext_py');
     const cellOutputRaw = includeCellOutputKey ? getActiveCellOutput(activeWidget) : '';
@@ -2616,9 +2587,9 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       includeCellOutputKeyAfterLimit
         ? toCellOutputPreview(selectedContext, activeWidget, notebookMode, cellOutputForAttachment)
         : undefined;
-    const shouldDeduplicateSelection = includeActiveCellForNextSend && includeSelectionKeyAfterLimit;
+    const shouldDeduplicateSelection = includeActiveCell && includeSelectionKeyAfterLimit;
     const shouldDeduplicateCellOutput =
-      includeActiveCellForNextSend && includeCellOutputKeyAfterLimit;
+      includeActiveCell && includeCellOutputKeyAfterLimit;
     const activeCellAttachmentDedupKey = makeActiveCellAttachmentDedupKey(sessionKey, session.threadId);
     const previousActiveCellSignatures =
       lastActiveCellAttachmentSignatureRef.current.get(activeCellAttachmentDedupKey);
@@ -2856,10 +2827,9 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const displayPath = currentNotebookPath
     ? currentNotebookPath.split('/').pop() || 'Untitled'
     : 'No notebook';
-  const includeActiveCellForNextSend = includeActiveCell && !excludeCellAttachmentForNextSend;
   const composerNotebookMode = currentSession?.notebookMode ?? inferNotebookModeFromPath(currentNotebookPath);
   const cellAttachmentState = resolveCellAttachmentState({
-    includeActiveCellForNextSend,
+    includeActiveCell,
     includeActiveCellOutput,
     notebookMode: composerNotebookMode,
     isNotebookEditor: currentDocumentIsNotebookEditor,
@@ -3413,21 +3383,22 @@ function CodexChat(props: CodexChatProps): JSX.Element {
               onBlurCapture={handleCellAttachmentBlur}
             >
               <div
-                className="jp-CodexComposer-cellAttachment"
                 role="group"
-                aria-label="Pending active-cell attachment"
+                aria-label="Active-cell attachment"
               >
-                <span className="jp-CodexComposer-cellAttachmentLabel">Cell Attached</span>
                 <button
                   type="button"
-                  className="jp-CodexComposer-cellAttachmentRemove"
-                  onClick={() => setExcludeCellAttachmentForNextSend(true)}
-                  aria-label="Do not attach cell on next send"
-                  title="Do not attach cell on next send"
+                  className={`jp-CodexComposer-cellAttachment${cellAttachmentContentEnabled ? '' : ' is-off'}`}
+                  onClick={() => setIncludeActiveCell(value => !value)}
+                  aria-pressed={cellAttachmentContentEnabled}
+                  aria-label={cellAttachmentContentEnabled ? 'Disable active-cell attachment' : 'Enable active-cell attachment'}
+                  title={cellAttachmentContentEnabled ? 'Disable active-cell attachment' : 'Enable active-cell attachment'}
                   disabled={!showCellAttachmentBadge}
                   tabIndex={showCellAttachmentBadge ? 0 : -1}
                 >
-                  <XIcon width={10} height={10} />
+                  <span className="jp-CodexComposer-cellAttachmentLabel">
+                    {cellAttachmentContentEnabled ? 'Cell Attached' : 'Cell Attachment Off'}
+                  </span>
                 </button>
               </div>
             </div>

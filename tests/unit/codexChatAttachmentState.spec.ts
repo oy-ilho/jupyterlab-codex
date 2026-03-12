@@ -5,7 +5,7 @@ import { resolveCellAttachmentState } from '../../src/codexChatAttachmentState';
 test('resolveCellAttachmentState shows notebook cell attachment for jupytext notebook editor', () => {
   expect(
     resolveCellAttachmentState({
-      includeActiveCellForNextSend: true,
+      includeActiveCell: true,
       includeActiveCellOutput: true,
       notebookMode: 'jupytext_py',
       isNotebookEditor: true,
@@ -22,7 +22,7 @@ test('resolveCellAttachmentState shows notebook cell attachment for jupytext not
 test('resolveCellAttachmentState hides cell attachment for jupytext text editor', () => {
   expect(
     resolveCellAttachmentState({
-      includeActiveCellForNextSend: true,
+      includeActiveCell: true,
       includeActiveCellOutput: true,
       notebookMode: 'jupytext_py',
       isNotebookEditor: false,
@@ -39,7 +39,7 @@ test('resolveCellAttachmentState hides cell attachment for jupytext text editor'
 test('resolveCellAttachmentState hides badge for plain python notebook mode', () => {
   expect(
     resolveCellAttachmentState({
-      includeActiveCellForNextSend: true,
+      includeActiveCell: true,
       includeActiveCellOutput: true,
       notebookMode: 'plain_py',
       isNotebookEditor: true,
@@ -48,6 +48,23 @@ test('resolveCellAttachmentState hides badge for plain python notebook mode', ()
     })
   ).toEqual({
     showBadge: false,
+    contentEnabled: false,
+    outputEnabled: false
+  });
+});
+
+test('resolveCellAttachmentState keeps the toggle visible when attachment is off', () => {
+  expect(
+    resolveCellAttachmentState({
+      includeActiveCell: false,
+      includeActiveCellOutput: true,
+      notebookMode: 'ipynb',
+      isNotebookEditor: true,
+      currentNotebookPath: '/tmp/example.ipynb',
+      pairedOk: true
+    })
+  ).toEqual({
+    showBadge: true,
     contentEnabled: false,
     outputEnabled: false
   });

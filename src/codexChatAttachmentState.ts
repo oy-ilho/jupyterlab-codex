@@ -1,7 +1,7 @@
 import type { NotebookMode } from './codexChatDocumentUtils';
 
 export type CellAttachmentStateInput = {
-  includeActiveCellForNextSend: boolean;
+  includeActiveCell: boolean;
   includeActiveCellOutput: boolean;
   notebookMode: NotebookMode;
   isNotebookEditor: boolean;
@@ -16,14 +16,16 @@ export type CellAttachmentState = {
 };
 
 export function resolveCellAttachmentState(input: CellAttachmentStateInput): CellAttachmentState {
-  const canAttachCurrentCellContent =
-    input.includeActiveCellForNextSend &&
+  const canShowCellAttachmentControl =
     input.isNotebookEditor &&
     (input.notebookMode === 'ipynb' || input.notebookMode === 'jupytext_py');
+  const canAttachCurrentCellContent =
+    input.includeActiveCell &&
+    canShowCellAttachmentControl;
   const canAttachCurrentCellOutput =
     canAttachCurrentCellContent && input.includeActiveCellOutput;
   const showBadge =
-    canAttachCurrentCellContent &&
+    canShowCellAttachmentControl &&
     input.currentNotebookPath.length > 0 &&
     input.pairedOk !== false;
 
