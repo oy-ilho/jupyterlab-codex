@@ -73,11 +73,13 @@ import {
   getSelectedTextFromActiveCell,
   getSelectedTextFromFileEditor,
   getSupportedDocumentPath,
+  isNotebookWidget,
   normalizeSelectionPreviewText,
   restoreDocumentViewState,
   toCellOutputPreview,
-  toFallbackSelectionPreview,
+  toMessageSelectionPreview,
 } from './codexChatDocumentUtils';
+import { resolveCellAttachmentState } from './codexChatAttachmentState';
 import {
   buildActiveCellOutputSignature,
   buildActiveCellSelectionSignature,
@@ -86,13 +88,15 @@ import {
 } from './codexChatAttachmentDedup';
 import {
   buildAttachmentTruncationNotice,
-  limitActiveCellAttachmentPayload
+  limitActiveCellAttachmentPayload,
+  resolveSentAttachmentTruncation
 } from './codexChatAttachmentLimit';
 import {
   ArrowDownIcon,
   ArrowUpIcon,
+  BatteryIcon,
+  CellAttachmentIcon,
   CheckIcon,
-  ChipIcon,
   ContextWindowIcon,
   FileIcon,
   GaugeIcon,
@@ -103,8 +107,7 @@ import {
   ReasoningEffortIcon,
   ShieldIcon,
   StopIcon,
-  XIcon,
-  BatteryIcon
+  XIcon
 } from './codexChatPrimitives';
 import {
   hasStoredValue,
@@ -306,7 +309,8 @@ const SELECTION_PREVIEWS_STORAGE_KEY = 'jupyterlab-codex:selection-previews';
 const MAX_IMAGE_ATTACHMENTS = 4;
 const MAX_IMAGE_ATTACHMENT_BYTES = 4 * 1024 * 1024; // Avoid huge WebSocket payloads.
 const MAX_IMAGE_ATTACHMENT_TOTAL_BYTES = 6 * 1024 * 1024;
-const MAX_ACTIVE_CELL_ATTACHMENT_TOTAL_CHARS = 4000;
+const MAX_ACTIVE_CELL_SELECTION_CHARS = 4000;
+const MAX_ACTIVE_CELL_OUTPUT_CHARS = 20000;
 const MAX_STORED_SELECTION_PREVIEW_THREADS = 80;
 const MAX_STORED_SELECTION_PREVIEW_MESSAGES_PER_THREAD = 10;
 const MAX_SESSION_MESSAGES = 100;
@@ -755,7 +759,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const [includeActiveCellOutput, setIncludeActiveCellOutput] = useState<boolean>(() =>
     readStoredIncludeActiveCellOutput()
   );
-  const [excludeCellAttachmentForNextSend, setExcludeCellAttachmentForNextSend] = useState<boolean>(false);
+  const [currentDocumentIsNotebookEditor, setCurrentDocumentIsNotebookEditor] = useState(false);
   const [notifyOnDone, setNotifyOnDone] = useState<boolean>(() => readStoredNotifyOnDone());
   const [notifyOnDoneMinSeconds, setNotifyOnDoneMinSeconds] = useState<number>(() => readStoredNotifyOnDoneMinSeconds());
   const [settingsOpen, setSettingsOpen] = useState<boolean>(() => readStoredSettingsOpen());
@@ -779,7 +783,9 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const [reasoningMenuOpen, setReasoningMenuOpen] = useState(false);
   const [usagePopoverOpen, setUsagePopoverOpen] = useState(false);
   const [permissionMenuOpen, setPermissionMenuOpen] = useState(false);
+  const [contextPopoverOpen, setContextPopoverOpen] = useState(false);
   const [isPlainPyRunInProgress, setIsPlainPyRunInProgress] = useState<boolean>(false);
+  const [cellAttachmentPopoverOpen, setCellAttachmentPopoverOpen] = useState(false);
   const [selectionPopover, setSelectionPopover] = useState<{
     messageId: string;
     preview: MessageContextPreview;
@@ -807,6 +813,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const reasoningMenuWrapRef = useRef<HTMLDivElement | null>(null);
   const usageMenuWrapRef = useRef<HTMLDivElement | null>(null);
   const permissionMenuWrapRef = useRef<HTMLDivElement | null>(null);
+  const contextMenuWrapRef = useRef<HTMLDivElement | null>(null);
   const modelBtnRef = useRef<HTMLButtonElement>(null);
   const modelPopoverRef = useRef<HTMLDivElement>(null);
   const reasoningBtnRef = useRef<HTMLButtonElement>(null);
@@ -815,7 +822,13 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const usagePopoverRef = useRef<HTMLDivElement>(null);
   const permissionBtnRef = useRef<HTMLButtonElement>(null);
   const permissionPopoverRef = useRef<HTMLDivElement>(null);
+  const contextBtnRef = useRef<HTMLButtonElement>(null);
+  const contextPopoverRef = useRef<HTMLDivElement>(null);
   const plainPyRunSessionKeyRef = useRef<string>('');
+  const cellAttachmentAnchorRef = useRef<HTMLDivElement | null>(null);
+  const cellAttachmentPopoverRef = useRef<HTMLDivElement>(null);
+  const cellAttachmentPopoverCloseTimerRef = useRef<number | null>(null);
+  const contextPopoverCloseTimerRef = useRef<number | null>(null);
   const selectionPopoverAnchorRef = useRef<HTMLElement | null>(null);
   const selectionPopoverRef = useRef<HTMLDivElement>(null);
   const notebookLabelRef = useRef<HTMLSpanElement | null>(null);
@@ -992,13 +1005,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   }, [includeActiveCellOutput]);
 
   useEffect(() => {
-    // Reset one-time exclusion when the base setting is turned off.
-    if (!includeActiveCell && excludeCellAttachmentForNextSend) {
-      setExcludeCellAttachmentForNextSend(false);
-    }
-  }, [includeActiveCell, excludeCellAttachmentForNextSend]);
-
-  useEffect(() => {
     persistCommandPath(commandPath);
   }, [commandPath]);
 
@@ -1026,7 +1032,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   }, [notifyOnDoneMinSeconds]);
 
   useEffect(() => {
-    if (!modelMenuOpen && !reasoningMenuOpen && !usagePopoverOpen && !permissionMenuOpen) {
+    if (!modelMenuOpen && !reasoningMenuOpen && !usagePopoverOpen && !permissionMenuOpen && !contextPopoverOpen) {
       return;
     }
 
@@ -1040,19 +1046,23 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       const inReasoning = reasoningMenuWrapRef.current?.contains(target) ?? false;
       const inUsage = usageMenuWrapRef.current?.contains(target) ?? false;
       const inPermission = permissionMenuWrapRef.current?.contains(target) ?? false;
+      const inContext = contextMenuWrapRef.current?.contains(target) ?? false;
       const inModelPopover = modelPopoverRef.current?.contains(target) ?? false;
       const inReasoningPopover = reasoningPopoverRef.current?.contains(target) ?? false;
       const inUsagePopover = usagePopoverRef.current?.contains(target) ?? false;
       const inPermissionPopover = permissionPopoverRef.current?.contains(target) ?? false;
+      const inContextPopover = contextPopoverRef.current?.contains(target) ?? false;
       if (
         inModel ||
         inReasoning ||
         inUsage ||
         inPermission ||
+        inContext ||
         inModelPopover ||
         inReasoningPopover ||
         inUsagePopover ||
-        inPermissionPopover
+        inPermissionPopover ||
+        inContextPopover
       ) {
         return;
       }
@@ -1061,6 +1071,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       setReasoningMenuOpen(false);
       setUsagePopoverOpen(false);
       setPermissionMenuOpen(false);
+      setContextPopoverOpen(false);
     };
 
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1072,6 +1083,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       setReasoningMenuOpen(false);
       setUsagePopoverOpen(false);
       setPermissionMenuOpen(false);
+      setContextPopoverOpen(false);
     };
 
     window.addEventListener('pointerdown', onPointerDown, true);
@@ -1080,7 +1092,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       window.removeEventListener('pointerdown', onPointerDown, true);
       window.removeEventListener('keydown', onKeyDown);
     };
-  }, [modelMenuOpen, reasoningMenuOpen, usagePopoverOpen, permissionMenuOpen]);
+  }, [modelMenuOpen, reasoningMenuOpen, usagePopoverOpen, permissionMenuOpen, contextPopoverOpen]);
 
   useEffect(() => {
     if (!selectionPopover) {
@@ -1123,6 +1135,74 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   function closeSelectionPopover(): void {
     setSelectionPopover(null);
     selectionPopoverAnchorRef.current = null;
+  }
+
+  function clearCellAttachmentPopoverCloseTimer(): void {
+    if (cellAttachmentPopoverCloseTimerRef.current !== null) {
+      window.clearTimeout(cellAttachmentPopoverCloseTimerRef.current);
+      cellAttachmentPopoverCloseTimerRef.current = null;
+    }
+  }
+
+  function clearContextPopoverCloseTimer(): void {
+    if (contextPopoverCloseTimerRef.current !== null) {
+      window.clearTimeout(contextPopoverCloseTimerRef.current);
+      contextPopoverCloseTimerRef.current = null;
+    }
+  }
+
+  function openCellAttachmentPopover(): void {
+    clearCellAttachmentPopoverCloseTimer();
+    if (!showCellAttachmentBadge) {
+      setCellAttachmentPopoverOpen(false);
+      return;
+    }
+    setCellAttachmentPopoverOpen(true);
+  }
+
+  function scheduleCloseCellAttachmentPopover(): void {
+    clearCellAttachmentPopoverCloseTimer();
+    cellAttachmentPopoverCloseTimerRef.current = window.setTimeout(() => {
+      setCellAttachmentPopoverOpen(false);
+      cellAttachmentPopoverCloseTimerRef.current = null;
+    }, 90);
+  }
+
+  function openContextPopover(): void {
+    clearContextPopoverCloseTimer();
+    if (!hasContextUsageSnapshot) {
+      setContextPopoverOpen(false);
+      return;
+    }
+    setContextPopoverOpen(true);
+  }
+
+  function scheduleCloseContextPopover(): void {
+    clearContextPopoverCloseTimer();
+    contextPopoverCloseTimerRef.current = window.setTimeout(() => {
+      setContextPopoverOpen(false);
+      contextPopoverCloseTimerRef.current = null;
+    }, 90);
+  }
+
+  function handleContextPopoverBlur(event: React.FocusEvent<HTMLDivElement>): void {
+    const nextFocused = event.relatedTarget as Node | null;
+    const inAnchor = nextFocused ? contextMenuWrapRef.current?.contains(nextFocused) ?? false : false;
+    const inPopover = nextFocused ? contextPopoverRef.current?.contains(nextFocused) ?? false : false;
+    if (inAnchor || inPopover) {
+      return;
+    }
+    scheduleCloseContextPopover();
+  }
+
+  function handleCellAttachmentBlur(event: React.FocusEvent<HTMLDivElement>): void {
+    const nextFocused = event.relatedTarget as Node | null;
+    const inAnchor = nextFocused ? cellAttachmentAnchorRef.current?.contains(nextFocused) ?? false : false;
+    const inPopover = nextFocused ? cellAttachmentPopoverRef.current?.contains(nextFocused) ?? false : false;
+    if (inAnchor || inPopover) {
+      return;
+    }
+    scheduleCloseCellAttachmentPopover();
   }
 
   function toggleSelectionPopover(
@@ -1352,6 +1432,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     setModelMenuOpen(false);
     setReasoningMenuOpen(false);
     setPermissionMenuOpen(false);
+    setContextPopoverOpen(false);
   }
 
   async function updateNotifyOnDone(enabled: boolean): Promise<void> {
@@ -1929,6 +2010,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       if (activeWidget) {
         activeDocumentWidgetRef.current = activeWidget;
       }
+      const nextIsNotebookEditor = isNotebookWidget(activeWidget);
+      setCurrentDocumentIsNotebookEditor(prev => (prev === nextIsNotebookEditor ? prev : nextIsNotebookEditor));
       const path = getSupportedDocumentPath(activeWidget);
       const sessionKey = resolveSessionKey(path);
       const previousKey = currentNotebookSessionKeyRef.current;
@@ -1979,26 +2062,6 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       props.notebooks.currentChanged.disconnect(updateNotebook);
     };
   }, [props.app, props.notebooks]);
-
-  useEffect(() => {
-    const onActiveCellChanged = (_tracker: INotebookTracker, _cell: unknown) => {
-      if (!includeActiveCell || !excludeCellAttachmentForNextSend) {
-        return;
-      }
-
-      const currentNotebookWidget = props.notebooks.currentWidget as DocumentWidgetLike | null;
-      const currentNotebookWidgetPath = getSupportedDocumentPath(currentNotebookWidget);
-      if (!currentNotebookWidgetPath || currentNotebookWidgetPath !== currentNotebookPathRef.current) {
-        return;
-      }
-      setExcludeCellAttachmentForNextSend(false);
-    };
-
-    props.notebooks.activeCellChanged.connect(onActiveCellChanged);
-    return () => {
-      props.notebooks.activeCellChanged.disconnect(onActiveCellChanged);
-    };
-  }, [props.notebooks, includeActiveCell, excludeCellAttachmentForNextSend]);
 
   useEffect(() => {
     const onStorage = (event: StorageEvent) => {
@@ -2533,8 +2596,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     const selectedTextForContext = selectedContext?.text || '';
     let includeSelectionKey = false;
     let selection = '';
-    const includeActiveCellForNextSend = includeActiveCell && !excludeCellAttachmentForNextSend;
-    if (includeActiveCellForNextSend) {
+    if (includeActiveCell) {
       if (notebookMode === 'plain_py') {
         const selectedText =
           selectedTextForContext || getSelectedTextFromActiveCell(activeWidget) || getSelectedTextFromFileEditor(activeWidget);
@@ -2549,12 +2611,15 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       }
     }
     const includeCellOutputKey =
-      includeActiveCellForNextSend && includeActiveCellOutput && notebookMode === 'ipynb';
+      includeActiveCell &&
+      includeActiveCellOutput &&
+      (notebookMode === 'ipynb' || notebookMode === 'jupytext_py');
     const cellOutputRaw = includeCellOutputKey ? getActiveCellOutput(activeWidget) : '';
     const attachmentLimit = limitActiveCellAttachmentPayload(
       includeSelectionKey ? selection : '',
       includeCellOutputKey ? cellOutputRaw : '',
-      MAX_ACTIVE_CELL_ATTACHMENT_TOTAL_CHARS
+      MAX_ACTIVE_CELL_SELECTION_CHARS,
+      MAX_ACTIVE_CELL_OUTPUT_CHARS
     );
     const selectionForAttachment = includeSelectionKey ? attachmentLimit.selection : '';
     const cellOutputForAttachment = includeCellOutputKey ? attachmentLimit.cellOutput : '';
@@ -2562,15 +2627,15 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     const includeCellOutputKeyAfterLimit = Boolean(cellOutputForAttachment);
     const messageSelectionPreview =
       includeSelectionKeyAfterLimit
-        ? toFallbackSelectionPreview(activeWidget, notebookMode, selectionForAttachment)
+        ? toMessageSelectionPreview(selectedContext, activeWidget, notebookMode, selectionForAttachment)
         : undefined;
     const messageCellOutputPreview =
       includeCellOutputKeyAfterLimit
         ? toCellOutputPreview(selectedContext, activeWidget, notebookMode, cellOutputForAttachment)
         : undefined;
-    const shouldDeduplicateSelection = includeActiveCellForNextSend && includeSelectionKeyAfterLimit;
+    const shouldDeduplicateSelection = includeActiveCell && includeSelectionKeyAfterLimit;
     const shouldDeduplicateCellOutput =
-      includeActiveCellForNextSend && includeCellOutputKeyAfterLimit;
+      includeActiveCell && includeCellOutputKeyAfterLimit;
     const activeCellAttachmentDedupKey = makeActiveCellAttachmentDedupKey(sessionKey, session.threadId);
     const previousActiveCellSignatures =
       lastActiveCellAttachmentSignatureRef.current.get(activeCellAttachmentDedupKey);
@@ -2602,6 +2667,12 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       );
     const includeSelectionKeyForSend = includeSelectionKeyAfterLimit && !hasDuplicateSelectionAttachment;
     const includeCellOutputKeyForSend = includeCellOutputKeyAfterLimit && !hasDuplicateCellOutputAttachment;
+    const sentAttachmentTruncation = resolveSentAttachmentTruncation({
+      includeSelection: includeSelectionKeyForSend,
+      includeCellOutput: includeCellOutputKeyForSend,
+      selectionTruncated: attachmentLimit.selectionTruncated,
+      cellOutputTruncated: attachmentLimit.cellOutputTruncated
+    });
     const messageSelectionPreviewForSend = hasDuplicateSelectionAttachment ? undefined : messageSelectionPreview;
     const messageCellOutputPreviewForSend = hasDuplicateCellOutputAttachment ? undefined : messageCellOutputPreview;
     const messageContextPreview: MessageContextPreview | undefined =
@@ -2661,8 +2732,8 @@ function CodexChat(props: CodexChatProps): JSX.Element {
             sandbox: sandboxForSend,
             ...(includeSelectionKeyForSend ? { selection: selectionForAttachment } : {}),
             ...(includeCellOutputKeyForSend ? { cellOutput: cellOutputForAttachment } : {}),
-            ...(attachmentLimit.selectionTruncated ? { selectionTruncated: true } : {}),
-            ...(attachmentLimit.cellOutputTruncated ? { cellOutputTruncated: true } : {}),
+            ...(sentAttachmentTruncation.selectionTruncated ? { selectionTruncated: true } : {}),
+            ...(sentAttachmentTruncation.cellOutputTruncated ? { cellOutputTruncated: true } : {}),
             ...(images ? { images } : {}),
             ...(messageSelectionPreviewForSend ? { uiSelectionPreview: messageSelectionPreviewForSend } : {}),
             ...(messageCellOutputPreviewForSend ? { uiCellOutputPreview: messageCellOutputPreviewForSend } : {})
@@ -2693,9 +2764,10 @@ function CodexChat(props: CodexChatProps): JSX.Element {
     const imageCount = images ? images.length : 0;
     const showReadOnlyWarning = sandboxForSend === 'read-only';
     const attachmentTruncationNotice = buildAttachmentTruncationNotice(
-      attachmentLimit.selectionTruncated,
-      attachmentLimit.cellOutputTruncated,
-      MAX_ACTIVE_CELL_ATTACHMENT_TOTAL_CHARS
+      sentAttachmentTruncation.selectionTruncated,
+      sentAttachmentTruncation.cellOutputTruncated,
+      MAX_ACTIVE_CELL_SELECTION_CHARS,
+      MAX_ACTIVE_CELL_OUTPUT_CHARS
     );
     if (notebookMode === 'plain_py' || notebookMode === 'jupytext_py') {
       plainPyRunSessionKeyRef.current = sessionKey;
@@ -2801,15 +2873,40 @@ function CodexChat(props: CodexChatProps): JSX.Element {
   const displayPath = currentNotebookPath
     ? currentNotebookPath.split('/').pop() || 'Untitled'
     : 'No notebook';
-  const includeActiveCellForNextSend = includeActiveCell && !excludeCellAttachmentForNextSend;
   const composerNotebookMode = currentSession?.notebookMode ?? inferNotebookModeFromPath(currentNotebookPath);
-  const includeCellOutputForNextSend =
-    includeActiveCellForNextSend && includeActiveCellOutput && composerNotebookMode === 'ipynb';
-  const showCellAttachmentBadge =
-    includeActiveCellForNextSend &&
-    composerNotebookMode !== 'plain_py' &&
-    currentNotebookPath.length > 0 &&
-    currentSession?.pairedOk !== false;
+  const cellAttachmentState = resolveCellAttachmentState({
+    includeActiveCell,
+    includeActiveCellOutput,
+    notebookMode: composerNotebookMode,
+    isNotebookEditor: currentDocumentIsNotebookEditor,
+    currentNotebookPath,
+    pairedOk: currentSession?.pairedOk
+  });
+  const includeCellOutputForNextSend = cellAttachmentState.outputEnabled;
+  const showCellAttachmentBadge = cellAttachmentState.showBadge;
+  const cellAttachmentContentEnabled = cellAttachmentState.contentEnabled;
+  const cellAttachmentOutputEnabled = cellAttachmentState.outputEnabled;
+
+  useEffect(() => {
+    if (showCellAttachmentBadge) {
+      return;
+    }
+    setCellAttachmentPopoverOpen(false);
+    clearCellAttachmentPopoverCloseTimer();
+  }, [showCellAttachmentBadge]);
+
+  useEffect(() => {
+    return () => {
+      clearCellAttachmentPopoverCloseTimer();
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      clearContextPopoverCloseTimer();
+    };
+  }, []);
+
   const trimmedInput = input.trim();
   const canSend =
     status !== 'disconnected' &&
@@ -2902,6 +2999,14 @@ function CodexChat(props: CodexChatProps): JSX.Element {
       ? `${Math.round(clampNumber(contextUsedPercent, 0, 100))}%`
       : 'Unknown';
   const hasContextUsageSnapshot = rateLimits?.contextWindow != null;
+
+  useEffect(() => {
+    if (hasContextUsageSnapshot) {
+      return;
+    }
+    setContextPopoverOpen(false);
+    clearContextPopoverCloseTimer();
+  }, [hasContextUsageSnapshot]);
 
   useLayoutEffect(() => {
     const target = notebookLabelRef.current;
@@ -3059,6 +3164,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                   setReasoningMenuOpen(false);
                   setUsagePopoverOpen(false);
                   setPermissionMenuOpen(false);
+                  setContextPopoverOpen(false);
                 }}
 	              className={`jp-CodexHeaderBtn jp-CodexHeaderBtn-icon${settingsOpen ? ' is-active' : ''}`}
 	              aria-label="Settings"
@@ -3068,7 +3174,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
 	              <GearIcon width={16} height={16} />
 	            </button>
 	          </div>
-	        </div>
+        </div>
 
         {currentSession?.pairedOk === false && (
           <div className="jp-CodexPairingNotice" role="status" aria-live="polite">
@@ -3281,6 +3387,38 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         )}
       </PortalMenu>
 
+      <PortalMenu
+        open={cellAttachmentPopoverOpen && showCellAttachmentBadge}
+        anchorRef={cellAttachmentAnchorRef as React.RefObject<HTMLElement>}
+        popoverRef={cellAttachmentPopoverRef}
+        className="jp-CodexCellAttachmentPopoverMenu"
+        ariaLabel="Cell attachment details"
+        role="dialog"
+        align="left"
+        onMouseEnter={openCellAttachmentPopover}
+        onMouseLeave={scheduleCloseCellAttachmentPopover}
+      >
+        <div className="jp-CodexCellAttachmentPopoverCard" role="note" aria-label="Cell attachment details">
+          <div className="jp-CodexCellAttachmentPopoverTitle">Attach On Next Send</div>
+          <div className="jp-CodexCellAttachmentPopoverRow">
+            <span>Current cell content</span>
+            <span
+              className={`jp-CodexCellAttachmentDot ${cellAttachmentContentEnabled ? 'is-on' : 'is-off'}`}
+              aria-label={cellAttachmentContentEnabled ? 'Attached' : 'Not attached'}
+              title={cellAttachmentContentEnabled ? 'Attached' : 'Not attached'}
+            />
+          </div>
+          <div className="jp-CodexCellAttachmentPopoverRow">
+            <span>Current cell output</span>
+            <span
+              className={`jp-CodexCellAttachmentDot ${cellAttachmentOutputEnabled ? 'is-on' : 'is-off'}`}
+              aria-label={cellAttachmentOutputEnabled ? 'Attached' : 'Not attached'}
+              title={cellAttachmentOutputEnabled ? 'Attached' : 'Not attached'}
+            />
+          </div>
+        </div>
+      </PortalMenu>
+
       <div className="jp-CodexChat-input">
         <div className={`jp-CodexJumpBar${isAtBottom ? '' : ' is-visible'}`}>
           <button
@@ -3297,30 +3435,30 @@ function CodexChat(props: CodexChatProps): JSX.Element {
         </div>
 	        <div className="jp-CodexComposer">
             <div
-              className={`jp-CodexComposer-cellAttachmentWrap${showCellAttachmentBadge ? ' is-visible' : ''}`}
+              className={`jp-CodexCellAttachmentWrap jp-CodexComposer-cellAttachmentWrap${showCellAttachmentBadge ? ' is-visible' : ''}`}
+              ref={cellAttachmentAnchorRef}
               aria-hidden={!showCellAttachmentBadge}
+              onMouseEnter={openCellAttachmentPopover}
+              onMouseLeave={scheduleCloseCellAttachmentPopover}
+              onFocusCapture={openCellAttachmentPopover}
+              onBlurCapture={handleCellAttachmentBlur}
             >
               <div
-                className="jp-CodexComposer-cellAttachment"
                 role="group"
-                aria-label="Pending active-cell attachment"
-                title={
-                  includeCellOutputForNextSend
-                    ? 'Active cell and output will be attached on next send.'
-                    : 'Active cell will be attached on next send.'
-                }
+                aria-label="Active-cell attachment"
               >
-                <span className="jp-CodexComposer-cellAttachmentLabel">Cell Attached</span>
                 <button
                   type="button"
-                  className="jp-CodexComposer-cellAttachmentRemove"
-                  onClick={() => setExcludeCellAttachmentForNextSend(true)}
-                  aria-label="Do not attach cell on next send"
-                  title="Do not attach cell on next send"
+                  className={`jp-CodexComposer-cellAttachment${cellAttachmentContentEnabled ? '' : ' is-off'}`}
+                  onClick={() => setIncludeActiveCell(value => !value)}
+                  aria-pressed={cellAttachmentContentEnabled}
+                  aria-label={cellAttachmentContentEnabled ? 'Disable active-cell attachment' : 'Enable active-cell attachment'}
+                  title={cellAttachmentContentEnabled ? 'Disable active-cell attachment' : 'Enable active-cell attachment'}
                   disabled={!showCellAttachmentBadge}
                   tabIndex={showCellAttachmentBadge ? 0 : -1}
                 >
-                  <XIcon width={10} height={10} />
+                  <CellAttachmentIcon active={cellAttachmentContentEnabled} width={15} height={15} />
+                  <span className="jp-CodexComposer-cellAttachmentLabel">Cell Attatch</span>
                 </button>
               </div>
             </div>
@@ -3390,6 +3528,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                     setReasoningMenuOpen(false);
                     setUsagePopoverOpen(false);
                     setPermissionMenuOpen(false);
+                    setContextPopoverOpen(false);
                   }}
                   disabled={status === 'running'}
                   aria-label={`Model: ${selectedModelLabel}`}
@@ -3446,6 +3585,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                     setModelMenuOpen(false);
                     setUsagePopoverOpen(false);
                     setPermissionMenuOpen(false);
+                    setContextPopoverOpen(false);
                   }}
                   disabled={status === 'running'}
                   aria-label={`Reasoning: ${selectedReasoningLabel}`}
@@ -3510,6 +3650,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                     setModelMenuOpen(false);
                     setReasoningMenuOpen(false);
                     setUsagePopoverOpen(false);
+                    setContextPopoverOpen(false);
                   }}
                   disabled={status === 'running'}
                   aria-label={`Permission: ${selectedSandboxLabel}`}
@@ -3544,10 +3685,18 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                 ))}
               </PortalMenu>
               {hasContextUsageSnapshot && (
-                <div className="jp-CodexContextWrap">
+                <div
+                  className="jp-CodexContextWrap"
+                  ref={contextMenuWrapRef}
+                  onMouseEnter={openContextPopover}
+                  onMouseLeave={scheduleCloseContextPopover}
+                  onFocusCapture={openContextPopover}
+                  onBlurCapture={handleContextPopoverBlur}
+                >
                   <button
                     type="button"
                     className={`jp-CodexIconBtn jp-CodexContextBtn${usageIsStale ? ' is-stale' : ''}`}
+                    ref={contextBtnRef}
                     aria-label={
                       contextUsedTokens == null || contextLeftTokens == null
                         ? 'Context window usage unavailable'
@@ -3561,7 +3710,17 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                   >
                     <ContextWindowIcon level={contextLevel} width={20} height={20} />
                   </button>
-                  <div className="jp-CodexContextPopover" role="tooltip">
+                  <PortalMenu
+                    open={contextPopoverOpen}
+                    anchorRef={contextBtnRef}
+                    popoverRef={contextPopoverRef}
+                    className="jp-CodexContextPopover"
+                    role="tooltip"
+                    ariaLabel="Context window"
+                    align="right"
+                    onMouseEnter={openContextPopover}
+                    onMouseLeave={scheduleCloseContextPopover}
+                  >
                     <div className="jp-CodexContextPopoverTitle">Context window</div>
                     <div className="jp-CodexContextPopoverRow">
                       <span>Used</span>
@@ -3576,7 +3735,7 @@ function CodexChat(props: CodexChatProps): JSX.Element {
                         ? 'Window size unavailable'
                         : `Window: ${contextWindowLabel} tokens (${contextUsedPercentLabel} used)`}
                     </div>
-                  </div>
+                  </PortalMenu>
                 </div>
               )}
             </div>

@@ -423,6 +423,26 @@ export function toSelectionPreview(context: SelectedContext | null): SelectionPr
   };
 }
 
+export function toMessageSelectionPreview(
+  context: SelectedContext | null,
+  widget: DocumentWidgetLike | null,
+  notebookMode: NotebookMode,
+  text: string
+): SelectionPreview | undefined {
+  const normalized = normalizeSelectionPreviewText(text);
+  if (!normalized) {
+    return undefined;
+  }
+  if (context) {
+    const locationLabel = context.kind === 'cell' ? `Cell ${context.number}` : `Line ${context.number}`;
+    return {
+      locationLabel,
+      previewText: truncateEnd(normalized, MESSAGE_SELECTION_PREVIEW_STORED_MAX_CHARS)
+    };
+  }
+  return toFallbackSelectionPreview(widget, notebookMode, normalized);
+}
+
 export function formatSelectionPreviewTextForDisplay(previewText: string): string {
   return truncateEnd(normalizeSelectionPreviewText(previewText), MESSAGE_SELECTION_PREVIEW_DISPLAY_MAX_CHARS);
 }
@@ -462,8 +482,9 @@ export function toCellOutputPreview(
   };
 }
 
-export const ACTIVE_CELL_OUTPUT_MAX_CHARS = 6000;
+export const ACTIVE_CELL_OUTPUT_MAX_CHARS = 20000;
 export const ACTIVE_CELL_OUTPUT_MAX_ITEMS = 24;
+const CELL_OUTPUT_TRUNCATED_MARKER = '... (truncated)';
 
 export function stripAnsi(value: string): string {
   // Best-effort removal of ANSI escape codes (tracebacks sometimes include them).
@@ -543,18 +564,37 @@ export function formatJupyterOutput(output: any): string {
   return '';
 }
 
+export function isJupyterErrorOutput(output: any): boolean {
+  return Boolean(output && typeof output === 'object' && output.output_type === 'error');
+}
+
+function truncateCellOutput(text: string, maxChars: number, fromEnd: boolean): string {
+  if (text.length <= maxChars) {
+    return text;
+  }
+  if (maxChars <= CELL_OUTPUT_TRUNCATED_MARKER.length) {
+    return fromEnd ? text.slice(text.length - maxChars) : text.slice(0, maxChars);
+  }
+  const sliceLength = maxChars - CELL_OUTPUT_TRUNCATED_MARKER.length - 2;
+  if (fromEnd) {
+    return `${CELL_OUTPUT_TRUNCATED_MARKER}\n\n${text.slice(text.length - sliceLength)}`;
+  }
+  return `${text.slice(0, sliceLength)}\n\n${CELL_OUTPUT_TRUNCATED_MARKER}`;
+}
+
 export function summarizeJupyterOutputs(outputs: any[]): string {
   if (!Array.isArray(outputs) || outputs.length === 0) {
     return '';
   }
 
-  let combined = '';
   let appended = 0;
-  let truncated = false;
+  let exceededMaxItems = false;
+  let hasErrorOutput = false;
+  const chunks: string[] = [];
 
   for (const output of outputs) {
     if (appended >= ACTIVE_CELL_OUTPUT_MAX_ITEMS) {
-      truncated = true;
+      exceededMaxItems = true;
       break;
     }
     const chunk = formatJupyterOutput(output);
@@ -562,29 +602,21 @@ export function summarizeJupyterOutputs(outputs: any[]): string {
       continue;
     }
     appended += 1;
-
-    const sep = combined ? '\n\n' : '';
-    const remaining = ACTIVE_CELL_OUTPUT_MAX_CHARS - combined.length - sep.length;
-    if (remaining <= 0) {
-      truncated = true;
-      break;
+    if (isJupyterErrorOutput(output)) {
+      hasErrorOutput = true;
     }
-
-    const slice = chunk.length > remaining ? chunk.slice(0, remaining) : chunk;
-    combined += sep + slice;
-    if (slice.length !== chunk.length) {
-      truncated = true;
-      break;
-    }
+    chunks.push(chunk);
   }
 
-  combined = combined.replace(/\s+$/, '');
+  let combined = chunks.join('\n\n').replace(/\s+$/, '');
   if (!combined) {
     return '';
   }
-  if (truncated) {
-    combined += '\n\n... (truncated)';
+  if (exceededMaxItems) {
+    combined = `${combined}\n\n${CELL_OUTPUT_TRUNCATED_MARKER}`;
   }
+  combined = truncateCellOutput(combined, ACTIVE_CELL_OUTPUT_MAX_CHARS, hasErrorOutput);
+  combined = combined.replace(/\s+$/, '');
   return combined;
 }
 

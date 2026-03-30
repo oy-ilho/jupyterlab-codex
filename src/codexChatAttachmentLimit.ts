@@ -5,6 +5,11 @@ export type ActiveCellAttachmentLimitResult = {
   cellOutputTruncated: boolean;
 };
 
+export type SentAttachmentTruncationResult = {
+  selectionTruncated: boolean;
+  cellOutputTruncated: boolean;
+};
+
 function clampNonNegativeInteger(value: number): number {
   if (!Number.isFinite(value)) {
     return 0;
@@ -25,35 +30,15 @@ function sliceByCharLimit(value: string, limit: number): string {
 export function limitActiveCellAttachmentPayload(
   selection: string,
   cellOutput: string,
-  maxTotalChars: number
+  maxSelectionChars: number,
+  maxCellOutputChars: number
 ): ActiveCellAttachmentLimitResult {
   const sourceSelection = typeof selection === 'string' ? selection : '';
   const sourceCellOutput = typeof cellOutput === 'string' ? cellOutput : '';
-  const maxChars = clampNonNegativeInteger(maxTotalChars);
-
-  if (maxChars <= 0) {
-    return {
-      selection: '',
-      cellOutput: '',
-      selectionTruncated: sourceSelection.length > 0,
-      cellOutputTruncated: sourceCellOutput.length > 0
-    };
-  }
-
-  const totalLength = sourceSelection.length + sourceCellOutput.length;
-  if (totalLength <= maxChars) {
-    return {
-      selection: sourceSelection,
-      cellOutput: sourceCellOutput,
-      selectionTruncated: false,
-      cellOutputTruncated: false
-    };
-  }
-
-  // Preserve output first, then use remaining budget for input.
-  const nextCellOutput = sliceByCharLimit(sourceCellOutput, maxChars);
-  const remainingForSelection = Math.max(0, maxChars - nextCellOutput.length);
-  const nextSelection = sliceByCharLimit(sourceSelection, remainingForSelection);
+  const selectionLimit = clampNonNegativeInteger(maxSelectionChars);
+  const cellOutputLimit = clampNonNegativeInteger(maxCellOutputChars);
+  const nextSelection = sliceByCharLimit(sourceSelection, selectionLimit);
+  const nextCellOutput = sliceByCharLimit(sourceCellOutput, cellOutputLimit);
   return {
     selection: nextSelection,
     cellOutput: nextCellOutput,
@@ -65,18 +50,32 @@ export function limitActiveCellAttachmentPayload(
 export function buildAttachmentTruncationNotice(
   selectionTruncated: boolean,
   cellOutputTruncated: boolean,
-  maxTotalChars: number
+  maxSelectionChars: number,
+  maxCellOutputChars: number
 ): string | null {
   if (!selectionTruncated && !cellOutputTruncated) {
     return null;
   }
 
-  const maxChars = String(clampNonNegativeInteger(maxTotalChars));
+  const selectionLimit = String(clampNonNegativeInteger(maxSelectionChars));
+  const cellOutputLimit = String(clampNonNegativeInteger(maxCellOutputChars));
   if (selectionTruncated && cellOutputTruncated) {
-    return `Attached input and output were truncated to stay within ${maxChars} total characters before sending. The full input can be checked directly from the source file/cell.`;
+    return `Attached input and output were truncated before sending (input: ${selectionLimit} chars, output: ${cellOutputLimit} chars). The full input can be checked directly from the source file/cell.`;
   }
   if (selectionTruncated) {
-    return `Attached input was truncated to stay within ${maxChars} total characters before sending. The full input can be checked directly from the source file/cell.`;
+    return `Attached input was truncated before sending to stay within ${selectionLimit} characters. The full input can be checked directly from the source file/cell.`;
   }
-  return `Attached output was truncated to stay within ${maxChars} total characters before sending.`;
+  return `Attached output was truncated before sending to stay within ${cellOutputLimit} characters.`;
+}
+
+export function resolveSentAttachmentTruncation(input: {
+  includeSelection: boolean;
+  includeCellOutput: boolean;
+  selectionTruncated: boolean;
+  cellOutputTruncated: boolean;
+}): SentAttachmentTruncationResult {
+  return {
+    selectionTruncated: input.includeSelection && input.selectionTruncated,
+    cellOutputTruncated: input.includeCellOutput && input.cellOutputTruncated
+  };
 }
