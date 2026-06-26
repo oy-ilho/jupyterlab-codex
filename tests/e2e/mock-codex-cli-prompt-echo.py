@@ -56,6 +56,8 @@ def _run_exec_mode() -> int:
     thread_id = f"mock-thread-{uuid.uuid4().hex[:12]}"
     head = prompt[:800]
     tail = prompt[-800:] if prompt else ""
+    has_current_cell_content = "Current Cell Content:" in prompt
+    has_current_cell_output = "Current Cell Output:" in prompt
 
     _emit({"type": "thread.started", "thread_id": thread_id})
     _emit(
@@ -64,6 +66,8 @@ def _run_exec_mode() -> int:
             "item": {
                 "type": "agent_message",
                 "text": (
+                    f"PROMPT_HAS_CURRENT_CELL_CONTENT={str(has_current_cell_content).lower()}\n"
+                    f"PROMPT_HAS_CURRENT_CELL_OUTPUT={str(has_current_cell_output).lower()}\n"
                     "PROMPT_HEAD_START\n"
                     f"{head}\n"
                     "PROMPT_HEAD_END\n"
