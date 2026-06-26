@@ -26,6 +26,16 @@ test('limitActiveCellAttachmentPayload applies separate limits to input and outp
   });
 });
 
+test('limitActiveCellAttachmentPayload truncates long single-line input from the middle', () => {
+  const result = limitActiveCellAttachmentPayload(`start-${'x'.repeat(3000)}-end`, '', 4000, 10);
+  expect(result.selection).toContain('[long line truncated]');
+  expect(result.selection.startsWith('start-')).toBeTruthy();
+  expect(result.selection.endsWith('-end')).toBeTruthy();
+  expect(result.selection.length).toBeLessThanOrEqual(4000);
+  expect(result.selectionTruncated).toBeTruthy();
+  expect(result.cellOutputTruncated).toBeFalsy();
+});
+
 test('limitActiveCellAttachmentPayload truncates output independently when output exceeds max', () => {
   const result = limitActiveCellAttachmentPayload('12345', 'abcdefghij', 4, 4);
   expect(result).toEqual({

@@ -116,41 +116,50 @@ function writeNotebookFixture() {
 }
 
 test('error cell output sends the tail of the traceback to Codex', async ({ page, baseURL }) => {
-  writeNotebookFixture();
+  const originalNotebook = fs.readFileSync(NOTEBOOK_IPYNB_PATH, 'utf8');
+  const originalPy = fs.readFileSync(NOTEBOOK_PY_PATH, 'utf8');
   const codexCommandPath =
     process.env.PLAYWRIGHT_CODEX_COMMAND || path.resolve(__dirname, 'mock-codex-cli-prompt-echo.py');
   const targetUrl = baseURL || process.env.JUPYTERLAB_URL || 'http://127.0.0.1:8888/lab';
 
-  await page.addInitScript(commandPath => {
-    window.localStorage.setItem('jupyterlab-codex:command-path', commandPath);
-    window.localStorage.setItem('jupyterlab-codex:include-active-cell', 'true');
-    window.localStorage.setItem('jupyterlab-codex:include-active-cell-output', 'true');
-  }, codexCommandPath);
+  try {
+    writeNotebookFixture();
 
-  await page.goto(buildInitialNotebookUrl(targetUrl, NOTEBOOK_RELATIVE_PATH), { waitUntil: 'domcontentloaded' });
-  await page.waitForSelector('main[aria-label="Main Content"], .jp-LabShell, .lm-DockPanel', {
-    timeout: 30000
-  });
-  await dismissBlockingDialogs(page);
-  await ensureCodexPanel(page);
+    await page.addInitScript(commandPath => {
+      window.localStorage.setItem('jupyterlab-codex:command-path', commandPath);
+      window.localStorage.setItem('jupyterlab-codex:include-active-cell', 'true');
+      window.localStorage.setItem('jupyterlab-codex:include-active-cell-output', 'true');
+    }, codexCommandPath);
 
-  const notebookCell = page.locator('.jp-Notebook .jp-Cell').first();
-  await expect(notebookCell).toBeVisible({ timeout: 20000 });
-  await notebookCell.click();
+    await page.goto(buildInitialNotebookUrl(targetUrl, NOTEBOOK_RELATIVE_PATH), { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('main[aria-label="Main Content"], .jp-LabShell, .lm-DockPanel', {
+      timeout: 30000
+    });
+    await dismissBlockingDialogs(page);
+    await ensureCodexPanel(page);
 
-  const composer = page.locator('.jp-CodexComposer textarea');
-  const sendBtn = page.locator('.jp-CodexSendBtn');
-  await composer.fill('Inspect the attached output.');
-  await expect(sendBtn).toBeEnabled({ timeout: 15000 });
-  await sendBtn.click();
-  await expect(page.locator('.jp-CodexSendBtn.is-stop')).toHaveCount(0, { timeout: 30000 });
+    const cellEditor = page.locator('.jp-Notebook [aria-label="Code Cell Content with Output"] [role="textbox"]');
+    await expect(cellEditor).toBeVisible({ timeout: 20000 });
+    await cellEditor.click();
 
-  const assistantMessage = page.locator('.jp-CodexChat-message.jp-mod-assistant').last();
-  await expect(assistantMessage).toContainText('PROMPT_TAIL_START', { timeout: 30000 });
-  const responseText = await assistantMessage.innerText();
+    const composer = page.locator('.jp-CodexComposer textarea');
+    const sendBtn = page.locator('.jp-CodexSendBtn');
+    await composer.fill('Inspect the attached output.');
+    await expect(sendBtn).toBeEnabled({ timeout: 15000 });
+    await sendBtn.click();
+    await expect(page.locator('.jp-CodexSendBtn.is-stop')).toHaveCount(0, { timeout: 30000 });
 
-  const tailSection = responseText.split('PROMPT_TAIL_START\n')[1]?.split('\nPROMPT_TAIL_END')[0] || '';
-  expect(tailSection).toContain(TRACE_TAIL_MARKER);
-  expect(tailSection).not.toContain(TRACE_HEAD_MARKER);
-  expect(responseText).toContain('Current Cell Output:');
+    const assistantMessage = page.locator('.jp-CodexChat-message.jp-CodexChat-assistant').last();
+    await expect(assistantMessage).toContainText('PROMPT_TAIL_START', { timeout: 30000 });
+    const responseText = await assistantMessage.innerText();
+
+    const tailSection = responseText.split('PROMPT_TAIL_START\n')[1]?.split('\nPROMPT_TAIL_END')[0] || '';
+    expect(responseText).toContain('PROMPT_HAS_CURRENT_CELL_CONTENT=true');
+    expect(responseText).toContain('PROMPT_HAS_CURRENT_CELL_OUTPUT=true');
+    expect(tailSection).toContain(TRACE_TAIL_MARKER);
+    expect(tailSection).not.toContain(TRACE_HEAD_MARKER);
+  } finally {
+    fs.writeFileSync(NOTEBOOK_IPYNB_PATH, originalNotebook, 'utf8');
+    fs.writeFileSync(NOTEBOOK_PY_PATH, originalPy, 'utf8');
+  }
 });

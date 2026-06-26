@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 
 import {
   ACTIVE_CELL_OUTPUT_MAX_CHARS,
+  ERROR_CELL_OUTPUT_MAX_CHARS,
   summarizeJupyterOutputs,
   toMessageSelectionPreview
 } from '../../src/codexChatDocumentUtils';
@@ -34,7 +35,7 @@ test('toMessageSelectionPreview uses the attached text after payload truncation'
   });
 });
 
-test('summarizeJupyterOutputs keeps the start of non-error output when truncating', () => {
+test('summarizeJupyterOutputs truncates long non-error output lines before sending', () => {
   const output = summarizeJupyterOutputs([
     {
       output_type: 'stream',
@@ -44,7 +45,7 @@ test('summarizeJupyterOutputs keeps the start of non-error output when truncatin
   ]);
 
   expect(output.startsWith('A'.repeat(16))).toBeTruthy();
-  expect(output.endsWith('... (truncated)')).toBeTruthy();
+  expect(output).toContain('[long line truncated]');
   expect(output.length).toBeLessThanOrEqual(ACTIVE_CELL_OUTPUT_MAX_CHARS);
 });
 
@@ -57,7 +58,21 @@ test('summarizeJupyterOutputs keeps the end of error output when truncating', ()
     }
   ]);
 
+  expect(output).toContain('[long line truncated]');
+  expect(output.endsWith(tail)).toBeTruthy();
+  expect(output.length).toBeLessThanOrEqual(ERROR_CELL_OUTPUT_MAX_CHARS);
+});
+
+test('summarizeJupyterOutputs applies a smaller total cap to error output', () => {
+  const tail = 'RuntimeError: compact final detail';
+  const output = summarizeJupyterOutputs([
+    {
+      output_type: 'error',
+      traceback: Array.from({ length: 12 }, (_, index) => `trace ${index}: ${'C'.repeat(1800)}`).concat(tail)
+    }
+  ]);
+
   expect(output.startsWith('... (truncated)')).toBeTruthy();
   expect(output.endsWith(tail)).toBeTruthy();
-  expect(output.length).toBeLessThanOrEqual(ACTIVE_CELL_OUTPUT_MAX_CHARS);
+  expect(output.length).toBeLessThanOrEqual(ERROR_CELL_OUTPUT_MAX_CHARS);
 });

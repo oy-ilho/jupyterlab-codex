@@ -10,6 +10,9 @@ export type SentAttachmentTruncationResult = {
   cellOutputTruncated: boolean;
 };
 
+const ACTIVE_CELL_SELECTION_MAX_LINE_CHARS = 2000;
+const ACTIVE_CELL_LONG_LINE_MARKER = ' ... [long line truncated] ... ';
+
 function clampNonNegativeInteger(value: number): number {
   if (!Number.isFinite(value)) {
     return 0;
@@ -27,6 +30,30 @@ function sliceByCharLimit(value: string, limit: number): string {
   return value.slice(0, limit);
 }
 
+function truncateMiddle(text: string, maxChars: number, marker: string): string {
+  if (text.length <= maxChars) {
+    return text;
+  }
+  if (maxChars <= marker.length) {
+    return text.slice(0, maxChars);
+  }
+  const remaining = maxChars - marker.length;
+  const headLength = Math.ceil(remaining / 2);
+  const tailLength = Math.floor(remaining / 2);
+  return `${text.slice(0, headLength)}${marker}${text.slice(text.length - tailLength)}`;
+}
+
+function truncateLongSelectionLines(value: string, totalLimit: number): string {
+  if (totalLimit <= 0) {
+    return '';
+  }
+  const lineLimit = Math.min(totalLimit, ACTIVE_CELL_SELECTION_MAX_LINE_CHARS);
+  return value
+    .split('\n')
+    .map(line => truncateMiddle(line, lineLimit, ACTIVE_CELL_LONG_LINE_MARKER))
+    .join('\n');
+}
+
 export function limitActiveCellAttachmentPayload(
   selection: string,
   cellOutput: string,
@@ -37,13 +64,13 @@ export function limitActiveCellAttachmentPayload(
   const sourceCellOutput = typeof cellOutput === 'string' ? cellOutput : '';
   const selectionLimit = clampNonNegativeInteger(maxSelectionChars);
   const cellOutputLimit = clampNonNegativeInteger(maxCellOutputChars);
-  const nextSelection = sliceByCharLimit(sourceSelection, selectionLimit);
+  const nextSelection = sliceByCharLimit(truncateLongSelectionLines(sourceSelection, selectionLimit), selectionLimit);
   const nextCellOutput = sliceByCharLimit(sourceCellOutput, cellOutputLimit);
   return {
     selection: nextSelection,
     cellOutput: nextCellOutput,
-    selectionTruncated: nextSelection.length < sourceSelection.length,
-    cellOutputTruncated: nextCellOutput.length < sourceCellOutput.length
+    selectionTruncated: nextSelection !== sourceSelection,
+    cellOutputTruncated: nextCellOutput !== sourceCellOutput
   };
 }
 

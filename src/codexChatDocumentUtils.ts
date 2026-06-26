@@ -483,8 +483,12 @@ export function toCellOutputPreview(
 }
 
 export const ACTIVE_CELL_OUTPUT_MAX_CHARS = 20000;
+export const ERROR_CELL_OUTPUT_MAX_CHARS = 8000;
 export const ACTIVE_CELL_OUTPUT_MAX_ITEMS = 24;
 const CELL_OUTPUT_TRUNCATED_MARKER = '... (truncated)';
+const CELL_OUTPUT_LONG_LINE_MARKER = ' ... [long line truncated] ... ';
+const ACTIVE_CELL_OUTPUT_MAX_LINE_CHARS = 8000;
+const ERROR_CELL_OUTPUT_MAX_LINE_CHARS = 2000;
 
 export function stripAnsi(value: string): string {
   // Best-effort removal of ANSI escape codes (tracebacks sometimes include them).
@@ -568,6 +572,33 @@ export function isJupyterErrorOutput(output: any): boolean {
   return Boolean(output && typeof output === 'object' && output.output_type === 'error');
 }
 
+function truncateMiddle(text: string, maxChars: number, marker: string): string {
+  if (text.length <= maxChars) {
+    return text;
+  }
+  if (maxChars <= marker.length) {
+    return text.slice(0, maxChars);
+  }
+  const remaining = maxChars - marker.length;
+  const headLength = Math.ceil(remaining / 2);
+  const tailLength = Math.floor(remaining / 2);
+  return `${text.slice(0, headLength)}${marker}${text.slice(text.length - tailLength)}`;
+}
+
+function truncateLongOutputLines(text: string, maxLineChars: number): string {
+  return text
+    .split('\n')
+    .map(line => truncateMiddle(line, maxLineChars, CELL_OUTPUT_LONG_LINE_MARKER))
+    .join('\n');
+}
+
+function sanitizeCellOutputChunk(text: string, isError: boolean): string {
+  return truncateLongOutputLines(
+    text,
+    isError ? ERROR_CELL_OUTPUT_MAX_LINE_CHARS : ACTIVE_CELL_OUTPUT_MAX_LINE_CHARS
+  );
+}
+
 function truncateCellOutput(text: string, maxChars: number, fromEnd: boolean): string {
   if (text.length <= maxChars) {
     return text;
@@ -597,12 +628,13 @@ export function summarizeJupyterOutputs(outputs: any[]): string {
       exceededMaxItems = true;
       break;
     }
-    const chunk = formatJupyterOutput(output);
+    const isError = isJupyterErrorOutput(output);
+    const chunk = sanitizeCellOutputChunk(formatJupyterOutput(output), isError);
     if (!chunk) {
       continue;
     }
     appended += 1;
-    if (isJupyterErrorOutput(output)) {
+    if (isError) {
       hasErrorOutput = true;
     }
     chunks.push(chunk);
@@ -615,7 +647,11 @@ export function summarizeJupyterOutputs(outputs: any[]): string {
   if (exceededMaxItems) {
     combined = `${combined}\n\n${CELL_OUTPUT_TRUNCATED_MARKER}`;
   }
-  combined = truncateCellOutput(combined, ACTIVE_CELL_OUTPUT_MAX_CHARS, hasErrorOutput);
+  combined = truncateCellOutput(
+    combined,
+    hasErrorOutput ? ERROR_CELL_OUTPUT_MAX_CHARS : ACTIVE_CELL_OUTPUT_MAX_CHARS,
+    hasErrorOutput
+  );
   combined = combined.replace(/\s+$/, '');
   return combined;
 }
